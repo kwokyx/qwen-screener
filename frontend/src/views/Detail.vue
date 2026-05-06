@@ -10,6 +10,8 @@ import { A2 } from '../shared/theme.js'
 import { genKline } from '../shared/data.js'
 import * as stockApi from '../api/stock'
 import * as qwenApi from '../api/qwen'
+import * as screenerApi from '../api/screener'
+import EmptyState from '../components/EmptyState.vue'
 import { marked } from 'marked'
 import { friendlyError } from '../shared/errors.js'
 
@@ -52,8 +54,29 @@ const klineTabs = [
 const klinePeriod = ref(2)   // 默认 "日K"
 const indicators = ['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']
 const activeIndicator = ref(0)   // MA 默认开；其他纯标签
-const detailTabs = ['财务摘要', '估值', '基本信息']
+const detailTabs = ['财务摘要', '估值', '同行对比', '基本信息']
 const detailTab = ref(0)
+
+// 同行（同行业）数据
+const peers = ref([])
+const peersLoading = ref(false)
+async function loadPeers() {
+  if (!detail.value?.industry) return
+  peersLoading.value = true
+  try {
+    const data = await screenerApi.screen(
+      [{ field: 'industry', op: 'eq', value: detail.value.industry }],
+      { sort_by: 'market_cap', sort_desc: true, limit: 12 },
+    )
+    peers.value = data.items || []
+  } catch {
+    peers.value = []
+  } finally {
+    peersLoading.value = false
+  }
+}
+watch(() => detail.value?.industry, (v) => { if (v) loadPeers() })
+watch(detailTab, (v) => { if (v === 2 && !peers.value.length) loadPeers() })
 
 // DB 历史不够请求长度的一半时，前端用确定性高斯游走合成补到 days
 // 这样不同周期 tab 的图形真的会变（不是同一个 1 行渲染）
@@ -408,6 +431,50 @@ const valuationCells = computed(() => {
             </div>
           </div>
 
+          <!-- 同行对比 -->
+          <div v-else-if="detailTab === 2" :style="{ padding: '14px 4px' }">
+            <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }">
+              <div :style="{ fontSize: '12px', fontWeight: 700 }">同行对比 · {{ detail.industry || '—' }}</div>
+              <span v-if="peers.length" :style="{ fontSize: '10.5px', color: A2.textMuted }">按市值排序，前 {{ peers.length }} 只</span>
+            </div>
+            <div v-if="peersLoading" :style="{ display: 'flex', flexDirection: 'column', gap: '6px' }">
+              <Skeleton v-for="n in 5" :key="n" :height="28" />
+            </div>
+            <table v-else-if="peers.length" :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '11.5px' }">
+              <thead>
+                <tr :style="{ color: A2.textMuted, fontSize: '10px', fontWeight: 600, letterSpacing: '0.4px', background: A2.bgDeep }">
+                  <th :style="{ textAlign: 'left', padding: '8px 12px' }">名称</th>
+                  <th :style="{ textAlign: 'left', padding: '8px 6px' }">代码</th>
+                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">现价</th>
+                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">PE</th>
+                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">PB</th>
+                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">ROE</th>
+                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">股息率</th>
+                  <th :style="{ textAlign: 'right', padding: '8px 12px' }">总市值</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in peers" :key="p.code"
+                    @click="$router.push(`/detail/${p.code}`)"
+                    :class="{ 'peer-self': p.code === detail.code }"
+                    class="peer-row"
+                    :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }">
+                  <td :style="{ padding: '9px 12px', fontWeight: p.code === detail.code ? 700 : 600, color: p.code === detail.code ? A2.qwenDeep : A2.text }">
+                    {{ p.name }}<span v-if="p.code === detail.code" :style="{ fontSize: '9px', marginLeft: '5px', padding: '1px 5px', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '3px', fontWeight: 700 }">本股</span>
+                  </td>
+                  <td :style="{ padding: '9px 6px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textMuted, fontSize: '10.5px' }">{{ p.code }}</td>
+                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, color: A2.text }">{{ p.close != null ? p.close.toFixed(2) : '—' }}</td>
+                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ p.pe != null && p.pe > 0 ? p.pe.toFixed(2) : '—' }}</td>
+                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ p.pb != null ? p.pb.toFixed(2) : '—' }}</td>
+                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: p.roe > 10 ? A2.up : A2.textSub, fontWeight: p.roe > 10 ? 600 : 500 }">{{ p.roe != null ? p.roe.toFixed(2) + '%' : '—' }}</td>
+                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: p.dividend_yield > 4 ? A2.up : A2.textSub }">{{ p.dividend_yield != null ? p.dividend_yield.toFixed(2) + '%' : '—' }}</td>
+                  <td :style="{ padding: '9px 12px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ p.market_cap != null ? Math.round(p.market_cap).toLocaleString() : '—' }}<span :style="{ color: A2.textDim, fontSize: '9px' }">亿</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <EmptyState v-else icon="chart" title="暂无同行数据" subtitle="该行业暂无其他可比公司，或行业数据未同步" compact />
+          </div>
+
           <!-- 基本信息 -->
           <div v-else :style="{ padding: '14px 4px' }">
             <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '12px' }">基本信息</div>
@@ -501,6 +568,13 @@ const valuationCells = computed(() => {
     </template>
   </Shell>
 </template>
+
+<style scoped>
+.peer-row { transition: background 0.12s; }
+.peer-row:hover { background: #EFEDE6; }
+.peer-row.peer-self { background: rgba(36, 86, 216, 0.06); }
+.peer-row.peer-self:hover { background: rgba(36, 86, 216, 0.10); }
+</style>
 
 <style scoped>
 /* AI 输出的 markdown 排版 */
