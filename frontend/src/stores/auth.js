@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as authApi from '../api/auth'
+import { useWatchlistStore } from './watchlist'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
@@ -12,6 +13,8 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = data.user
     localStorage.setItem('token', data.access_token)
     localStorage.setItem('user', JSON.stringify(data.user))
+    // 登录成功后把后端自选合并到本地（保留本地预警规则）
+    try { await useWatchlistStore().syncFromBackend() } catch { /* 静默 */ }
     return data
   }
 

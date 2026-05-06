@@ -6,6 +6,7 @@ import Icon from '../components/Icon.vue'
 import PctChip from '../components/charts/PctChip.vue'
 import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { seededRand } from '../shared/data.js'
 import { useWatchlistStore } from '../stores/watchlist'
@@ -256,10 +257,8 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
             </thead>
             <tbody>
               <tr v-if="!wl.items.length">
-                <td colspan="5" :style="{ padding: '40px 16px', textAlign: 'center', color: A2.textMuted, fontSize: '13px' }">
-                  <div :style="{ fontSize: '22px', marginBottom: '6px' }">⭐</div>
-                  自选列表为空
-                  <div :style="{ fontSize: '11px', color: A2.textDim, marginTop: '4px' }">在 ⌘K 搜索 / 行情 / 因子 / 详情页点 ⭐ 加入</div>
+                <td colspan="5" :style="{ padding: 0 }">
+                  <EmptyState icon="⭐" title="自选列表为空" subtitle="在 ⌘K 搜索 / 行情 / 因子 / 详情页点 ⭐ 加入" />
                 </td>
               </tr>
               <tr v-for="w in wl.items" :key="w.code" class="row-hover" @click="gotoDetail(w.code)" :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }">

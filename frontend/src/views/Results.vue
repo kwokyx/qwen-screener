@@ -7,6 +7,7 @@ import Sparkline from '../components/charts/Sparkline.vue'
 import PctChip from '../components/charts/PctChip.vue'
 import StarButton from '../components/StarButton.vue'
 import Skeleton from '../components/Skeleton.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { genKline, seededRand } from '../shared/data.js'
 import { screen } from '../api/screener'
@@ -161,7 +162,9 @@ onMounted(load)
                 </tr>
               </template>
               <tr v-else-if="!items.length">
-                <td :colspan="headers.length" :style="{ textAlign: 'center', padding: '40px 0', color: A2.textMuted, fontSize: '12px' }">没有命中股票，请放宽筛选条件</td>
+                <td :colspan="headers.length" :style="{ padding: 0 }">
+                  <EmptyState icon="🔍" title="没有命中任何股票" subtitle="试着放宽 PE / 市值 等条件" />
+                </td>
               </tr>
               <tr v-for="(s, i) in items" :key="s.code" class="row-hover"
                   :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }"

@@ -8,6 +8,7 @@ import PctChip from '../components/charts/PctChip.vue'
 import PctText from '../components/charts/PctText.vue'
 import StarButton from '../components/StarButton.vue'
 import Skeleton from '../components/Skeleton.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { genKline, seededRand } from '../shared/data.js'
 import * as marketApi from '../api/market'
@@ -160,7 +161,9 @@ onMounted(loadAll)
                 </tr>
               </template>
               <tr v-else-if="!moversShown.length">
-                <td colspan="9" :style="{ textAlign: 'center', padding: '32px', color: A2.textMuted, fontSize: '12px' }">该榜单暂无数据</td>
+                <td colspan="9" :style="{ padding: 0 }">
+                  <EmptyState icon="📊" title="该榜单暂无数据" subtitle="确认后端数据已同步（python -m scripts.sync_data daily）" compact />
+                </td>
               </tr>
               <tr v-for="(s, i) in moversShown" :key="s.code" class="row-hover row-clickable" @click="gotoDetail(s.code)" :style="{ borderTop: `1px solid ${A2.borderHair}` }">
                 <td :style="{ padding: '11px 16px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textMuted, fontSize: '11px' }">{{ s.code }}</td>

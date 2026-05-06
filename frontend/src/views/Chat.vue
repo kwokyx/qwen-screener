@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
 import Sparkline from '../components/charts/Sparkline.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { genKline } from '../shared/data.js'
 import { streamNL } from '../api/screener'
@@ -362,9 +363,7 @@ const stageColor = (s) => ({
                   </tr>
                 </tbody>
               </table>
-              <div v-else :style="{ padding: '40px 20px', textAlign: 'center', color: A2.textMuted, fontSize: '12px' }">
-                没有命中股票，请放宽条件再试。
-              </div>
+              <EmptyState v-else icon="🔍" title="没有命中任何股票" subtitle="试着放宽部分条件，或者描述得更具体一些" />
             </div>
           </template>
         </div>

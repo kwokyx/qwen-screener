@@ -80,6 +80,14 @@ const rebalance = ref('monthly')
 // ---- 触发回测 ----
 async function runActive() {
   const s = strategies[activeStrategy.value]
+  if (!s.conditions.length) {
+    errorMsg.value = '该策略没有任何买入条件'
+    return
+  }
+  if (new Date(startDate.value) >= new Date(endDate.value)) {
+    errorMsg.value = '回测起始日期必须早于结束日期'
+    return
+  }
   loading.value = true
   errorMsg.value = ''
   try {
@@ -387,6 +395,19 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
             </div>
             <div v-if="result && result.data_source !== 'real'" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.amberSoft, color: A2.amber, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45 }">
               ⚠️ 当前使用<strong>{{ result.data_source === 'synthesized' ? '合成' : '部分合成' }}</strong>价格数据。运行 `python -m scripts.sync_data all` 同步历史 K 线后，结果将基于真实数据。
+            </div>
+
+            <!-- 后端额外说明：universe 不足、止损触发统计等 -->
+            <div v-if="result && result.notes && result.notes.length" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.qwenGradSoft, color: A2.qwenDeep, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.55 }">
+              <div v-for="(n, i) in result.notes" :key="i" :style="{ display: 'flex', gap: '5px', alignItems: 'flex-start' }">
+                <span :style="{ color: A2.qwen }">·</span>
+                <span style="flex:1">{{ n }}</span>
+              </div>
+            </div>
+
+            <!-- universe 远小于目标持仓 → 醒目提示 -->
+            <div v-if="result && result.universe.length < strategies[activeStrategy].holdings_count / 2" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.upSoft, color: A2.up, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45 }">
+              ⚠️ 仅命中 {{ result.universe.length }} 只股票（目标 {{ strategies[activeStrategy].holdings_count }} 只），结果代表性有限。建议放宽部分条件或同步更多 A 股数据。
             </div>
           </div>
         </div>

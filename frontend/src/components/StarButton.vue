@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useWatchlistStore } from '../stores/watchlist'
+import { toast } from '../stores/toast'
 import Icon from './Icon.vue'
 
 const props = defineProps({
@@ -15,7 +16,11 @@ const active = computed(() => wl.has(props.stock.code))
 function onClick(e) {
   e.stopPropagation()
   e.preventDefault()
+  const wasActive = active.value
   wl.toggle(props.stock)
+  const name = props.stock.name || props.stock.code
+  if (wasActive) toast.info(`已从自选移除 ${name}`)
+  else toast.success(`已加入自选 · ${name}`)
 }
 </script>
 

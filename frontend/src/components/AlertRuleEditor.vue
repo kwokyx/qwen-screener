@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useWatchlistStore } from '../stores/watchlist'
 import { useNotificationsStore } from '../stores/notifications'
+import { toast } from '../stores/toast'
 import { A2 } from '../shared/theme.js'
 import Icon from './Icon.vue'
 
@@ -29,12 +30,21 @@ const currentType = computed(() => ruleTypes.find((t) => t.value === newRule.val
 
 function add() {
   const t = parseFloat(newRule.value.threshold)
-  if (isNaN(t)) return
+  if (isNaN(t)) {
+    toast.warning('请输入有效阈值')
+    return
+  }
   wl.addAlert(props.code, {
     type: newRule.value.type,
     threshold: t,
   })
+  toast.success('预警已添加')
   newRule.value.threshold = ''
+}
+
+function removeRule(id) {
+  wl.removeAlert(props.code, id)
+  toast.info('预警已删除')
 }
 
 function fmtRule(a) {
@@ -84,7 +94,7 @@ function fireTest() {
             <span v-if="a.lastTriggered" :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }" title="最近一次触发">
               已触发
             </span>
-            <button class="btn-ghost" :style="{ width: '22px', height: '22px' }" title="删除" @click="wl.removeAlert(item.code, a.id)">
+            <button class="btn-ghost" :style="{ width: '22px', height: '22px' }" title="删除" @click="removeRule(a.id)">
               <Icon name="x" :size="11" />
             </button>
           </div>

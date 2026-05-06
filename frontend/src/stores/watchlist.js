@@ -22,8 +22,13 @@
 
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import * as stockApi from '../api/stock'
 
 const LS_KEY = 'qwen.watchlist.v1'
+
+function isLoggedIn() {
+  return !!localStorage.getItem('token')
+}
 
 function loadFromLS() {
   try {
@@ -65,15 +70,46 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       addedAt: Math.floor(Date.now() / 1000),
       alerts: [],
     })
+    // 已登录则镜像到后端，失败不阻塞 UI
+    if (isLoggedIn()) {
+      stockApi.addWatch(code).catch(() => { /* 离线/已存在都吞掉 */ })
+    }
   }
 
   function remove(code) {
     items.value = items.value.filter((x) => x.code !== code)
+    if (isLoggedIn()) {
+      stockApi.removeWatch(code).catch(() => {})
+    }
   }
 
   function toggle(stock) {
     if (has(stock.code)) remove(stock.code)
     else add(stock)
+  }
+
+  /** 从后端拉自选并合并进本地（保留本地预警规则）。登录后/初始化时调用。 */
+  async function syncFromBackend() {
+    if (!isLoggedIn()) return
+    try {
+      const remote = await stockApi.listWatchlist()
+      if (!Array.isArray(remote)) return
+      // 把后端有、本地没有的合并进来；本地已有的保留预警/refPrice
+      const localCodes = codes.value
+      for (const r of remote) {
+        if (localCodes.has(r.code)) continue
+        items.value.push({
+          code: r.code,
+          name: r.name || '',
+          sector: r.industry || r.sector || '',
+          refPrice: r.refPrice ?? null,
+          addedAt: r.addedAt || Math.floor(Date.now() / 1000),
+          alerts: [],
+        })
+      }
+    } catch {
+      /* 静默 */
+    }
   }
 
   function addAlert(code, alert) {
@@ -189,5 +225,6 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     setAlertEnabled,
     markTriggered,
     evaluateAlerts,
+    syncFromBackend,
   }
 })
