@@ -1,0 +1,146 @@
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'IBM Plex Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #F6F5F0;
+  color: #111110;
+}
+
+button { font-family: inherit; }
+input, textarea { font-family: inherit; }
+
+/* selection */
+::selection { background: rgba(36, 86, 216, 0.18); }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(14,14,12,0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(14,14,12,0.25); }
+
+/* ---------- Interaction utilities ---------- */
+
+/* All native buttons get a subtle hover/active by default */
+button {
+  transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+button:not(:disabled) { cursor: pointer; }
+button:not(:disabled):active { transform: translateY(0.5px); }
+button:focus-visible {
+  outline: 2px solid #2456D8;
+  outline-offset: 2px;
+}
+
+/* table row hover (used across views) */
+.row-hover { transition: background 0.15s ease; }
+.row-hover:hover { background: #EFEDE6; }
+.row-clickable { cursor: pointer; }
+.row-clickable:hover { background: #EAF0FE !important; }
+
+/* index/stat card hover lift */
+.card-hover { transition: box-shadow 0.18s ease, transform 0.18s ease; }
+.card-hover:hover {
+  box-shadow: 0 2px 4px rgba(14,14,12,0.05), 0 12px 28px rgba(14,14,12,0.10);
+  transform: translateY(-1px);
+}
+
+/* heatmap tile lift */
+.heat-tile {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+  cursor: pointer;
+}
+.heat-tile:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+  box-shadow: 0 4px 12px rgba(14,14,12,0.12);
+}
+
+/* primary button (qwen blue) */
+.btn-primary {
+  background: #2456D8;
+  color: #fff;
+  border: none;
+  border-radius: 7px;
+  font-weight: 600;
+  padding: 7px 14px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-shadow: 0 2px 8px rgba(36, 86, 216, 0.18);
+}
+.btn-primary:hover { background: #1E3FA8; box-shadow: 0 3px 12px rgba(36, 86, 216, 0.30); }
+
+/* ghost icon button */
+.btn-ghost {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #3F3D38;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+}
+.btn-ghost:hover { background: rgba(14,14,12,0.06); color: #111110; }
+
+/* outline button */
+.btn-outline {
+  background: #FFFFFF;
+  color: #3F3D38;
+  border: 1px solid rgba(14,14,12,0.08);
+  border-radius: 7px;
+  font-weight: 500;
+  padding: 7px 12px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.btn-outline:hover { background: #FBFBF9; border-color: rgba(14,14,12,0.14); color: #111110; }
+
+/* tab link (in topbar) */
+.tab-link {
+  position: relative;
+  padding: 0 12px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #7A776F;
+  transition: color 0.15s ease;
+}
+.tab-link:hover { color: #111110; }
+.tab-link.active { color: #111110; font-weight: 600; }
+
+/* tab indicator (positioned absolute, animated) */
+.tab-indicator {
+  position: absolute;
+  bottom: 0;
+  height: 2px;
+  background: #2456D8;
+  border-radius: 2px;
+  transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1), width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* clickable chip / pill */
+.chip-clickable {
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  cursor: pointer;
+}
+.chip-clickable:hover { background: #EFEDE6; }
+.chip-clickable:active { transform: scale(0.98); }
+
+/* page fade transition */
+.page-fade-enter-active, .page-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.page-fade-enter-from, .page-fade-leave-to { opacity: 0; }
