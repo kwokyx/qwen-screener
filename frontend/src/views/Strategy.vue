@@ -291,7 +291,7 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
             <h2 :style="{ margin: 0, fontSize: '22px', fontWeight: 700, letterSpacing: '-0.5px' }">策略回测</h2>
             <span :style="{ fontSize: '12px', color: A2.textMuted }">· Strategy Backtest</span>
           </div>
-          <div :style="{ fontSize: '12px', color: A2.textMuted, marginTop: '3px' }">用千问描述策略，或从模板出发 · 回测窗口 2024-01-01 至 2026-04-30</div>
+          <div :style="{ fontSize: '12px', color: A2.textMuted, marginTop: '3px' }">用千问描述策略，或从模板出发 · 回测窗口 {{ startDate }} 至 {{ endDate }}</div>
         </div>
         <div :style="{ display: 'flex', gap: '8px' }">
           <button @click="router.push('/portfolio')"
