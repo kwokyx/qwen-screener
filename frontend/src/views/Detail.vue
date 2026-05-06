@@ -27,10 +27,12 @@ const klineData = ref([])
 const loading = ref(true)
 const errorMsg = ref('')
 
-// 千问分析（按需）
+// 千问分析（按需，流式）
 const aiText = ref('')
 const aiLoading = ref(false)
+const aiStreaming = ref(false)
 const aiError = ref('')
+let aiAbort = null
 
 const klineTabs = ['分时', '5日', '日K', '周K', '月K', '季K']
 const indicators = ['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']
@@ -69,15 +71,35 @@ async function load() {
 }
 
 async function askQwen() {
-  aiLoading.value = true
+  // 复点同一按钮：正在跑就取消
+  if (aiStreaming.value) {
+    aiAbort?.abort()
+    return
+  }
+  aiText.value = ''
   aiError.value = ''
+  aiLoading.value = true
+  aiStreaming.value = true
+  aiAbort = new AbortController()
+
   try {
-    const r = await qwenApi.analyze(code.value)
-    aiText.value = r.analysis
+    await qwenApi.streamAnalyze(code.value, (ev) => {
+      if (ev.type === 'chunk' && ev.text) {
+        // 第一个 chunk 到达即视为开始 streaming，关掉"思考中"占位
+        aiLoading.value = false
+        aiText.value += ev.text
+      } else if (ev.type === 'error') {
+        aiError.value = ev.message || '生成失败'
+      }
+    }, aiAbort.signal)
   } catch (e) {
-    aiError.value = e.response?.data?.detail || e.message
+    if (e.name !== 'AbortError') {
+      aiError.value = e.response?.data?.detail || e.message || '请求失败'
+    }
   } finally {
     aiLoading.value = false
+    aiStreaming.value = false
+    aiAbort = null
   }
 }
 
@@ -207,8 +229,10 @@ const market = computed(() => {
           <div :style="{ display: 'flex', gap: '6px', alignItems: 'center' }">
             <StarButton variant="button" :stock="{ code: detail.code, name: detail.name, sector: detail.industry, refPrice: detail.latest?.close }" :size="12" />
             <AlertRuleEditor v-if="wl.has(detail.code)" :code="detail.code" />
-            <button @click="askQwen" :disabled="aiLoading" :style="{ padding: '8px 16px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: aiLoading ? 'not-allowed' : 'pointer', borderRadius: '7px', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: aiLoading ? 0.7 : 1 }">
-              <Icon name="sparkle" :size="12" /> {{ aiLoading ? '生成中...' : '问千问' }}
+            <button @click="askQwen"
+                    :style="{ padding: '8px 16px', background: aiStreaming ? '#3F3D38' : A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', borderRadius: '7px', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
+              <Icon :name="aiStreaming ? 'x' : 'sparkle'" :size="12" />
+              {{ aiStreaming ? '停止' : (aiText ? '重新生成' : '问千问') }}
             </button>
           </div>
         </div>
@@ -284,20 +308,69 @@ const market = computed(() => {
           </div>
 
           <!-- AI text -->
-          <div v-if="!aiText && !aiLoading && !aiError" :style="{ padding: '24px 14px', textAlign: 'center', background: A2.bgDeep, borderRadius: '10px', color: A2.textMuted, fontSize: '12px' }">
+          <div v-if="!aiText && !aiLoading && !aiStreaming && !aiError" :style="{ padding: '24px 14px', textAlign: 'center', background: A2.bgDeep, borderRadius: '10px', color: A2.textMuted, fontSize: '12px' }">
             点击右上角「问千问」按钮，让大模型基于当前基本面数据生成深度分析。
           </div>
-          <div v-if="aiLoading" :style="{ padding: '24px 14px', textAlign: 'center', background: A2.bgDeep, borderRadius: '10px', color: A2.textMuted, fontSize: '12px' }">
+          <div v-if="aiLoading && !aiText" :style="{ padding: '20px 14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: A2.bgDeep, borderRadius: '10px', color: A2.textMuted, fontSize: '12px' }">
+            <span class="dots-loader" :style="{ '--c': A2.qwen }"></span>
             千问思考中…
           </div>
-          <div v-if="aiError" :style="{ padding: '12px 14px', background: A2.upSoft, color: A2.up, borderRadius: '8px', fontSize: '12px', lineHeight: 1.6 }">
-            {{ aiError }}
+          <div v-if="aiError" :style="{ padding: '12px 14px', background: A2.upSoft, color: A2.up, borderRadius: '8px', fontSize: '12px', lineHeight: 1.6, display: 'flex', alignItems: 'flex-start', gap: '8px' }">
+            <Icon name="alert" :size="13" />
+            <span style="flex:1">{{ aiError }}</span>
+            <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="askQwen">
+              <Icon name="refresh" :size="11" /> 重试
+            </button>
           </div>
           <div v-if="aiText" :style="{ padding: '14px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', fontSize: '12.5px', lineHeight: 1.8, color: A2.textSub, whiteSpace: 'pre-wrap' }">
-            {{ aiText }}
+            {{ aiText }}<span v-if="aiStreaming" class="caret" />
           </div>
         </div>
       </div>
     </template>
   </Shell>
 </template>
+
+<style scoped>
+/* 打字光标 */
+.caret {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  margin-left: 2px;
+  background: #2456D8;
+  vertical-align: middle;
+  animation: caret-blink 1s steps(2) infinite;
+}
+@keyframes caret-blink { 50% { opacity: 0 } }
+
+/* 三点 loader */
+.dots-loader {
+  display: inline-block;
+  width: 28px;
+  height: 6px;
+  position: relative;
+}
+.dots-loader::before,
+.dots-loader::after,
+.dots-loader { background: var(--c, #2456D8); }
+.dots-loader {
+  border-radius: 50%;
+  width: 6px; height: 6px;
+  animation: dot-pulse 1.0s infinite alternate;
+  animation-delay: 0.2s;
+}
+.dots-loader::before, .dots-loader::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+}
+.dots-loader::before { left: -10px; animation: dot-pulse 1.0s infinite alternate; }
+.dots-loader::after  { left: 10px;  animation: dot-pulse 1.0s infinite alternate; animation-delay: 0.4s; }
+@keyframes dot-pulse {
+  0%   { opacity: 0.3; transform: scale(0.8); }
+  100% { opacity: 1;   transform: scale(1.1); }
+}
+</style>

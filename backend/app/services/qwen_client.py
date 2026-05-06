@@ -115,6 +115,92 @@ def _call(prompt: str, *, json_mode: bool = False) -> str:
     return _openai_call(prompt, json_mode=json_mode)
 
 
+# ---------------------- 流式调用 ----------------------
+
+def _openai_stream(prompt: str):
+    """生成 token chunk 的迭代器。
+
+    用 httpx 直接解析 SSE：openai-python 的 Stream 对某些中转返回的 chunk
+    （如 id 前缀为 'resp_' 的）会因 pydantic 校验而吃掉事件，这里绕过 SDK。
+    """
+    if not settings.openai_api_key:
+        raise RuntimeError("未配置 OPENAI_API_KEY")
+    import httpx
+
+    base = (settings.openai_base_url or "https://api.openai.com").rstrip("/")
+    url = f"{base}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    payload = {
+        "model": settings.openai_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+
+    with httpx.stream("POST", url, headers=headers, json=payload, timeout=120.0) as r:
+        if r.status_code != 200:
+            body = r.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"上游 {r.status_code}: {body}")
+        for line in r.iter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                logger.debug("跳过非 JSON SSE 帧: {}", data[:80])
+                continue
+            try:
+                delta = obj["choices"][0]["delta"]
+                text = delta.get("content")
+            except (KeyError, IndexError, TypeError):
+                continue
+            if text:
+                yield text
+
+
+def _dashscope_stream(prompt: str):
+    if not settings.dashscope_api_key:
+        raise RuntimeError("未配置 DASHSCOPE_API_KEY")
+    import dashscope
+    dashscope.api_key = settings.dashscope_api_key
+    responses = dashscope.Generation.call(
+        model=settings.qwen_model,
+        prompt=prompt,
+        result_format="message",
+        stream=True,
+        incremental_output=True,
+    )
+    for resp in responses:
+        if resp.status_code != 200:
+            raise RuntimeError(f"千问流式调用失败: {resp.message}")
+        text = resp.output.choices[0].message.content
+        if text:
+            yield text
+
+
+def stream_call(prompt: str):
+    """返回 yields str 的迭代器；上层用 SSE 写出去即可。"""
+    backend = (settings.ai_backend or "openai").lower()
+    if backend == "dashscope":
+        yield from _dashscope_stream(prompt)
+    else:
+        yield from _openai_stream(prompt)
+
+
+def stream_analyze_stock(snapshot: dict):
+    """流式生成投资分析。yields 每个 token chunk（字符串）。"""
+    template = _load_prompt("stock_analysis.md")
+    for k, v in snapshot.items():
+        template = template.replace("{" + k + "}", "" if v is None else str(v))
+    yield from stream_call(template)
+
+
 # ---------------------- 业务函数 ----------------------
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
