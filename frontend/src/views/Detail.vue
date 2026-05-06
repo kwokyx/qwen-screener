@@ -88,7 +88,14 @@ async function load() {
       klineData.value = genKline(base * 0.85, days, 0.025, 99)
     }
   } catch (e) {
-    errorMsg.value = e.response?.data?.detail || e.message
+    const status = e.response?.status
+    if (status === 404) {
+      errorMsg.value = `股票 ${code.value} 不存在 · 请到行情页或 ⌘K 搜索其他代码`
+    } else if (e.code === 'ERR_NETWORK' || e.message?.includes('Network')) {
+      errorMsg.value = `后端无响应 · 请确认 uvicorn 已启动（http://127.0.0.1:8000）`
+    } else {
+      errorMsg.value = e.response?.data?.detail || e.message || '加载失败'
+    }
   } finally {
     loading.value = false
   }
@@ -234,13 +241,18 @@ const valuationCells = computed(() => {
     </div>
 
     <div v-else-if="errorMsg" :style="{ flex: 1, display: 'grid', placeItems: 'center' }">
-      <div :style="{ background: A2.upSoft, color: A2.up, padding: '20px 28px', borderRadius: '10px', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', maxWidth: '460px', textAlign: 'center' }">
-        <Icon name="alert" :size="18" />
-        <div :style="{ fontWeight: 600 }">加载失败</div>
-        <div :style="{ fontSize: '12px' }">{{ errorMsg }}</div>
-        <button class="btn-primary" @click="load">
-          <Icon name="refresh" :size="12" /> 重试
-        </button>
+      <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '24px 32px', borderRadius: '12px', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', maxWidth: '460px', textAlign: 'center', boxShadow: A2.shadow }">
+        <div :style="{ width: '44px', height: '44px', background: A2.upSoft, color: A2.up, borderRadius: '50%', display: 'grid', placeItems: 'center' }">
+          <Icon name="alert" :size="22" />
+        </div>
+        <div :style="{ fontWeight: 700, fontSize: '14px', color: A2.text }">无法加载股票详情</div>
+        <div :style="{ fontSize: '12px', color: A2.textMuted, lineHeight: 1.6 }">{{ errorMsg }}</div>
+        <div :style="{ display: 'flex', gap: '8px' }">
+          <button class="btn-outline" @click="$router.push('/dashboard')">回到行情</button>
+          <button class="btn-primary" @click="load">
+            <Icon name="refresh" :size="12" /> 重试
+          </button>
+        </div>
       </div>
     </div>
 

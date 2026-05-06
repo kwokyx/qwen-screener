@@ -1,8 +1,9 @@
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { A2 } from '../shared/theme.js'
 import { useNotificationsStore } from '../stores/notifications'
+import { useAuthStore } from '../stores/auth'
 import Icon from './Icon.vue'
 import NotificationsPanel from './NotificationsPanel.vue'
 import CommandPalette from './CommandPalette.vue'
@@ -10,6 +11,30 @@ import CommandPalette from './CommandPalette.vue'
 const route = useRoute()
 const router = useRouter()
 const notif = useNotificationsStore()
+const auth = useAuthStore()
+
+const userInitial = computed(() => {
+  const u = auth.user?.username
+  return u ? u.charAt(0).toUpperCase() : '?'
+})
+const isLoggedIn = computed(() => !!auth.token)
+const userMenuOpen = ref(false)
+
+function logout() {
+  auth.logout()
+  userMenuOpen.value = false
+  router.push('/login')
+}
+
+function gotoLogin() {
+  userMenuOpen.value = false
+  router.push('/login')
+}
+
+function onDocClickAvatar(e) {
+  if (!userMenuOpen.value) return
+  if (!e.target.closest('[data-user-menu]')) userMenuOpen.value = false
+}
 
 const tabs = [
   { id: 'dashboard', label: '行情' },
@@ -60,8 +85,12 @@ onMounted(async () => {
   await nextTick()
   updateIndicator()
   window.addEventListener('keydown', onKey)
+  document.addEventListener('mousedown', onDocClickAvatar)
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  document.removeEventListener('mousedown', onDocClickAvatar)
+})
 watch(() => route.name, async () => {
   await nextTick()
   updateIndicator()
@@ -99,7 +128,33 @@ watch(() => route.name, async () => {
           <Icon name="bell" :size="15" />
           <span v-if="notif.unreadCount > 0" :style="{ position: 'absolute', top: '4px', right: '3px', minWidth: '14px', height: '14px', padding: '0 3px', background: A2.up, color: '#fff', borderRadius: '7px', border: '1.5px solid #fff', fontSize: '9px', fontWeight: 700, display: 'grid', placeItems: 'center', fontFamily: 'IBM Plex Mono, monospace' }">{{ notif.unreadCount > 99 ? '99+' : notif.unreadCount }}</span>
         </button>
-        <div :style="{ width: '26px', height: '26px', borderRadius: '50%', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 700, marginLeft: '4px' }">金</div>
+        <div data-user-menu :style="{ position: 'relative', marginLeft: '4px' }">
+          <button @click="userMenuOpen = !userMenuOpen"
+                  :title="isLoggedIn ? auth.user?.username : '点击登录'"
+                  :style="{ width: '26px', height: '26px', borderRadius: '50%', background: isLoggedIn ? A2.qwenGrad : '#B8B4A8', color: '#fff', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 700, border: 'none', cursor: 'pointer', padding: 0 }">
+            {{ userInitial }}
+          </button>
+          <Transition name="page-fade">
+            <div v-if="userMenuOpen"
+                 :style="{ position: 'absolute', top: '34px', right: 0, minWidth: '180px', background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowLg, border: `1px solid ${A2.borderHair}`, zIndex: 50, overflow: 'hidden' }">
+              <div v-if="isLoggedIn" :style="{ padding: '10px 14px', borderBottom: `1px solid ${A2.borderHair}` }">
+                <div :style="{ fontSize: '12px', fontWeight: 700 }">{{ auth.user?.username }}</div>
+                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">{{ auth.user?.email || '已登录' }}</div>
+              </div>
+              <div v-else :style="{ padding: '10px 14px', fontSize: '11.5px', color: A2.textMuted, borderBottom: `1px solid ${A2.borderHair}` }">
+                未登录
+              </div>
+              <button v-if="isLoggedIn" @click="logout"
+                      :style="{ width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', textAlign: 'left', fontSize: '12px', color: A2.text, cursor: 'pointer' }">
+                退出登录
+              </button>
+              <button v-else @click="gotoLogin"
+                      :style="{ width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', textAlign: 'left', fontSize: '12px', color: A2.qwen, fontWeight: 600, cursor: 'pointer' }">
+                登录 / 注册
+              </button>
+            </div>
+          </Transition>
+        </div>
       </div>
     </div>
 

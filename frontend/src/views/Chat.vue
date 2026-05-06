@@ -207,7 +207,7 @@ const stageColor = (s) => ({
       <!-- Sidebar -->
       <div :style="{ background: A2.surface, padding: '14px', fontSize: '12px', overflow: 'auto', borderRight: `1px solid ${A2.borderHair}` }">
         <button :style="{ width: '100%', padding: '10px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', marginBottom: '16px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }"
-                @click="reset(); lastQuery = ''">
+                @click="stop(); reset(); lastQuery = ''">
           <Icon name="plus" :size="12" /> 新建对话
         </button>
         <div :style="{ fontSize: '10px', color: A2.textDim, fontWeight: 700, letterSpacing: '1.2px', marginBottom: '8px' }">本次会话</div>
@@ -215,7 +215,9 @@ const stageColor = (s) => ({
           下方输入框试试看吧 ↓
         </div>
         <div v-for="c in todayChats" :key="c.time + c.t"
-             :style="{ padding: '9px 11px', fontSize: '12px', cursor: 'pointer', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '7px', marginBottom: '3px', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderLeft: `2px solid ${A2.qwen}` }">
+             @click="!isStreaming && pickPreset(c.t)"
+             :title="isStreaming ? '当前对话进行中，请先停止' : '点击重新提问'"
+             :style="{ padding: '9px 11px', fontSize: '12px', cursor: isStreaming ? 'wait' : 'pointer', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '7px', marginBottom: '3px', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderLeft: `2px solid ${A2.qwen}`, opacity: isStreaming ? 0.5 : 1 }">
           <span :style="{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }">{{ c.t }}</span>
           <span :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ c.time }}</span>
         </div>
@@ -224,8 +226,9 @@ const stageColor = (s) => ({
           <div :style="{ fontSize: '11px', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }">
             <Icon name="lightbulb" :size="11" :color="A2.amber" /> 推荐提问
           </div>
-          <div v-for="t in presetPrompts" :key="t" @click="pickPreset(t)"
-               :style="{ fontSize: '11px', padding: '6px 0', color: A2.textSub, cursor: 'pointer', lineHeight: 1.5 }">· {{ t }}</div>
+          <div v-for="t in presetPrompts" :key="t"
+               @click="!isStreaming && pickPreset(t)"
+               :style="{ fontSize: '11px', padding: '6px 0', color: A2.textSub, cursor: isStreaming ? 'wait' : 'pointer', lineHeight: 1.5, opacity: isStreaming ? 0.5 : 1 }">· {{ t }}</div>
         </div>
       </div>
 

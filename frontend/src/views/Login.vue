@@ -24,7 +24,7 @@ async function submit() {
       await auth.register(username.value, password.value, email.value)
     }
     await auth.login(username.value, password.value)
-    const next = route.query.next || '/results'
+    const next = route.query.next || '/dashboard'
     router.replace(next)
   } catch (e) {
     error.value = e.response?.data?.detail || e.message || '请求失败'
