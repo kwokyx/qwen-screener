@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,34 @@ from app.schemas.screener import ScreenRequest
 
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
+# 上游中转网络偶发抖动（Connection reset / Timeout），自动重试可消除大部分用户感知
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 0.8  # 第 N 次失败后等 0.8、1.6、3.2 秒
+_TRANSIENT_KEYWORDS = (
+    "connection reset", "connection aborted", "remotedisconnect",
+    "timeout", "timed out", "broken pipe", "errno 54", "errno 60",
+    "max retries exceeded", "apiconnection",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    s = str(exc).lower()
+    name = exc.__class__.__name__.lower()
+    return any(k in s for k in _TRANSIENT_KEYWORDS) or "connection" in name or "timeout" in name
+
+
+def _user_friendly_error(exc: Exception) -> str:
+    """把内部错误（errno、Connection reset 等）翻译成产品级提示。"""
+    if _is_transient(exc):
+        return "AI 服务暂时不可达，已自动重试若干次仍失败。请稍后再试。"
+    s = str(exc)
+    if "API_KEY" in s or "api_key" in s or "401" in s or "Unauthorized" in s:
+        return "AI 服务凭证无效，请联系管理员检查配置"
+    if "rate" in s.lower() and "limit" in s.lower():
+        return "AI 服务请求过于频繁，请稍后再试"
+    # 其他情况：给一句中文，不带 errno
+    return "AI 服务调用失败，请稍后再试"
 
 
 def _load_prompt(name: str) -> str:
@@ -46,7 +75,25 @@ def _openai_client():
 
 
 def _openai_call(prompt: str, *, json_mode: bool = False) -> str:
-    """调用模型并取出纯文本输出。优先使用 Responses API，失败回退 Chat Completions。"""
+    """调用模型并取出纯文本输出。
+    Responses API → 失败回退 Chat Completions；瞬时网络错误自动指数退避重试。
+    最终失败抛 RuntimeError，错误消息已经过产品化措辞清洗。
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return _openai_call_once(prompt, json_mode=json_mode)
+        except Exception as e:
+            last_exc = e
+            if not _is_transient(e) or attempt == _MAX_RETRIES - 1:
+                break
+            wait = _BACKOFF_BASE * (2 ** attempt)
+            logger.warning("AI 调用失败 (#{}/{}, {} 秒后重试): {}", attempt + 1, _MAX_RETRIES, wait, e)
+            time.sleep(wait)
+    raise RuntimeError(_user_friendly_error(last_exc) if last_exc else "AI 服务调用失败")
+
+
+def _openai_call_once(prompt: str, *, json_mode: bool = False) -> str:
     client = _openai_client()
     model = settings.openai_model
     effort = settings.openai_reasoning or "high"
@@ -57,9 +104,8 @@ def _openai_call(prompt: str, *, json_mode: bool = False) -> str:
         if effort:
             kwargs["reasoning"] = {"effort": effort}
         if json_mode:
-            # 不同 SDK 版本字段名可能不同，失败也能兜到 chat.completions
             kwargs["text"] = {"format": {"type": "json_object"}}
-        resp = client.responses.create(**kwargs)
+        resp = client.responses.create(**kwargs, timeout=60.0)
         text = getattr(resp, "output_text", None)
         if not text and getattr(resp, "output", None):
             chunks = []
@@ -71,14 +117,18 @@ def _openai_call(prompt: str, *, json_mode: bool = False) -> str:
             text = "\n".join(chunks)
         if text:
             return text
-        logger.warning("Responses API 返回空文本: {}", resp)
+        logger.warning("Responses API 返回空文本，回退 chat.completions")
     except Exception as e:
+        # 配置 / 鉴权类错误直接抛，不要回退
+        if "401" in str(e) or "Unauthorized" in str(e):
+            raise
         logger.warning("Responses API 失败，回退 chat.completions: {}", e)
 
     # ---- 2. 回退 Chat Completions ----
     cc_kwargs: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
+        "timeout": 60.0,
     }
     if json_mode:
         cc_kwargs["response_format"] = {"type": "json_object"}
@@ -118,13 +168,32 @@ def _call(prompt: str, *, json_mode: bool = False) -> str:
 # ---------------------- 流式调用 ----------------------
 
 def _openai_stream(prompt: str):
-    """生成 token chunk 的迭代器。
-
-    用 httpx 直接解析 SSE：openai-python 的 Stream 对某些中转返回的 chunk
-    （如 id 前缀为 'resp_' 的）会因 pydantic 校验而吃掉事件，这里绕过 SDK。
-    """
+    """生成 token chunk 的迭代器，瞬时连接错误自动重试（仅在没拿到第一个 chunk 时）。"""
     if not settings.openai_api_key:
         raise RuntimeError("未配置 OPENAI_API_KEY")
+
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES):
+        got_any = False
+        try:
+            for chunk in _openai_stream_once(prompt):
+                got_any = True
+                yield chunk
+            return
+        except Exception as e:
+            last_exc = e
+            if got_any:
+                # 已经吐过 token 了，半途断开不重试（避免重复内容）
+                break
+            if not _is_transient(e) or attempt == _MAX_RETRIES - 1:
+                break
+            wait = _BACKOFF_BASE * (2 ** attempt)
+            logger.warning("AI 流式调用失败 (#{}/{}, {} 秒后重试): {}", attempt + 1, _MAX_RETRIES, wait, e)
+            time.sleep(wait)
+    raise RuntimeError(_user_friendly_error(last_exc) if last_exc else "AI 服务调用失败")
+
+
+def _openai_stream_once(prompt: str):
     import httpx
 
     base = (settings.openai_base_url or "https://api.openai.com").rstrip("/")
@@ -140,10 +209,14 @@ def _openai_stream(prompt: str):
         "stream": True,
     }
 
-    with httpx.stream("POST", url, headers=headers, json=payload, timeout=120.0) as r:
+    with httpx.stream("POST", url, headers=headers, json=payload, timeout=httpx.Timeout(120.0, connect=10.0)) as r:
         if r.status_code != 200:
             body = r.read().decode("utf-8", errors="replace")[:300]
-            raise RuntimeError(f"上游 {r.status_code}: {body}")
+            if r.status_code in (401, 403):
+                raise RuntimeError("AI 服务凭证无效，请联系管理员检查配置")
+            if r.status_code == 429:
+                raise RuntimeError("AI 服务请求过于频繁，请稍后再试")
+            raise RuntimeError(f"上游 {r.status_code}")
         for line in r.iter_lines():
             if not line or not line.startswith("data:"):
                 continue
@@ -153,7 +226,6 @@ def _openai_stream(prompt: str):
             try:
                 obj = json.loads(data)
             except json.JSONDecodeError:
-                logger.debug("跳过非 JSON SSE 帧: {}", data[:80])
                 continue
             try:
                 delta = obj["choices"][0]["delta"]

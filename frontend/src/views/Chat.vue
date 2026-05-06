@@ -8,6 +8,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { genKline } from '../shared/data.js'
 import { streamNL } from '../api/screener'
+import { friendlyError } from '../shared/errors.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -124,7 +125,7 @@ async function send() {
         phase.value = 'done'
         tDone.value = Date.now()
       } else if (ev.type === 'error') {
-        errorMsg.value = ev.message || '未知错误'
+        errorMsg.value = friendlyError(ev.message, { context: 'ai' })
         phase.value = 'error'
       }
     }, abortCtrl.signal)
@@ -146,7 +147,7 @@ async function send() {
     if (e.name === 'AbortError') {
       phase.value = 'idle'
     } else {
-      errorMsg.value = e.message || '请求失败'
+      errorMsg.value = friendlyError(e, { context: 'ai' })
       phase.value = 'error'
     }
   } finally {
@@ -314,9 +315,6 @@ const stageColor = (s) => ({
             <Icon name="shield" :size="14" />
             <div style="flex:1">
               {{ errorMsg }}
-              <div v-if="errorMsg.includes('OPENAI') || errorMsg.includes('DASHSCOPE') || errorMsg.includes('API_KEY')" :style="{ marginTop: '6px', fontSize: '11px', color: A2.textMuted }">
-                请在 backend/.env 中配置 OPENAI_API_KEY 后重启 uvicorn。
-              </div>
             </div>
             <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="lastQuery && (input = lastQuery, send())">
               <Icon name="refresh" :size="11" /> 重试

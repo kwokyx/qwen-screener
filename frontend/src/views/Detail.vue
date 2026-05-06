@@ -11,6 +11,7 @@ import { genKline } from '../shared/data.js'
 import * as stockApi from '../api/stock'
 import * as qwenApi from '../api/qwen'
 import { marked } from 'marked'
+import { friendlyError } from '../shared/errors.js'
 
 // marked: 紧凑配置（不允许原始 HTML，禁用 mangle，保留 GFM 列表/粗体）
 marked.setOptions({ breaks: true, gfm: true })
@@ -96,11 +97,9 @@ async function load() {
   } catch (e) {
     const status = e.response?.status
     if (status === 404) {
-      errorMsg.value = `股票 ${code.value} 不存在 · 请到行情页或 ⌘K 搜索其他代码`
-    } else if (e.code === 'ERR_NETWORK' || e.message?.includes('Network')) {
-      errorMsg.value = `后端无响应 · 请确认 uvicorn 已启动（http://127.0.0.1:8000）`
+      errorMsg.value = `未找到股票 ${code.value}，请到行情页或按 ⌘K 搜索其他代码`
     } else {
-      errorMsg.value = e.response?.data?.detail || e.message || '加载失败'
+      errorMsg.value = friendlyError(e, { context: 'data' })
     }
   } finally {
     loading.value = false
@@ -126,12 +125,12 @@ async function askQwen() {
         aiLoading.value = false
         aiText.value += ev.text
       } else if (ev.type === 'error') {
-        aiError.value = ev.message || '生成失败'
+        aiError.value = friendlyError(ev.message, { context: 'ai' })
       }
     }, aiAbort.signal)
   } catch (e) {
     if (e.name !== 'AbortError') {
-      aiError.value = e.response?.data?.detail || e.message || '请求失败'
+      aiError.value = friendlyError(e, { context: 'ai' })
     }
   } finally {
     aiLoading.value = false

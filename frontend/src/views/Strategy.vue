@@ -393,9 +393,9 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
               <Icon name="alert" :size="11" />
               <span style="flex:1">{{ errorMsg }}</span>
             </div>
-            <div v-if="result && result.data_source !== 'real'" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.amberSoft, color: A2.amber, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45, display: 'flex', alignItems: 'flex-start', gap: '6px' }">
-              <Icon name="alert" :size="12" />
-              <span>当前使用<strong>{{ result.data_source === 'synthesized' ? '合成' : '部分合成' }}</strong>价格数据。运行 <code>python -m scripts.sync_data all</code> 同步历史 K 线后，结果将基于真实数据。</span>
+            <div v-if="result && result.data_source !== 'real'" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.bgDeep, color: A2.textMuted, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.5, display: 'flex', alignItems: 'flex-start', gap: '6px' }">
+              <Icon name="shield" :size="12" />
+              <span>本回测基于模拟价格序列生成，仅用于策略逻辑验证；不代表真实历史表现，亦不构成投资建议。</span>
             </div>
 
             <!-- 后端额外说明：universe 不足、止损触发统计等 -->
@@ -490,7 +490,7 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
               <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }">
                 <div :style="{ width: '26px', height: '26px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '12px', fontWeight: 800, borderRadius: '6px', boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">千</div>
                 <div :style="{ fontSize: '13px', fontWeight: 700 }">回测概要</div>
-                <span v-if="result" :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textMuted, padding: '2px 7px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '3px', fontFamily: 'IBM Plex Mono, monospace' }">{{ result.data_source === 'real' ? '实盘数据' : 'DEMO' }}</span>
+                <span v-if="result" :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textMuted, padding: '2px 7px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '3px', fontFamily: 'IBM Plex Mono, monospace' }">{{ startDate }} ~ {{ endDate }}</span>
               </div>
               <div v-if="!result" :style="{ fontSize: '12px', color: A2.textMuted, padding: '8px 0' }">
                 <Skeleton :height="12" :width="'90%'" :style="{ marginBottom: '6px' }" />
