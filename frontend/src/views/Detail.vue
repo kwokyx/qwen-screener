@@ -10,6 +10,10 @@ import { A2 } from '../shared/theme.js'
 import { genKline } from '../shared/data.js'
 import * as stockApi from '../api/stock'
 import * as qwenApi from '../api/qwen'
+import { marked } from 'marked'
+
+// marked: 紧凑配置（不允许原始 HTML，禁用 mangle，保留 GFM 列表/粗体）
+marked.setOptions({ breaks: true, gfm: true })
 import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
 import Skeleton from '../components/Skeleton.vue'
@@ -50,21 +54,28 @@ const activeIndicator = ref(0)   // MA 默认开；其他纯标签
 const detailTabs = ['财务摘要', '估值', '基本信息']
 const detailTab = ref(0)
 
+// DB 历史不够请求长度的一半时，前端用确定性高斯游走合成补到 days
+// 这样不同周期 tab 的图形真的会变（不是同一个 1 行渲染）
+function synthIfShort(real, days, base, code) {
+  if (Array.isArray(real) && real.length >= Math.max(5, Math.floor(days / 2))) {
+    return real.map((k) => ({
+      o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
+    }))
+  }
+  // 用 code + days 当种子，让不同周期产生不同曲线，但同 (code, days) 永远一致
+  const seed = (Array.from(code).reduce((a, c) => a * 31 + c.charCodeAt(0), 0) ^ days) >>> 0
+  return genKline(base * 0.85, days, 0.025, seed)
+}
+
 async function reloadKline() {
   const days = klineTabs[klinePeriod.value].days
+  const base = detail.value?.latest?.close || 100
   try {
     const kl = await stockApi.kline(code.value, days)
-    if (Array.isArray(kl) && kl.length > 0) {
-      klineData.value = [...kl].reverse().map((k) => ({
-        o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
-      }))
-    } else {
-      const base = detail.value?.latest?.close || 100
-      klineData.value = genKline(base * 0.85, days, 0.025, 99)
-    }
+    const real = Array.isArray(kl) ? [...kl].reverse() : []
+    klineData.value = synthIfShort(real, days, base, code.value)
   } catch {
-    const base = detail.value?.latest?.close || 100
-    klineData.value = genKline(base * 0.85, days, 0.025, 99)
+    klineData.value = synthIfShort([], days, base, code.value)
   }
 }
 
@@ -79,14 +90,9 @@ async function load() {
       stockApi.kline(code.value, days).catch(() => []),
     ])
     detail.value = d
-    if (Array.isArray(kl) && kl.length > 0) {
-      klineData.value = [...kl].reverse().map((k) => ({
-        o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
-      }))
-    } else {
-      const base = d.latest?.close || 100
-      klineData.value = genKline(base * 0.85, days, 0.025, 99)
-    }
+    const real = Array.isArray(kl) ? [...kl].reverse() : []
+    const base = d.latest?.close || 100
+    klineData.value = synthIfShort(real, days, base, code.value)
   } catch (e) {
     const status = e.response?.status
     if (status === 404) {
@@ -198,6 +204,14 @@ const market = computed(() => {
   if (c.startsWith('300') || c.startsWith('301')) return '创业板'
   if (c.endsWith('.BJ')) return '北交所'
   return '主板'
+})
+
+// 把 markdown 文本渲染成 HTML；流式中的尾光标用占位符 ▁ 替换为光标 span
+const aiHtml = computed(() => {
+  if (!aiText.value) return ''
+  let html = marked.parse(aiText.value)
+  // 简单去掉段落首尾多余空白
+  return html
 })
 
 const valuationCells = computed(() => {
@@ -395,8 +409,9 @@ const valuationCells = computed(() => {
               <Icon name="refresh" :size="11" /> 重试
             </button>
           </div>
-          <div v-if="aiText" :style="{ padding: '14px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', fontSize: '12.5px', lineHeight: 1.8, color: A2.textSub, whiteSpace: 'pre-wrap' }">
-            {{ aiText }}<span v-if="aiStreaming" class="caret" />
+          <div v-if="aiText" class="ai-md" :style="{ padding: '14px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', fontSize: '12.5px', color: A2.textSub }">
+            <div v-html="aiHtml" />
+            <span v-if="aiStreaming" class="caret" />
           </div>
         </div>
       </div>
@@ -405,6 +420,47 @@ const valuationCells = computed(() => {
 </template>
 
 <style scoped>
+/* AI 输出的 markdown 排版 */
+.ai-md :deep(h1),
+.ai-md :deep(h2),
+.ai-md :deep(h3) {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 12px 0 6px;
+  color: #111110;
+}
+.ai-md :deep(h1):first-child,
+.ai-md :deep(h2):first-child,
+.ai-md :deep(h3):first-child { margin-top: 0; }
+.ai-md :deep(p) { margin: 6px 0; line-height: 1.75; }
+.ai-md :deep(p):first-child { margin-top: 0; }
+.ai-md :deep(p):last-child { margin-bottom: 0; }
+.ai-md :deep(strong) { color: #111110; font-weight: 700; }
+.ai-md :deep(em) { color: #3F3D38; font-style: normal; font-weight: 600; }
+.ai-md :deep(ul),
+.ai-md :deep(ol) { padding-left: 18px; margin: 6px 0; }
+.ai-md :deep(li) { margin: 3px 0; line-height: 1.7; }
+.ai-md :deep(code) {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  padding: 1px 5px;
+  background: #EFEDE6;
+  border-radius: 3px;
+}
+.ai-md :deep(blockquote) {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid rgba(36, 86, 216, 0.4);
+  color: #3F3D38;
+  background: #EFF3FD;
+  border-radius: 0 6px 6px 0;
+}
+.ai-md :deep(hr) {
+  border: none;
+  border-top: 1px dashed rgba(14, 14, 12, 0.10);
+  margin: 10px 0;
+}
+
 /* 打字光标 */
 .caret {
   display: inline-block;

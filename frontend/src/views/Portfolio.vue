@@ -258,7 +258,7 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
             <tbody>
               <tr v-if="!wl.items.length">
                 <td colspan="5" :style="{ padding: 0 }">
-                  <EmptyState icon="⭐" title="自选列表为空" subtitle="在 ⌘K 搜索 / 行情 / 因子 / 详情页点 ⭐ 加入" />
+                  <EmptyState icon="star" title="自选列表为空" subtitle="在 ⌘K 搜索 / 行情 / 因子 / 详情页点星标加入" />
                 </td>
               </tr>
               <tr v-for="w in wl.items" :key="w.code" class="row-hover" @click="gotoDetail(w.code)" :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }">

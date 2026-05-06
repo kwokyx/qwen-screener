@@ -163,7 +163,7 @@ onMounted(load)
               </template>
               <tr v-else-if="!items.length">
                 <td :colspan="headers.length" :style="{ padding: 0 }">
-                  <EmptyState icon="🔍" title="没有命中任何股票" subtitle="试着放宽 PE / 市值 等条件" />
+                  <EmptyState icon="filter" title="没有命中任何股票" subtitle="试着放宽 PE / 市值 等条件" />
                 </td>
               </tr>
               <tr v-for="(s, i) in items" :key="s.code" class="row-hover"

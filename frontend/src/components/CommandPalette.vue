@@ -110,8 +110,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <div v-if="loading" :style="{ padding: '24px', textAlign: 'center', color: A2.textMuted, fontSize: '12px' }">搜索中…</div>
 
           <div v-else-if="!display.length && !query" :style="{ padding: '32px', textAlign: 'center', color: A2.textMuted, fontSize: '12px' }">
-            <div :style="{ fontSize: '20px', marginBottom: '6px' }">🔍</div>
-            输入股票名 / 代码开始搜索
+            <div :style="{ display: 'inline-grid', placeItems: 'center', width: '36px', height: '36px', borderRadius: '50%', background: A2.bgDeep, color: A2.textDim, marginBottom: '8px' }">
+              <Icon name="search" :size="16" />
+            </div>
+            <div>输入股票名 / 代码开始搜索</div>
             <div :style="{ fontSize: '10.5px', color: A2.textDim, marginTop: '6px' }">↑↓ 选择 · Enter 进入详情 · Esc 关闭</div>
           </div>
 

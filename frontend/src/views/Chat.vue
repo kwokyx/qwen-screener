@@ -63,6 +63,18 @@ function fmtCond(c) {
   return `${c.field} ${opLabel[c.op] || c.op} ${c.value}`
 }
 
+// 0 命中时给具体可操作建议，根据已解析的条件挑最严的一条
+const zeroResultHint = computed(() => {
+  const cs = parsedConditions.value
+  if (!cs.length) return '试着把条件描述得更具体一些'
+  // 优先去掉 industry / market 这种枚举型
+  const enumCond = cs.find((c) => c.field === 'industry' || c.field === 'market')
+  if (enumCond) return `当前数据池可能不含「${Array.isArray(enumCond.value) ? enumCond.value.join(' / ') : enumCond.value}」，可以去掉行业限制再试`
+  // 其次找数值最严的
+  const tight = cs.find((c) => c.op === 'lt' || c.op === 'lte') || cs[0]
+  return `条件可能太严格，例如 "${tight.field} ${opLabel[tight.op] || tight.op} ${tight.value}" 放宽一些试试`
+})
+
 // 思考预览只显示最后 ~120 字（多了滚动太抖）；保留首尾换行更自然
 const thinkingPreview = computed(() => {
   const s = thinkingBuf.value
@@ -238,7 +250,9 @@ const stageColor = (s) => ({
         <div :style="{ flex: 1, overflow: 'auto', padding: '24px 36px' }">
           <!-- 起始引导 -->
           <div v-if="!lastQuery" :style="{ textAlign: 'center', padding: '60px 0', color: A2.textMuted }">
-            <div :style="{ fontSize: '28px', marginBottom: '8px' }">💬</div>
+            <div :style="{ display: 'inline-grid', placeItems: 'center', width: '52px', height: '52px', borderRadius: '50%', background: A2.qwenSoft, color: A2.qwen, marginBottom: '12px' }">
+              <Icon name="sparkle" :size="24" />
+            </div>
             <div :style="{ fontSize: '14px', fontWeight: 600, color: A2.text, marginBottom: '4px' }">用自然语言筛选股票</div>
             <div :style="{ fontSize: '12px' }">例如：找出 PE 低于 15、ROE 大于 15% 的消费股</div>
           </div>
@@ -363,7 +377,7 @@ const stageColor = (s) => ({
                   </tr>
                 </tbody>
               </table>
-              <EmptyState v-else icon="🔍" title="没有命中任何股票" subtitle="试着放宽部分条件，或者描述得更具体一些" />
+              <EmptyState v-else icon="filter" title="没有命中任何股票" :subtitle="zeroResultHint" />
             </div>
           </template>
         </div>

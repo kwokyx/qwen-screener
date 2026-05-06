@@ -78,8 +78,8 @@ function fireTest() {
           <div :style="{ fontSize: '13px', fontWeight: 700 }">预警规则</div>
           <span :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ item.code }}</span>
           <div style="flex:1" />
-          <button class="btn-ghost" :style="{ width: 'auto', padding: '0 6px', fontSize: '11px' }" title="立即触发一条测试通知" @click="fireTest">
-            🧪 测试
+          <button class="btn-ghost" :style="{ width: 'auto', padding: '0 8px', fontSize: '11px', gap: '4px' }" title="立即触发一条测试通知" @click="fireTest">
+            <Icon name="bell" :size="11" /> 测试
           </button>
         </div>
 

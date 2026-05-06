@@ -393,8 +393,9 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
               <Icon name="alert" :size="11" />
               <span style="flex:1">{{ errorMsg }}</span>
             </div>
-            <div v-if="result && result.data_source !== 'real'" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.amberSoft, color: A2.amber, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45 }">
-              ⚠️ 当前使用<strong>{{ result.data_source === 'synthesized' ? '合成' : '部分合成' }}</strong>价格数据。运行 `python -m scripts.sync_data all` 同步历史 K 线后，结果将基于真实数据。
+            <div v-if="result && result.data_source !== 'real'" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.amberSoft, color: A2.amber, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45, display: 'flex', alignItems: 'flex-start', gap: '6px' }">
+              <Icon name="alert" :size="12" />
+              <span>当前使用<strong>{{ result.data_source === 'synthesized' ? '合成' : '部分合成' }}</strong>价格数据。运行 <code>python -m scripts.sync_data all</code> 同步历史 K 线后，结果将基于真实数据。</span>
             </div>
 
             <!-- 后端额外说明：universe 不足、止损触发统计等 -->
@@ -406,8 +407,9 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
             </div>
 
             <!-- universe 远小于目标持仓 → 醒目提示 -->
-            <div v-if="result && result.universe.length < strategies[activeStrategy].holdings_count / 2" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.upSoft, color: A2.up, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45 }">
-              ⚠️ 仅命中 {{ result.universe.length }} 只股票（目标 {{ strategies[activeStrategy].holdings_count }} 只），结果代表性有限。建议放宽部分条件或同步更多 A 股数据。
+            <div v-if="result && result.universe.length < strategies[activeStrategy].holdings_count / 2" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.upSoft, color: A2.up, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45, display: 'flex', alignItems: 'flex-start', gap: '6px' }">
+              <Icon name="alert" :size="12" />
+              <span>仅命中 {{ result.universe.length }} 只股票（目标 {{ strategies[activeStrategy].holdings_count }} 只），结果代表性有限。建议放宽部分条件或同步更多 A 股数据。</span>
             </div>
           </div>
         </div>

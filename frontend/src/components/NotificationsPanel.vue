@@ -75,9 +75,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
 
       <div :style="{ overflow: 'auto', flex: 1 }">
         <div v-if="!items.length" :style="{ padding: '40px 16px', textAlign: 'center', color: A2.textMuted, fontSize: '12px' }">
-          <div :style="{ fontSize: '24px', marginBottom: '6px' }">🔔</div>
-          暂无通知
-          <div :style="{ fontSize: '11px', color: A2.textDim, marginTop: '4px' }">在自选股上加预警即可在此收到提醒</div>
+          <div :style="{ display: 'inline-grid', placeItems: 'center', width: '40px', height: '40px', borderRadius: '50%', background: A2.bgDeep, color: A2.textDim, marginBottom: '10px' }">
+            <Icon name="bell" :size="18" />
+          </div>
+          <div :style="{ fontWeight: 600, color: A2.text, marginBottom: '4px' }">暂无通知</div>
+          <div :style="{ fontSize: '11px', color: A2.textDim }">在自选股上加预警即可在此收到提醒</div>
         </div>
 
         <div v-for="n in items" :key="n.id" @click="openItem(n)"

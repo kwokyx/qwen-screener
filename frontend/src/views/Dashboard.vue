@@ -162,7 +162,7 @@ onMounted(loadAll)
               </template>
               <tr v-else-if="!moversShown.length">
                 <td colspan="9" :style="{ padding: 0 }">
-                  <EmptyState icon="📊" title="该榜单暂无数据" subtitle="确认后端数据已同步（python -m scripts.sync_data daily）" compact />
+                  <EmptyState icon="chart" title="该榜单暂无数据" subtitle="确认后端数据已同步（python -m scripts.sync_data daily）" compact />
                 </td>
               </tr>
               <tr v-for="(s, i) in moversShown" :key="s.code" class="row-hover row-clickable" @click="gotoDetail(s.code)" :style="{ borderTop: `1px solid ${A2.borderHair}` }">
