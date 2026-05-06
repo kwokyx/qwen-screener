@@ -1,5 +1,9 @@
 <script setup>
+import { useRoute } from 'vue-router'
 import Toaster from './components/Toaster.vue'
+import WatchlistDock from './components/WatchlistDock.vue'
+
+const route = useRoute()
 </script>
 
 <template>
@@ -9,4 +13,6 @@ import Toaster from './components/Toaster.vue'
     </Transition>
   </RouterView>
   <Toaster />
+  <!-- 登录页不显示 dock -->
+  <WatchlistDock v-if="route.name !== 'login'" />
 </template>
