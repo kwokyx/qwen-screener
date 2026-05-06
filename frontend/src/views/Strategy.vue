@@ -1,93 +1,235 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
+import Skeleton from '../components/Skeleton.vue'
 import { A2 } from '../shared/theme.js'
-import { seededRand } from '../shared/data.js'
+import { runBacktest } from '../api/strategy'
 
-function heatBg(r, yi, mi) {
-  if (yi === 1 && mi > 4) return '#EFEDE6'
-  const intensity = Math.min(1, Math.abs(r) / 6)
-  return r >= 0
+const router = useRouter()
+
+function heatBg(pct) {
+  // pct 是小数收益率，按 ±6% 上限做强度映射
+  const v = pct * 100
+  const intensity = Math.min(1, Math.abs(v) / 6)
+  return v >= 0
     ? `rgba(220,38,38,${0.18 + intensity * 0.6})`
     : `rgba(5,150,105,${0.18 + intensity * 0.6})`
 }
 
-const activeStrategy = ref(0)
-
-const strategies = [
-  { id: 0, name: '高股息防御', ret: 18.4, dd: -6.2, sharpe: 1.62, tag: '稳健', tone: 'up', author: '千问出品' },
-  { id: 1, name: '动量突破 60D', ret: 42.8, dd: -14.8, sharpe: 1.94, tag: '激进', tone: 'amber', author: '千问出品' },
-  { id: 2, name: '低估值 + 机构买入', ret: 26.1, dd: -9.4, sharpe: 1.78, tag: '平衡', tone: 'qwen', author: '我的策略' },
-  { id: 3, name: 'AI 算力链龙头轮动', ret: 58.2, dd: -22.6, sharpe: 1.71, tag: '主题', tone: 'up', author: '我的策略' },
-]
-
-const equityData = computed(() => {
-  const r1 = seededRand(101 + activeStrategy.value)
-  const r2 = seededRand(202 + activeStrategy.value)
-  const strat = []
-  const bench = []
-  let v = 1.0, b = 1.0
-  for (let i = 0; i < 250; i++) {
-    v *= 1 + (r1() - 0.43) * 0.018
-    b *= 1 + (r2() - 0.495) * 0.012
-    strat.push(v)
-    bench.push(b)
-  }
-  return { strat, bench }
-})
-
-const monthlyRets = [
-  [3.2, 1.8, -2.1, 4.5, 2.2, -0.8, 5.1, 3.8, -1.4, 2.9, 4.2, 3.1],
-  [-1.4, 2.6, 3.9, 1.2, -3.2, 4.8, 2.1, 5.5, 3.4, -2.1, 1.8, 6.2],
-]
 const monthLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 
-const summary = [
-  { l: '累计收益', v: '+58.2%', s: 'vs 沪深 +12.4%', tone: A2.up, big: true },
-  { l: '年化收益', v: '+24.6%', s: 'α +9.8%', tone: A2.up },
-  { l: '最大回撤', v: '-8.6%', s: '2025-04-12', tone: A2.down },
-  { l: '夏普比率', v: '1.84', s: '> 1.5 优秀', tone: A2.text },
-  { l: '胜率', v: '64.2%', s: '212 / 330 笔', tone: A2.text },
-  { l: '盈亏比', v: '2.18', s: '平均盈/亏', tone: A2.qwen },
+// ---- 4 个预设策略：每条都对应真实的 conditions 数组 ----
+const strategies = [
+  {
+    id: 0, name: '高股息防御', tag: '稳健', author: '千问出品',
+    conditions: [
+      { field: 'dividend_yield', op: 'gt', value: 3 },
+      { field: 'pe', op: 'lt', value: 15 },
+      { field: 'market_cap', op: 'gt', value: 500 },
+    ],
+    sort_by: 'dividend_yield',
+    holdings_count: 8,
+    stop_loss: -0.15,
+  },
+  {
+    id: 1, name: '低估值蓝筹', tag: '平衡', author: '千问出品',
+    conditions: [
+      { field: 'pe', op: 'lt', value: 12 },
+      { field: 'pb', op: 'lt', value: 1.5 },
+      { field: 'roe', op: 'gt', value: 10 },
+      { field: 'market_cap', op: 'gt', value: 1000 },
+    ],
+    sort_by: 'roe',
+    holdings_count: 10,
+    stop_loss: -0.15,
+  },
+  {
+    id: 2, name: '高 ROE 成长', tag: '成长', author: '我的策略',
+    conditions: [
+      { field: 'roe', op: 'gt', value: 15 },
+      { field: 'profit_yoy', op: 'gt', value: 20 },
+      { field: 'pe', op: 'lt', value: 50 },
+    ],
+    sort_by: 'profit_yoy',
+    holdings_count: 12,
+    stop_loss: -0.20,
+  },
+  {
+    id: 3, name: '高毛利消费', tag: '主题', author: '我的策略',
+    conditions: [
+      { field: 'gross_margin', op: 'gt', value: 40 },
+      { field: 'roe', op: 'gt', value: 12 },
+      { field: 'pe', op: 'lt', value: 35 },
+    ],
+    sort_by: 'gross_margin',
+    holdings_count: 10,
+    stop_loss: -0.18,
+  },
 ]
 
-const entryRules = [
-  { k: '股息率', op: '≥', v: '4%' },
-  { k: 'PE (TTM)', op: '<', v: '20' },
-  { k: 'ROE', op: '≥', v: '12%' },
-  { k: '市值', op: '>', v: '500 亿' },
-]
+const activeStrategy = ref(0)
+const result = ref(null)        // BacktestResponse
+const loading = ref(false)
+const errorMsg = ref('')
+const startDate = ref('2024-01-01')
+const endDate = ref('2026-04-30')
+const rebalance = ref('monthly')
 
-const sizingCells = [
-  { l: '持仓数', v: '15 只' },
-  { l: '权重', v: '等权' },
-  { l: '调仓周期', v: '月度' },
-  { l: '止损线', v: '-15%' },
-]
+// ---- 触发回测 ----
+async function runActive() {
+  const s = strategies[activeStrategy.value]
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    result.value = await runBacktest({
+      name: s.name,
+      conditions: s.conditions,
+      sort_by: s.sort_by,
+      sort_desc: true,
+      holdings_count: s.holdings_count,
+      start_date: startDate.value,
+      end_date: endDate.value,
+      rebalance: rebalance.value,
+      initial_capital: 1_000_000,
+      transaction_cost: 0.003,
+      stop_loss: s.stop_loss,
+    })
+  } catch (e) {
+    errorMsg.value = e.response?.data?.detail || e.message || '回测失败'
+  } finally {
+    loading.value = false
+  }
+}
 
-const trades = [
-  { d: '2026-04-28', side: 'SELL', stock: '寒武纪', code: '688256.SH', px: 412.80, qty: 200, hold: 42, pnl: 18420, trigger: '触发止盈线 +20%' },
-  { d: '2026-04-25', side: 'BUY', stock: '迈瑞医疗', code: '300760.SZ', px: 285.60, qty: 200, hold: 0, pnl: 0, trigger: 'PE<25 + 机构买入信号' },
-  { d: '2026-04-22', side: 'SELL', stock: '隆基绿能', code: '601012.SH', px: 21.45, qty: 1500, hold: 87, pnl: -8025, trigger: '跌破止损线 -15%' },
-  { d: '2026-04-18', side: 'BUY', stock: '中芯国际', code: '688981.SH', px: 78.45, qty: 500, hold: 0, pnl: 0, trigger: '60D 突破 + 量能放大' },
-  { d: '2026-04-15', side: 'BUY', stock: '宁德时代', code: '300750.SZ', px: 245.30, qty: 300, hold: 0, pnl: 0, trigger: '动量因子触发' },
-  { d: '2026-04-12', side: 'SELL', stock: '比亚迪', code: '002594.SZ', px: 254.20, qty: 200, hold: 28, pnl: 4280, trigger: '月度调仓再平衡' },
-]
+function pickStrategy(i) {
+  if (loading.value) return
+  activeStrategy.value = i
+  runActive()
+}
+
+// 启动后默认跑第一个，保证页面打开就有内容
+onMounted(runActive)
+
+// ---- 派生显示 ----
+const equityData = computed(() => {
+  if (!result.value) return { strat: [], bench: [] }
+  const initial = result.value.equity[0]?.value || 1
+  return {
+    strat: result.value.equity.map((p) => p.value / initial),
+    bench: result.value.benchmark.map((p) => p.value / (result.value.benchmark[0]?.value || 1)),
+  }
+})
+
+const summary = computed(() => {
+  const m = result.value?.metrics
+  if (!m) return []
+  const pct = (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`
+  return [
+    { l: '累计收益', v: pct(m.total_return), s: `vs 基准 ${pct(m.benchmark_return)}`, tone: m.total_return >= 0 ? A2.up : A2.down, big: true },
+    { l: '年化收益', v: pct(m.annual_return), s: `α ${pct(m.total_return - m.benchmark_return)}`, tone: m.annual_return >= 0 ? A2.up : A2.down },
+    { l: '最大回撤', v: pct(m.max_drawdown), s: `波动率 ${(m.volatility * 100).toFixed(1)}%`, tone: A2.down },
+    { l: '夏普比率', v: m.sharpe.toFixed(2), s: m.sharpe > 1.5 ? '> 1.5 优秀' : m.sharpe > 1 ? '> 1 良好' : '一般', tone: A2.text },
+    { l: '胜率', v: `${(m.win_rate * 100).toFixed(1)}%`, s: `${m.total_trades} 笔已平`, tone: A2.text },
+    { l: '盈亏比', v: m.profit_loss_ratio.toFixed(2), s: '平均盈/亏', tone: A2.qwen },
+  ]
+})
+
+// 月度收益矩阵：取出现过的所有年份，每年 12 个月
+const monthlyMatrix = computed(() => {
+  if (!result.value) return { years: [], grid: [] }
+  const map = new Map()
+  for (const r of result.value.monthly_returns) {
+    if (!map.has(r.year)) map.set(r.year, new Array(12).fill(null))
+    map.get(r.year)[r.month - 1] = r.pct
+  }
+  const years = Array.from(map.keys()).sort((a, b) => a - b)
+  return { years, grid: years.map((y) => map.get(y)) }
+})
+
+const monthlyStats = computed(() => {
+  if (!result.value) return null
+  const all = result.value.monthly_returns.map((r) => r.pct).filter((v) => v != null)
+  if (!all.length) return null
+  const wins = all.filter((v) => v > 0)
+  const losses = all.filter((v) => v < 0)
+  return {
+    winN: wins.length, totalN: all.length,
+    lossN: losses.length,
+    best: Math.max(...all),
+    worst: Math.min(...all),
+  }
+})
+
+const entryRules = computed(() => {
+  const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
+  const fieldLabel = {
+    pe: 'PE (TTM)', pb: 'PB', roe: 'ROE', market_cap: '市值',
+    dividend_yield: '股息率', revenue_yoy: '营收 YoY', profit_yoy: '净利 YoY',
+    gross_margin: '毛利率', debt_ratio: '资产负债率', industry: '行业',
+  }
+  return strategies[activeStrategy.value].conditions.map((c) => ({
+    k: fieldLabel[c.field] || c.field,
+    op: opLabel[c.op] || c.op,
+    v: Array.isArray(c.value) ? c.value.join('-') : String(c.value),
+  }))
+})
+
+const sizingCells = computed(() => {
+  const s = strategies[activeStrategy.value]
+  return [
+    { l: '持仓数', v: `${s.holdings_count} 只` },
+    { l: '权重', v: '等权' },
+    { l: '调仓周期', v: { monthly: '月度', weekly: '周度', daily: '日度' }[rebalance.value] },
+    { l: '止损线', v: `${(s.stop_loss * 100).toFixed(0)}%` },
+  ]
+})
+
+// 把后端 trades 适配前端表格
+const trades = computed(() => {
+  if (!result.value) return []
+  return result.value.trades.slice(-12).reverse().map((t) => ({
+    d: typeof t.date === 'string' ? t.date : t.date,
+    side: t.side,
+    stock: t.name || t.code,
+    code: t.code,
+    px: t.price,
+    qty: t.qty,
+    hold: t.holding_days || 0,
+    pnl: t.pnl || 0,
+    trigger: t.trigger,
+  }))
+})
 
 // chart paths
 const chart = computed(() => {
   const { strat, bench } = equityData.value
   const w = 900, h = 240, pad = { l: 40, r: 12, t: 12, b: 26 }
+  if (!strat.length || !bench.length) {
+    return { empty: true, w, h, pad, stratPath: '', benchPath: '', fillPath: '', yLines: [], dateMarks: [], peakIdx: -1, troughIdx: -1, xStep: 0, base100Y: 0, lastStratX: 0, lastStratY: 0, lastBenchX: 0, lastBenchY: 0, lastStratLabel: '', drawdownX: 0, drawdownW: 0, midX: 0 }
+  }
   const all = [...strat, ...bench]
   const min = Math.min(...all) * 0.98, max = Math.max(...all) * 1.02
-  const xStep = (w - pad.l - pad.r) / (strat.length - 1)
+  const xStep = (w - pad.l - pad.r) / Math.max(1, strat.length - 1)
   const yScale = (v) => pad.t + (h - pad.t - pad.b) * (1 - (v - min) / (max - min))
   const stratPath = strat.map((v, i) => `${i === 0 ? 'M' : 'L'} ${pad.l + i * xStep} ${yScale(v)}`).join(' ')
   const benchPath = bench.map((v, i) => `${i === 0 ? 'M' : 'L'} ${pad.l + i * xStep} ${yScale(v)}`).join(' ')
   const fillPath = `${stratPath} L ${pad.l + (strat.length - 1) * xStep} ${h - pad.b} L ${pad.l} ${h - pad.b} Z`
-  const peakIdx = strat.indexOf(Math.max(...strat.slice(0, 200)))
-  const troughIdx = strat.indexOf(Math.min(...strat.slice(peakIdx, peakIdx + 30)), peakIdx)
+
+  // 找峰谷做最大回撤区域标注
+  let peakIdx = 0, peakVal = strat[0], maxDD = 0, troughIdx = -1
+  for (let i = 1; i < strat.length; i++) {
+    if (strat[i] > peakVal) { peakVal = strat[i]; peakIdx = i }
+    const dd = (strat[i] - peakVal) / peakVal
+    if (dd < maxDD) { maxDD = dd; troughIdx = i }
+  }
+  // 反推这个 trough 对应的 peak
+  if (troughIdx > 0) {
+    let p = troughIdx
+    while (p > 0 && strat[p - 1] >= strat[p]) p--
+    peakIdx = p
+  }
 
   const yTicks = 5
   const yLines = []
@@ -96,14 +238,21 @@ const chart = computed(() => {
     yLines.push({ v, y: yScale(v), edge: i === 0 || i === yTicks - 1 })
   }
 
-  const dates = ['2024-01', '2024-06', '2024-11', '2025-04', '2025-09', '2026-04']
+  // 用真实日期标 x 轴
+  const dateLabels = result.value
+    ? [0, 0.2, 0.4, 0.6, 0.8, 1].map((p) => {
+        const i = Math.floor(p * (result.value.equity.length - 1))
+        return result.value.equity[i].date.slice(0, 7)
+      })
+    : ['', '', '', '', '', '']
   const dateMarks = [0, 0.2, 0.4, 0.6, 0.8, 1].map((p, k) => ({
     x: pad.l + Math.floor(p * (strat.length - 1)) * xStep,
-    label: dates[k],
+    label: dateLabels[k],
     anchor: k === 0 ? 'start' : k === 5 ? 'end' : 'middle',
   }))
 
   return {
+    empty: false,
     w, h, pad,
     stratPath, benchPath, fillPath,
     yLines, dateMarks,
@@ -115,12 +264,13 @@ const chart = computed(() => {
     lastBenchY: yScale(bench[bench.length - 1]),
     lastStratLabel: (strat[strat.length - 1] * 100).toFixed(1),
     drawdownX: pad.l + peakIdx * xStep,
-    drawdownW: (troughIdx - peakIdx) * xStep,
-    midX: pad.l + ((peakIdx + troughIdx) / 2) * xStep,
+    drawdownW: troughIdx > peakIdx ? (troughIdx - peakIdx) * xStep : 0,
+    midX: pad.l + ((peakIdx + (troughIdx > peakIdx ? troughIdx : peakIdx)) / 2) * xStep,
+    maxDDLabel: (maxDD * 100).toFixed(1),
   }
 })
 
-const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx > chart.value.peakIdx)
+const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && chart.value.troughIdx > chart.value.peakIdx)
 </script>
 
 <template>
@@ -154,18 +304,19 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
               <div :style="{ fontSize: '12px', fontWeight: 700 }">策略库</div>
               <span :style="{ fontSize: '10px', color: A2.textMuted }">选择 / 编辑</span>
             </div>
-            <div v-for="(s, i) in strategies" :key="s.id" @click="activeStrategy = i"
+            <div v-for="(s, i) in strategies" :key="s.id" @click="pickStrategy(i)"
                  class="strategy-item"
                  :data-active="activeStrategy === i ? 'true' : 'false'"
-                 :style="{ padding: '11px 14px', borderTop: i ? `1px solid ${A2.borderHair}` : 'none', cursor: 'pointer', background: activeStrategy === i ? A2.qwenGradSoft : 'transparent', borderLeft: activeStrategy === i ? `3px solid ${A2.qwen}` : '3px solid transparent', transition: 'background 0.15s, border-color 0.15s' }">
+                 :style="{ padding: '11px 14px', borderTop: i ? `1px solid ${A2.borderHair}` : 'none', cursor: loading ? 'wait' : 'pointer', background: activeStrategy === i ? A2.qwenGradSoft : 'transparent', borderLeft: activeStrategy === i ? `3px solid ${A2.qwen}` : '3px solid transparent', transition: 'background 0.15s, border-color 0.15s', opacity: loading && activeStrategy !== i ? 0.5 : 1 }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }">
                 <span :style="{ fontSize: '13px', fontWeight: 700, color: A2.text }">{{ s.name }}</span>
                 <span :style="{ fontSize: '9px', padding: '1px 5px', background: A2.bgDeep, color: A2.textMuted, borderRadius: '3px', fontWeight: 600 }">{{ s.tag }}</span>
               </div>
               <div :style="{ display: 'flex', gap: '12px', fontSize: '10px', fontFamily: 'IBM Plex Mono, monospace' }">
-                <span :style="{ color: A2.textMuted }">年化 <span :style="{ color: A2.up, fontWeight: 700 }">+{{ s.ret }}%</span></span>
-                <span :style="{ color: A2.textMuted }">回撤 <span :style="{ color: A2.down, fontWeight: 700 }">{{ s.dd }}%</span></span>
-                <span :style="{ color: A2.textMuted }">夏普 <span :style="{ color: A2.text, fontWeight: 700 }">{{ s.sharpe }}</span></span>
+                <span v-if="activeStrategy === i && result" :style="{ color: A2.textMuted }">年化 <span :style="{ color: result.metrics.annual_return >= 0 ? A2.up : A2.down, fontWeight: 700 }">{{ (result.metrics.annual_return * 100).toFixed(1) }}%</span></span>
+                <span v-if="activeStrategy === i && result" :style="{ color: A2.textMuted }">回撤 <span :style="{ color: A2.down, fontWeight: 700 }">{{ (result.metrics.max_drawdown * 100).toFixed(1) }}%</span></span>
+                <span v-if="activeStrategy === i && result" :style="{ color: A2.textMuted }">夏普 <span :style="{ color: A2.text, fontWeight: 700 }">{{ result.metrics.sharpe.toFixed(2) }}</span></span>
+                <span v-else :style="{ color: A2.textDim }">{{ s.conditions.length }} 个条件 · 持仓 {{ s.holdings_count }} 只</span>
               </div>
               <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '3px' }">{{ s.author }}</div>
             </div>
@@ -206,18 +357,35 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
               </div>
             </div>
 
-            <div :style="{ marginBottom: '14px' }">
+            <div :style="{ marginBottom: '12px' }">
               <div :style="{ fontSize: '10px', color: A2.textMuted, fontWeight: 600, marginBottom: '5px', letterSpacing: '0.4px', textTransform: 'uppercase' }">回测窗口</div>
-              <div :style="{ display: 'flex', gap: '4px' }">
-                <div :style="{ flex: 1, padding: '6px 9px', background: A2.bgDeep, border: `1px solid ${A2.borderHair}`, borderRadius: '5px', fontSize: '11px', fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">2024-01-01</div>
-                <span :style="{ alignSelf: 'center', color: A2.textMuted, fontSize: '11px' }">至</span>
-                <div :style="{ flex: 1, padding: '6px 9px', background: A2.bgDeep, border: `1px solid ${A2.borderHair}`, borderRadius: '5px', fontSize: '11px', fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">2026-04-30</div>
+              <div :style="{ display: 'flex', gap: '4px', alignItems: 'center' }">
+                <input v-model="startDate" type="date" class="cfg-input" />
+                <span :style="{ color: A2.textMuted, fontSize: '11px' }">至</span>
+                <input v-model="endDate" type="date" class="cfg-input" />
               </div>
             </div>
 
-            <button :style="{ width: '100%', padding: '10px', background: A2.text, color: '#fff', border: 'none', borderRadius: '7px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }">
-              <Icon name="play" :size="11" /> 运行回测
+            <div :style="{ marginBottom: '14px' }">
+              <div :style="{ fontSize: '10px', color: A2.textMuted, fontWeight: 600, marginBottom: '5px', letterSpacing: '0.4px', textTransform: 'uppercase' }">调仓周期</div>
+              <select v-model="rebalance" class="cfg-input" :style="{ width: '100%' }">
+                <option value="monthly">月度</option>
+                <option value="weekly">周度</option>
+                <option value="daily">日度</option>
+              </select>
+            </div>
+
+            <button @click="runActive" :disabled="loading"
+                    :style="{ width: '100%', padding: '10px', background: A2.text, color: '#fff', border: 'none', borderRadius: '7px', fontSize: '12px', fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', opacity: loading ? 0.7 : 1 }">
+              <Icon :name="loading ? 'refresh' : 'play'" :size="11" /> {{ loading ? '回测中…' : '运行回测' }}
             </button>
+            <div v-if="errorMsg" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.upSoft, color: A2.up, borderRadius: '6px', fontSize: '11px', display: 'flex', alignItems: 'flex-start', gap: '6px' }">
+              <Icon name="alert" :size="11" />
+              <span style="flex:1">{{ errorMsg }}</span>
+            </div>
+            <div v-if="result && result.data_source !== 'real'" :style="{ marginTop: '8px', padding: '8px 10px', background: A2.amberSoft, color: A2.amber, borderRadius: '6px', fontSize: '10.5px', lineHeight: 1.45 }">
+              ⚠️ 当前使用<strong>{{ result.data_source === 'synthesized' ? '合成' : '部分合成' }}</strong>价格数据。运行 `python -m scripts.sync_data all` 同步历史 K 线后，结果将基于真实数据。
+            </div>
           </div>
         </div>
 
@@ -225,7 +393,14 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
         <div :style="{ display: 'flex', flexDirection: 'column', gap: '10px' }">
           <!-- Summary metrics -->
           <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '8px' }">
-            <div v-for="m in summary" :key="m.l" :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '9px', padding: '12px 14px', boxShadow: A2.shadow, position: 'relative', overflow: 'hidden' }">
+            <template v-if="!summary.length">
+              <div v-for="n in 6" :key="n" :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '9px', padding: '12px 14px', boxShadow: A2.shadow }">
+                <Skeleton :height="9" :width="60" :style="{ marginBottom: '6px' }" />
+                <Skeleton :height="22" :width="80" />
+                <Skeleton :height="9" :width="50" :style="{ marginTop: '6px' }" />
+              </div>
+            </template>
+            <div v-else v-for="m in summary" :key="m.l" :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '9px', padding: '12px 14px', boxShadow: A2.shadow, position: 'relative', overflow: 'hidden' }">
               <div v-if="m.big" :style="{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: m.tone }" />
               <div :style="{ fontSize: '10px', color: A2.textMuted, fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase', marginBottom: '4px' }">{{ m.l }}</div>
               <div :style="{ fontSize: m.big ? '22px' : '18px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: m.tone, letterSpacing: '-0.5px' }">{{ m.v }}</div>
@@ -277,7 +452,7 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
 
               <g v-if="ddRect">
                 <line :x1="chart.drawdownX" :x2="chart.drawdownX + chart.drawdownW" :y1="chart.pad.t + 18" :y2="chart.pad.t + 18" stroke="#059669" stroke-width="0.8" />
-                <text :x="chart.midX" :y="chart.pad.t + 13" font-size="9" fill="#059669" text-anchor="middle" font-weight="600" font-family="IBM Plex Mono, monospace">最大回撤 -8.6%</text>
+                <text :x="chart.midX" :y="chart.pad.t + 13" font-size="9" fill="#059669" text-anchor="middle" font-weight="600" font-family="IBM Plex Mono, monospace">最大回撤 {{ chart.maxDDLabel }}%</text>
               </g>
 
               <text v-for="m in chart.dateMarks" :key="m.x" :x="m.x" :y="chart.h - 8" font-size="9" fill="#7A776F" :text-anchor="m.anchor" font-family="IBM Plex Mono, monospace">{{ m.label }}</text>
@@ -289,21 +464,38 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
             <div :style="{ background: A2.qwenGradSoft, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '16px', boxShadow: A2.shadow, position: 'relative', overflow: 'hidden' }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }">
                 <div :style="{ width: '26px', height: '26px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '12px', fontWeight: 800, borderRadius: '6px', boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">千</div>
-                <div :style="{ fontSize: '13px', fontWeight: 700 }">千问回测点评</div>
-                <span :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textMuted, padding: '2px 7px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '3px', fontFamily: 'IBM Plex Mono, monospace' }">评级 A-</span>
+                <div :style="{ fontSize: '13px', fontWeight: 700 }">回测概要</div>
+                <span v-if="result" :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textMuted, padding: '2px 7px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '3px', fontFamily: 'IBM Plex Mono, monospace' }">{{ result.data_source === 'real' ? '实盘数据' : 'DEMO' }}</span>
               </div>
-              <div :style="{ fontSize: '12px', color: A2.textSub, lineHeight: 1.7, marginBottom: '10px' }">
-                策略整体表现 <strong :style="{ color: A2.up }">优于沪深 300</strong> 共 45.8 个百分点。<strong>2025 Q3 - Q4</strong> 是主要收益来源（AI 算力链行情）；<strong>2025-04</strong> 出现最大回撤，主因美联储加息预期 + 半导体调整，但策略在 3 周内恢复。建议关注：当前持仓集中度偏高，可加入<strong :style="{ color: A2.qwen }">行业分散度因子</strong>降低单一行业风险。
+              <div v-if="!result" :style="{ fontSize: '12px', color: A2.textMuted, padding: '8px 0' }">
+                <Skeleton :height="12" :width="'90%'" :style="{ marginBottom: '6px' }" />
+                <Skeleton :height="12" :width="'80%'" :style="{ marginBottom: '6px' }" />
+                <Skeleton :height="12" :width="'60%'" />
               </div>
-              <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', paddingTop: '10px', borderTop: `1px dashed ${A2.borderHair}` }">
-                <div v-for="m in [{ l: '与沪深300相关性', v: '0.62' }, { l: '信息比率 IR', v: '1.24' }, { l: 'Calmar 比率', v: '2.86' }]" :key="m.l">
-                  <div :style="{ fontSize: '9px', color: A2.textMuted, marginBottom: '2px', fontWeight: 600, letterSpacing: '0.3px' }">{{ m.l }}</div>
-                  <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ m.v }}</div>
+              <div v-else :style="{ fontSize: '12px', color: A2.textSub, lineHeight: 1.7, marginBottom: '10px' }">
+                策略 <strong>{{ result.name }}</strong> 在窗口内累计收益
+                <strong :style="{ color: result.metrics.total_return >= 0 ? A2.up : A2.down }">{{ (result.metrics.total_return * 100).toFixed(2) }}%</strong>，
+                基准（等权买入持有）
+                <strong>{{ (result.metrics.benchmark_return * 100).toFixed(2) }}%</strong>，超额
+                <strong :style="{ color: result.metrics.total_return - result.metrics.benchmark_return >= 0 ? A2.up : A2.down }">{{ ((result.metrics.total_return - result.metrics.benchmark_return) * 100).toFixed(2) }}%</strong>。
+                夏普 {{ result.metrics.sharpe.toFixed(2) }}，最大回撤
+                <strong :style="{ color: A2.down }">{{ (result.metrics.max_drawdown * 100).toFixed(2) }}%</strong>，
+                共 {{ result.metrics.total_trades }} 笔已平仓交易、胜率 {{ (result.metrics.win_rate * 100).toFixed(1) }}%。
+                选出股票池：{{ result.universe_names.slice(0, 5).join('、') }}<span v-if="result.universe_names.length > 5">…</span>。
+              </div>
+              <div v-if="result" :style="{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', paddingTop: '10px', borderTop: `1px dashed ${A2.borderHair}` }">
+                <div>
+                  <div :style="{ fontSize: '9px', color: A2.textMuted, marginBottom: '2px', fontWeight: 600, letterSpacing: '0.3px' }">α (vs 基准)</div>
+                  <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ ((result.metrics.total_return - result.metrics.benchmark_return) * 100).toFixed(2) }}%</div>
                 </div>
-              </div>
-              <div :style="{ display: 'flex', gap: '6px', marginTop: '12px' }">
-                <button :style="{ padding: '6px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', borderRadius: '5px', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }">采纳建议优化</button>
-                <button :style="{ padding: '6px 12px', background: A2.surface, color: A2.textSub, border: `1px solid ${A2.borderHair}`, borderRadius: '5px', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }">查看完整研报</button>
+                <div>
+                  <div :style="{ fontSize: '9px', color: A2.textMuted, marginBottom: '2px', fontWeight: 600, letterSpacing: '0.3px' }">Calmar 比率</div>
+                  <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ result.metrics.max_drawdown < 0 ? Math.abs(result.metrics.annual_return / result.metrics.max_drawdown).toFixed(2) : '∞' }}</div>
+                </div>
+                <div>
+                  <div :style="{ fontSize: '9px', color: A2.textMuted, marginBottom: '2px', fontWeight: 600, letterSpacing: '0.3px' }">年化波动率</div>
+                  <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ (result.metrics.volatility * 100).toFixed(2) }}%</div>
+                </div>
               </div>
             </div>
 
@@ -313,22 +505,38 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
                 <div :style="{ fontSize: '12px', fontWeight: 700 }">月度收益</div>
                 <span :style="{ fontSize: '10px', color: A2.textMuted }">%</span>
               </div>
-              <div :style="{ display: 'grid', gridTemplateColumns: '36px repeat(12, 1fr)', gap: '2px', fontSize: '9px', fontFamily: 'IBM Plex Mono, monospace' }">
+              <div v-if="monthlyMatrix.years.length" :style="{ display: 'grid', gridTemplateColumns: '36px repeat(12, 1fr)', gap: '2px', fontSize: '9px', fontFamily: 'IBM Plex Mono, monospace' }">
                 <div></div>
                 <div v-for="m in monthLabels" :key="m" :style="{ textAlign: 'center', color: A2.textMuted, fontSize: '8px', padding: '2px 0' }">{{ m.replace('月', '') }}</div>
-                <template v-for="(rets, yi) in monthlyRets" :key="yi">
-                  <div :style="{ textAlign: 'right', color: A2.textMuted, alignSelf: 'center', fontSize: '9px', paddingRight: '4px' }">{{ [2025, 2026][yi] }}</div>
+                <template v-for="(rets, yi) in monthlyMatrix.grid" :key="monthlyMatrix.years[yi]">
+                  <div :style="{ textAlign: 'right', color: A2.textMuted, alignSelf: 'center', fontSize: '9px', paddingRight: '4px' }">{{ monthlyMatrix.years[yi] }}</div>
                   <div v-for="(r, mi) in rets" :key="mi"
-                       :style="{ background: heatBg(r, yi, mi), padding: '6px 2px', textAlign: 'center', borderRadius: '3px', color: yi === 1 && mi > 4 ? A2.textDim : '#fff', fontWeight: 700, fontSize: '9px' }">
-                    {{ yi === 1 && mi > 4 ? '—' : (r >= 0 ? '+' : '') + r.toFixed(1) }}
+                       :style="{ background: r == null ? A2.bgDeep : heatBg(r), padding: '6px 2px', textAlign: 'center', borderRadius: '3px', color: r == null ? A2.textDim : '#fff', fontWeight: 700, fontSize: '9px' }">
+                    {{ r == null ? '—' : (r >= 0 ? '+' : '') + (r * 100).toFixed(1) }}
                   </div>
                 </template>
               </div>
+              <div v-else :style="{ display: 'grid', gridTemplateColumns: '36px repeat(12, 1fr)', gap: '2px' }">
+                <div></div>
+                <Skeleton v-for="n in 36" :key="n" :height="12" :rounded="3" />
+              </div>
 
-              <div :style="{ marginTop: '12px', paddingTop: '10px', borderTop: `1px dashed ${A2.borderHair}`, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }">
-                <div v-for="s in [{ l: '盈利月', v: '17 / 22', tone: A2.up }, { l: '最佳月', v: '+6.2%', tone: A2.up }, { l: '亏损月', v: '5 / 22', tone: A2.down }, { l: '最差月', v: '-3.2%', tone: A2.down }]" :key="s.l" :style="{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }">
-                  <span :style="{ color: A2.textMuted }">{{ s.l }}</span>
-                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: s.tone }">{{ s.v }}</span>
+              <div v-if="monthlyStats" :style="{ marginTop: '12px', paddingTop: '10px', borderTop: `1px dashed ${A2.borderHair}`, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }">
+                <div :style="{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }">
+                  <span :style="{ color: A2.textMuted }">盈利月</span>
+                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.up }">{{ monthlyStats.winN }} / {{ monthlyStats.totalN }}</span>
+                </div>
+                <div :style="{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }">
+                  <span :style="{ color: A2.textMuted }">最佳月</span>
+                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.up }">+{{ (monthlyStats.best * 100).toFixed(1) }}%</span>
+                </div>
+                <div :style="{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }">
+                  <span :style="{ color: A2.textMuted }">亏损月</span>
+                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.down }">{{ monthlyStats.lossN }} / {{ monthlyStats.totalN }}</span>
+                </div>
+                <div :style="{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }">
+                  <span :style="{ color: A2.textMuted }">最差月</span>
+                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.down }">{{ (monthlyStats.worst * 100).toFixed(1) }}%</span>
                 </div>
               </div>
             </div>
@@ -338,7 +546,7 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
           <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow }">
             <div :style="{ padding: '11px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
               <div :style="{ fontSize: '12px', fontWeight: 700 }">近期交易记录</div>
-              <div :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">共 330 笔 · 显示 6 笔</div>
+              <div :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ result ? `共 ${result.trades.length} 笔（含未平仓）· 显示最近 ${trades.length} 笔` : '等待回测' }}</div>
             </div>
             <table :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }">
               <thead>
@@ -354,7 +562,12 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="t in trades" :key="t.d + t.code" :style="{ borderTop: `1px solid ${A2.borderHair}` }">
+                <tr v-if="!trades.length">
+                  <td colspan="8" :style="{ padding: '24px 16px', textAlign: 'center', color: A2.textMuted, fontSize: '11.5px' }">
+                    {{ loading ? '回测中…' : '等待回测结果' }}
+                  </td>
+                </tr>
+                <tr v-for="t in trades" :key="t.d + t.code + t.side" :style="{ borderTop: `1px solid ${A2.borderHair}` }">
                   <td :style="{ padding: '9px 16px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textMuted }">{{ t.d }}</td>
                   <td :style="{ padding: '9px 6px' }">
                     <span :style="{ fontSize: '9px', padding: '2px 6px', background: t.side === 'BUY' ? A2.upSoft : A2.downSoft, color: t.side === 'BUY' ? A2.up : A2.down, borderRadius: '3px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ t.side }}</span>
@@ -380,4 +593,17 @@ const ddRect = computed(() => chart.value.peakIdx > 0 && chart.value.troughIdx >
 
 <style scoped>
 .strategy-item[data-active="false"]:hover { background: rgba(36, 86, 216, 0.04) !important; }
+.cfg-input {
+  flex: 1;
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 6px 9px;
+  background: #FFFFFF;
+  border: 1px solid rgba(14,14,12,0.08);
+  border-radius: 5px;
+  color: #111110;
+  outline: none;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.cfg-input:focus { border-color: #2456D8; }
 </style>
