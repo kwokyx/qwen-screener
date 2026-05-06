@@ -1,23 +1,32 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
 import Sparkline from '../components/charts/Sparkline.vue'
 import { A2 } from '../shared/theme.js'
 import { genKline } from '../shared/data.js'
-import { screenNL } from '../api/screener'
+import { streamNL } from '../api/screener'
 
 const router = useRouter()
 
 const input = ref('')
 const lastQuery = ref('')
 
-const result = ref(null)         // { items, total, parsed_conditions }
-const loading = ref(false)
+// 流式状态机：idle → thinking → parsed → screening → done | error
+const phase = ref('idle')
+const thinkingBuf = ref('')          // 累积 JSON token，用于"思考预览"
+const parsedConditions = ref([])     // parsed 事件
+const screenMeta = ref(null)         // { logic, sort_by, sort_desc, limit }
+const result = ref(null)             // result 事件 { items, total, parsed_conditions }
 const errorMsg = ref('')
+let abortCtrl = null
 
-// 历史对话（前端本地缓存）
+// 时间戳记录每个阶段，用于在右侧 inspector 显示用时
+const tStart = ref(0)
+const tParsed = ref(0)
+const tDone = ref(0)
+
 const todayChats = ref([])
 const presetPrompts = [
   '低估值高分红的银行股',
@@ -25,6 +34,10 @@ const presetPrompts = [
   '半导体行业市值 500 亿以上的龙头',
   '股息率超过 5% 的大蓝筹',
 ]
+
+const isStreaming = computed(() =>
+  phase.value === 'thinking' || phase.value === 'parsed' || phase.value === 'screening'
+)
 
 function bullScore(it) {
   let s = 60
@@ -48,28 +61,132 @@ function fmtCond(c) {
   return `${c.field} ${opLabel[c.op] || c.op} ${c.value}`
 }
 
+// 思考预览只显示最后 ~120 字（多了滚动太抖）；保留首尾换行更自然
+const thinkingPreview = computed(() => {
+  const s = thinkingBuf.value
+  if (s.length <= 200) return s
+  return '…' + s.slice(-200)
+})
+
+function reset() {
+  phase.value = 'idle'
+  thinkingBuf.value = ''
+  parsedConditions.value = []
+  screenMeta.value = null
+  result.value = null
+  errorMsg.value = ''
+}
+
 async function send() {
   const q = input.value.trim()
-  if (!q || loading.value) return
-  loading.value = true
-  errorMsg.value = ''
+  if (!q || isStreaming.value) return
+
+  reset()
   lastQuery.value = q
+  phase.value = 'thinking'
+  tStart.value = Date.now()
+  tParsed.value = 0
+  tDone.value = 0
+  abortCtrl = new AbortController()
+
   try {
-    const data = await screenNL(q)
-    result.value = data
-    todayChats.value.unshift({ t: q, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) })
-    input.value = ''
+    await streamNL(q, (ev) => {
+      if (ev.type === 'thinking') {
+        thinkingBuf.value += ev.text
+      } else if (ev.type === 'parsed') {
+        parsedConditions.value = ev.conditions || []
+        screenMeta.value = { logic: ev.logic, sort_by: ev.sort_by, sort_desc: ev.sort_desc, limit: ev.limit }
+        phase.value = 'parsed'
+        tParsed.value = Date.now()
+      } else if (ev.type === 'screening') {
+        phase.value = 'screening'
+      } else if (ev.type === 'result') {
+        result.value = {
+          items: ev.items || [],
+          total: ev.total || 0,
+          parsed_conditions: ev.parsed_conditions || parsedConditions.value,
+        }
+      } else if (ev.type === 'done') {
+        phase.value = 'done'
+        tDone.value = Date.now()
+      } else if (ev.type === 'error') {
+        errorMsg.value = ev.message || '未知错误'
+        phase.value = 'error'
+      }
+    }, abortCtrl.signal)
+
+    // 流正常结束但没收到 'done'
+    if (phase.value !== 'error' && phase.value !== 'done') {
+      phase.value = 'done'
+      tDone.value = Date.now()
+    }
+
+    if (phase.value === 'done') {
+      todayChats.value.unshift({
+        t: q,
+        time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      })
+      input.value = ''
+    }
   } catch (e) {
-    errorMsg.value = e.response?.data?.detail || e.message || '请求失败'
+    if (e.name === 'AbortError') {
+      phase.value = 'idle'
+    } else {
+      errorMsg.value = e.message || '请求失败'
+      phase.value = 'error'
+    }
   } finally {
-    loading.value = false
+    abortCtrl = null
   }
+}
+
+function stop() {
+  abortCtrl?.abort()
 }
 
 function pickPreset(p) {
   input.value = p
   send()
 }
+
+// ---- 右侧 inspector：每阶段对应一行 ----
+const stages = computed(() => {
+  const items = []
+  const elapsed = (a, b) => (b > a ? `${((b - a) / 1000).toFixed(1)}s` : '')
+  // 1. 解析
+  let s1State = 'pending'
+  if (phase.value === 'thinking') s1State = 'running'
+  else if (phase.value === 'parsed' || phase.value === 'screening' || phase.value === 'done') s1State = 'success'
+  else if (phase.value === 'error' && !parsedConditions.value.length) s1State = 'failed'
+  else if (phase.value === 'idle') s1State = 'pending'
+  items.push({
+    t: 'parse_nl_query',
+    state: s1State,
+    out: parsedConditions.value.length
+      ? `识别出 ${parsedConditions.value.length} 个条件`
+      : (phase.value === 'thinking' ? '千问解析中…' : '等待输入'),
+    dur: tParsed.value && tStart.value ? elapsed(tStart.value, tParsed.value) : '',
+  })
+  // 2. 执行筛选
+  let s2State = 'pending'
+  if (phase.value === 'screening') s2State = 'running'
+  else if (phase.value === 'done') s2State = 'success'
+  else if (phase.value === 'error' && parsedConditions.value.length) s2State = 'failed'
+  items.push({
+    t: 'apply_filters',
+    state: s2State,
+    out: result.value ? `命中 ${result.value.total} 只 · 已展示 ${result.value.items.length}` : '等待解析完成',
+    dur: tDone.value && tParsed.value ? elapsed(tParsed.value, tDone.value) : '',
+  })
+  return items
+})
+
+const stageColor = (s) => ({
+  pending: A2.textDim,
+  running: A2.qwen,
+  success: A2.up,
+  failed: A2.down,
+}[s] || A2.textDim)
 </script>
 
 <template>
@@ -77,7 +194,8 @@ function pickPreset(p) {
     <div :style="{ flex: 1, display: 'grid', gridTemplateColumns: '240px 1fr 320px', overflow: 'hidden' }">
       <!-- Sidebar -->
       <div :style="{ background: A2.surface, padding: '14px', fontSize: '12px', overflow: 'auto', borderRight: `1px solid ${A2.borderHair}` }">
-        <button :style="{ width: '100%', padding: '10px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', marginBottom: '16px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }">
+        <button :style="{ width: '100%', padding: '10px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', marginBottom: '16px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }"
+                @click="reset(); lastQuery = ''">
           <Icon name="plus" :size="12" /> 新建对话
         </button>
         <div :style="{ fontSize: '10px', color: A2.textDim, fontWeight: 700, letterSpacing: '1.2px', marginBottom: '8px' }">本次会话</div>
@@ -116,19 +234,53 @@ function pickPreset(p) {
             </div>
           </div>
 
-          <!-- AI thinking -->
-          <div v-if="loading" :style="{ display: 'flex', gap: '12px', marginBottom: '14px' }">
+          <!-- AI thinking with live JSON preview -->
+          <div v-if="phase === 'thinking'" :style="{ display: 'flex', gap: '12px', marginBottom: '14px' }">
             <div :style="{ width: '28px', height: '28px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 700, borderRadius: '8px', flexShrink: 0, boxShadow: '0 2px 6px rgba(14,14,12,0.10)' }">千</div>
             <div :style="{ flex: 1, background: A2.surface, padding: '12px 14px', fontSize: '12px', color: A2.textMuted, borderRadius: '8px', border: `1px solid ${A2.borderHair}` }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', color: A2.text, fontWeight: 600 }">
-                <Icon name="brain" :size="11" :color="A2.qwen" /> 千问思考中…
+                <Icon name="brain" :size="11" :color="A2.qwen" />
+                <span>正在拆解你的需求…</span>
+                <span class="dot-flow"><i></i><i></i><i></i></span>
               </div>
-              <div :style="{ marginTop: '6px', fontSize: '11px' }">解析自然语言 → 生成结构化筛选条件 → 引擎执行</div>
+              <pre v-if="thinkingBuf" :style="{ margin: '8px 0 0 0', fontSize: '10.5px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textDim, lineHeight: 1.55, whiteSpace: 'pre-wrap', background: A2.bgDeep, padding: '8px 10px', borderRadius: '5px', maxHeight: '120px', overflow: 'hidden' }">{{ thinkingPreview }}<span class="caret-mono" /></pre>
+            </div>
+          </div>
+
+          <!-- Parsed conditions（从 parsed 阶段开始展示，stagger 动画） -->
+          <template v-if="parsedConditions.length">
+            <div :style="{ display: 'flex', gap: '12px', marginBottom: '12px' }">
+              <div :style="{ width: '28px', flexShrink: 0 }" />
+              <div :style="{ flex: 1, fontSize: '13.5px', lineHeight: 1.75 }">
+                我已将你的需求拆解为结构化条件<span v-if="phase === 'screening'" :style="{ color: A2.textMuted, fontWeight: 500 }">，引擎执行中…</span><span v-else-if="result">，命中 <span :style="{ color: A2.qwenDeep, fontWeight: 800, fontSize: '16px' }">{{ result.total }}</span> 只</span>：
+              </div>
+            </div>
+            <div :style="{ marginLeft: '40px', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '7px' }">
+              <div v-for="(c, i) in parsedConditions" :key="i"
+                   class="cond-chip"
+                   :style="{ '--delay': (i * 60) + 'ms', background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '7px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '7px', borderRadius: '999px', boxShadow: A2.shadow }">
+                <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }">{{ fmtCond(c) }}</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- Screening 中的 Skeleton 占位 -->
+          <div v-if="phase === 'screening'" :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
+            <div :style="{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '8px', color: A2.textMuted, fontSize: '12px', borderBottom: `1px solid ${A2.borderHair}` }">
+              <span class="dot-flow" :style="{ '--c': A2.qwen }"><i></i><i></i><i></i></span>
+              引擎正在执行筛选…
+            </div>
+            <div v-for="n in 4" :key="n" :style="{ display: 'grid', gridTemplateColumns: '36px 1fr 80px 80px 80px', gap: '12px', padding: '11px 16px', borderTop: n > 1 ? `1px solid ${A2.borderHair}` : 'none', alignItems: 'center' }">
+              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
+              <div class="sk-bar" :style="{ height: '14px', width: '60%', borderRadius: '3px' }" />
+              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
+              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
+              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
             </div>
           </div>
 
           <!-- Error -->
-          <div v-if="errorMsg" :style="{ marginBottom: '18px', padding: '12px 16px', background: A2.upSoft, color: A2.up, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '10px' }">
+          <div v-if="phase === 'error'" :style="{ marginBottom: '18px', padding: '12px 16px', background: A2.upSoft, color: A2.up, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '10px' }">
             <Icon name="shield" :size="14" />
             <div style="flex:1">
               {{ errorMsg }}
@@ -141,29 +293,8 @@ function pickPreset(p) {
             </button>
           </div>
 
-          <!-- Result -->
-          <template v-if="result && !loading">
-            <div :style="{ display: 'flex', gap: '12px', marginBottom: '16px' }">
-              <div :style="{ width: '28px', flexShrink: 0 }" />
-              <div :style="{ flex: 1, fontSize: '13.5px', lineHeight: 1.75 }">
-                我已将你的需求拆解为结构化条件，命中
-                <span :style="{ color: A2.qwenDeep, fontWeight: 800, fontSize: '16px' }">{{ result.total }}</span>
-                只股票：
-              </div>
-            </div>
-
-            <!-- Parsed conditions -->
-            <div :style="{ marginLeft: '40px', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '7px' }">
-              <div v-for="(c, i) in (result.parsed_conditions || [])" :key="i"
-                   :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '7px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '7px', borderRadius: '999px', boxShadow: A2.shadow }">
-                <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }">{{ fmtCond(c) }}</span>
-              </div>
-              <div v-if="!result.parsed_conditions?.length" :style="{ fontSize: '11.5px', color: A2.textDim, padding: '7px 12px' }">
-                （后端未回显条件）
-              </div>
-            </div>
-
-            <!-- Result table -->
+          <!-- Result table -->
+          <template v-if="result">
             <div :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
               <div :style="{ padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FBFBF9' }">
                 <div>
@@ -226,37 +357,59 @@ function pickPreset(p) {
         <!-- Input -->
         <div :style="{ borderTop: `1px solid ${A2.borderHair}`, padding: '20px', background: A2.surface }">
           <div :style="{ border: `1px solid ${A2.borderHair}`, padding: '12px', background: A2.surface, borderRadius: '12px', boxShadow: A2.shadowMd }">
-            <textarea v-model="input" @keydown.enter.exact.prevent="send" placeholder="例如：找出 PE 低于 15、ROE > 15%、近三年净利润复合增速 > 20% 的消费股…"
-                      :style="{ width: '100%', height: '40px', border: 'none', outline: 'none', fontSize: '13.5px', fontFamily: 'IBM Plex Sans, Noto Sans SC, sans-serif', resize: 'none', background: 'transparent' }" />
+            <textarea v-model="input"
+                      @keydown.enter.exact.prevent="send"
+                      :disabled="isStreaming"
+                      placeholder="例如：找出 PE 低于 15、ROE > 15%、近三年净利润复合增速 > 20% 的消费股…"
+                      :style="{ width: '100%', height: '40px', border: 'none', outline: 'none', fontSize: '13.5px', fontFamily: 'IBM Plex Sans, Noto Sans SC, sans-serif', resize: 'none', background: 'transparent', opacity: isStreaming ? 0.6 : 1 }" />
             <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
-              <span :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">Qwen-Plus · 沪深300 数据池</span>
+              <span :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '解析中…' : phase === 'screening' ? '执行中…' : 'Stream · SSE' }}</span>
               <div style="flex:1" />
-              <button @click="send" :disabled="loading" :style="{ padding: '7px 14px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: loading ? 0.6 : 1 }">
-                {{ loading ? '处理中...' : '发送' }} <Icon name="send" :size="12" />
+              <button v-if="isStreaming" @click="stop"
+                      :style="{ padding: '7px 14px', background: '#3F3D38', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
+                <Icon name="x" :size="12" /> 停止
+              </button>
+              <button v-else @click="send"
+                      :style="{ padding: '7px 14px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
+                发送 <Icon name="send" :size="12" />
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Right inspector -->
+      <!-- Right inspector：实时阶段时间轴 -->
       <div :style="{ background: A2.surface, padding: '16px', fontSize: '11px', overflow: 'auto', borderLeft: `1px solid ${A2.borderHair}` }">
         <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }">
-          <Icon name="tools" :size="12" :color="A2.qwen" /> 解析过程
+          <Icon name="tools" :size="12" :color="A2.qwen" /> 实时执行
+          <span v-if="phase !== 'idle'" :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase }}</span>
         </div>
-        <div v-if="!result" :style="{ fontSize: '11px', color: A2.textMuted, lineHeight: 1.6 }">
+
+        <div v-if="phase === 'idle'" :style="{ fontSize: '11px', color: A2.textMuted, lineHeight: 1.6 }">
           发送一条自然语言需求，将在这里展示千问的工具调用步骤。
         </div>
+
         <template v-else>
-          <div v-for="step in [
-            { t: 'parse_nl_query', s: 'success', out: `解析出 ${result.parsed_conditions?.length || 0} 个条件` },
-            { t: 'apply_filters',  s: 'success', out: `命中 ${result.total} 只` },
-            { t: 'build_response', s: 'success', out: `返回前 ${result.items.length} 只` },
-          ]" :key="step.t" :style="{ padding: '8px 10px', borderLeft: `2px solid ${A2.up}`, background: A2.bgDeep, marginBottom: '5px', fontSize: '10.5px', borderRadius: '0 6px 6px 0' }">
-            <div :style="{ fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">{{ step.t }}()</div>
-            <div :style="{ color: A2.textMuted, marginTop: '3px' }">{{ step.out }}</div>
+          <div v-for="(stg, i) in stages" :key="stg.t"
+               :style="{ padding: '8px 10px', borderLeft: `2px solid ${stageColor(stg.state)}`, background: A2.bgDeep, marginBottom: '5px', fontSize: '10.5px', borderRadius: '0 6px 6px 0' }">
+            <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">
+              <span :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
+                <span class="stage-dot" :class="stg.state" :style="{ '--c': stageColor(stg.state) }"></span>
+                {{ stg.t }}()
+              </span>
+              <span :style="{ color: A2.textDim, fontWeight: 500 }">{{ stg.dur || (stg.state === 'running' ? '…' : '') }}</span>
+            </div>
+            <div :style="{ color: A2.textMuted, marginTop: '3px' }">{{ stg.out }}</div>
           </div>
         </template>
+
+        <div v-if="screenMeta" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
+          <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">QUERY META</div>
+          logic = {{ screenMeta.logic }}<br />
+          sort_by = {{ screenMeta.sort_by || '—' }}<br />
+          sort_desc = {{ screenMeta.sort_desc }}<br />
+          limit = {{ screenMeta.limit }}
+        </div>
 
         <div :style="{ marginTop: '18px', padding: '12px', background: A2.qwenGradSoft, borderRadius: '8px', fontSize: '11px', lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
           <div :style="{ fontWeight: 700, color: A2.qwenDeep, marginBottom: '5px', display: 'flex', alignItems: 'center', gap: '5px' }"><Icon name="shield" :size="11" /> 风险提示</div>
@@ -270,4 +423,72 @@ function pickPreset(p) {
 <style scoped>
 .row-hover { transition: background 0.15s; }
 .row-hover:hover { background: #EFEDE6; }
+
+/* 条件 chip 出现动画（stagger 由 inline --delay 控制） */
+.cond-chip {
+  opacity: 0;
+  transform: translateY(4px);
+  animation: chip-pop 0.32s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  animation-delay: var(--delay, 0ms);
+}
+@keyframes chip-pop {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 三点流动 */
+.dot-flow {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  margin-left: 2px;
+}
+.dot-flow i {
+  width: 4px; height: 4px;
+  background: var(--c, #2456D8);
+  border-radius: 50%;
+  animation: dot-bob 1s infinite ease-in-out;
+}
+.dot-flow i:nth-child(2) { animation-delay: 0.15s; }
+.dot-flow i:nth-child(3) { animation-delay: 0.30s; }
+@keyframes dot-bob {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
+/* 思考预览的等宽光标 */
+.caret-mono {
+  display: inline-block;
+  width: 5px;
+  height: 12px;
+  margin-left: 1px;
+  background: #B8B4A8;
+  vertical-align: middle;
+  animation: caret-blink 1s steps(2) infinite;
+}
+@keyframes caret-blink { 50% { opacity: 0; } }
+
+/* skeleton 行（与全局 .sk 同样的 shimmer） */
+.sk-bar {
+  background: linear-gradient(90deg, rgba(14,14,12,0.05) 25%, rgba(14,14,12,0.10) 37%, rgba(14,14,12,0.05) 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes sk-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+/* inspector 阶段圆点 */
+.stage-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--c);
+  display: inline-block;
+}
+.stage-dot.running { animation: pulse-ring 1.2s infinite; }
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(36,86,216,0.45); }
+  70%  { box-shadow: 0 0 0 6px rgba(36,86,216,0); }
+  100% { box-shadow: 0 0 0 0 rgba(36,86,216,0); }
+}
 </style>
