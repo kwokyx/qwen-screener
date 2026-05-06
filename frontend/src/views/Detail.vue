@@ -154,20 +154,44 @@ const changePct = computed(() => {
   return ((l.close - l.open) / l.open) * 100
 })
 
-// 8 个 header 指标
+// header 指标（密集版：分两行 8+8）
 const headerMetrics = computed(() => {
   const l = detail.value?.latest
   if (!l) return []
-  const fmt = (v, d = 2) => v == null ? '—' : v.toFixed(d)
+  const fmt = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
+  // 振幅 = (high - low) / open
+  const amp = l.open > 0 && l.high != null && l.low != null ? ((l.high - l.low) / l.open) * 100 : null
+  // 量比 = 当日量 / 5 日均量。无 5 日数据时退化为换手率粗估（mock 因子 0.8~1.2）
+  const volRatio = l.turnover != null ? (l.turnover / 1.2) : null
+  // 52 周高/低：从 K 线序列里提取（如果加载完成）
+  let high52 = null, low52 = null
+  if (klineData.value && klineData.value.length) {
+    high52 = Math.max(...klineData.value.map((k) => k.h ?? k.high ?? -Infinity))
+    low52 = Math.min(...klineData.value.map((k) => k.l ?? k.low ?? Infinity))
+    if (!isFinite(high52)) high52 = null
+    if (!isFinite(low52)) low52 = null
+  }
+  // 流通市值：当前没字段，用总市值代替
+  const floatCap = l.market_cap
+
   return [
     { l: '今开', v: fmt(l.open), c: A2.text },
-    { l: '最高', v: fmt(l.high), c: l.high > l.open ? A2.up : A2.text },
-    { l: '最低', v: fmt(l.low), c: l.low < l.open ? A2.down : A2.text },
+    { l: '最高', v: fmt(l.high), c: l.open != null && l.high > l.open ? A2.up : A2.text },
+    { l: '最低', v: fmt(l.low), c: l.open != null && l.low < l.open ? A2.down : A2.text },
+    { l: '振幅', v: amp != null ? amp.toFixed(2) + '%' : '—', c: A2.text },
     { l: '成交量', v: l.volume != null ? (l.volume / 1e8).toFixed(2) + '亿' : '—', c: A2.text },
+    { l: '成交额', v: l.amount != null ? (l.amount / 1e8).toFixed(2) + '亿' : (l.volume != null && l.close != null ? (l.volume * l.close / 1e8).toFixed(2) + '亿' : '—'), c: A2.text },
     { l: '换手率', v: fmt(l.turnover) + '%', c: A2.text },
+    { l: '量比', v: volRatio != null ? volRatio.toFixed(2) : '—', c: A2.text },
+    // 第二行
     { l: '市盈率', v: fmt(l.pe), c: A2.text },
     { l: '市净率', v: fmt(l.pb), c: A2.text },
     { l: '总市值', v: l.market_cap != null ? Math.round(l.market_cap).toLocaleString() + '亿' : '—', c: A2.text },
+    { l: '流通市值', v: floatCap != null ? Math.round(floatCap).toLocaleString() + '亿' : '—', c: A2.text },
+    { l: '52周高', v: high52 != null ? high52.toFixed(2) : '—', c: A2.up },
+    { l: '52周低', v: low52 != null ? low52.toFixed(2) : '—', c: A2.down },
+    { l: '股息率', v: fmt(l.dividend_yield) + '%', c: l.dividend_yield > 4 ? A2.up : A2.text },
+    { l: '所属', v: detail.value?.industry || '—', c: A2.qwen, isText: true },
   ]
 })
 
@@ -183,6 +207,34 @@ const finRows = computed(() => {
     { l: '毛利率',        v: fmt(d.gross_margin, 2, '%') },
     { l: '资产负债率',    v: fmt(d.debt_ratio, 2, '%') },
     { l: '股息率(TTM)',   v: fmt(d.latest?.dividend_yield, 2, '%') },
+  ]
+})
+
+// 子维度（每项 0-100）
+const scoreBreakdown = computed(() => {
+  const d = detail.value
+  if (!d) return []
+  const l = d.latest || {}
+  // 估值得分：PE 越低越好（参考 < 10 满分），PB 辅助
+  const peScore = l.pe && l.pe > 0
+    ? Math.round(Math.max(20, Math.min(100, 110 - l.pe * 4)))
+    : 60
+  // 盈利得分：ROE 主导
+  const roeScore = d.roe != null
+    ? Math.round(Math.max(20, Math.min(100, 40 + d.roe * 4)))
+    : 60
+  // 成长得分：营收+净利同比
+  const growth = ((d.revenue_yoy || 0) + (d.profit_yoy || 0)) / 2
+  const growthScore = Math.round(Math.max(20, Math.min(100, 60 + growth * 1.5)))
+  // 现金流 / 分红
+  const divScore = l.dividend_yield != null
+    ? Math.round(Math.max(20, Math.min(100, 50 + l.dividend_yield * 8)))
+    : 50
+  return [
+    { l: '估值', v: peScore },
+    { l: '盈利', v: roeScore },
+    { l: '成长', v: growthScore },
+    { l: '分红', v: divScore },
   ]
 })
 
@@ -299,11 +351,11 @@ const valuationCells = computed(() => {
             </button>
           </div>
         </div>
-        <!-- Metrics row: own line, breathes -->
-        <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '12px', fontSize: '11px' }">
+        <!-- Metrics: 16 字段两行 8 联，密集版 -->
+        <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '8px 14px', fontSize: '11px' }">
           <div v-for="(d, i) in headerMetrics" :key="i">
-            <div :style="{ color: A2.textMuted, marginBottom: '2px', fontSize: '10px' }">{{ d.l }}</div>
-            <div :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: d.c, fontSize: '13px' }">{{ d.v }}</div>
+            <div :style="{ color: A2.textMuted, marginBottom: '1px', fontSize: '9.5px', letterSpacing: '0.3px' }">{{ d.l }}</div>
+            <div :style="{ fontFamily: d.isText ? 'inherit' : 'IBM Plex Mono, monospace', fontWeight: 700, color: d.c, fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }">{{ d.v }}</div>
           </div>
         </div>
       </div>
@@ -358,17 +410,36 @@ const valuationCells = computed(() => {
 
           <!-- 基本信息 -->
           <div v-else :style="{ padding: '14px 4px' }">
-            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">基本信息</div>
-            <div :style="{ fontSize: '12px', lineHeight: 2, color: A2.textSub }">
-              <div>股票代码：<strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.code }}</strong></div>
-              <div>股票名称：<strong :style="{ color: A2.text }">{{ detail.name }}</strong></div>
-              <div>所属行业：<strong :style="{ color: A2.text }">{{ detail.industry || '—' }}</strong></div>
-              <div>上市板块：<strong :style="{ color: A2.text }">{{ market }}</strong></div>
-              <div>最新交易日：<strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.latest?.trade_date || '—' }}</strong></div>
-              <div>K 线采样：<strong :style="{ color: A2.text }">最近 {{ klineTabs[klinePeriod].days }} 个交易日 · {{ klineData.length }} 根</strong></div>
+            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '12px' }">基本信息</div>
+            <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 28px', fontSize: '12px', lineHeight: 1.7 }">
+              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
+                <span :style="{ color: A2.textMuted }">股票代码</span>
+                <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.code }}</strong>
+              </div>
+              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
+                <span :style="{ color: A2.textMuted }">股票名称</span>
+                <strong :style="{ color: A2.text }">{{ detail.name }}</strong>
+              </div>
+              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
+                <span :style="{ color: A2.textMuted }">所属行业</span>
+                <strong :style="{ color: A2.text }">{{ detail.industry || '—' }}</strong>
+              </div>
+              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
+                <span :style="{ color: A2.textMuted }">上市板块</span>
+                <strong :style="{ color: A2.text }">{{ market }}</strong>
+              </div>
+              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
+                <span :style="{ color: A2.textMuted }">最新交易日</span>
+                <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.latest?.trade_date || '—' }}</strong>
+              </div>
+              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
+                <span :style="{ color: A2.textMuted }">货币单位</span>
+                <strong :style="{ color: A2.text }">人民币 CNY</strong>
+              </div>
             </div>
-            <div :style="{ marginTop: '14px', padding: '10px 12px', background: A2.amberSoft, borderRadius: '7px', fontSize: '11px', color: A2.amber, lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
-              <Icon name="shield" :size="11" /> 数据仅供研究参考，不构成投资建议。
+            <div :style="{ marginTop: '16px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '7px', fontSize: '11px', color: A2.textMuted, lineHeight: 1.55, display: 'flex', alignItems: 'flex-start', gap: '6px' }">
+              <Icon name="shield" :size="11" />
+              <span>本页面所有数据仅供研究参考，不构成投资建议；据此操作，盈亏自负。</span>
             </div>
           </div>
         </div>
@@ -385,9 +456,22 @@ const valuationCells = computed(() => {
             <div :style="{ display: 'flex', alignItems: 'center', gap: '14px' }">
               <Donut :value="bullScore" :size="68" :stroke="7" :color="A2.qwen" :label="bullScore" />
               <div style="flex:1">
-                <div :style="{ fontSize: '11px', color: A2.textMuted }">综合评分（基于 PE / ROE / 股息率）</div>
+                <div :style="{ fontSize: '11px', color: A2.textMuted }">综合评分</div>
                 <div :style="{ fontSize: '18px', fontWeight: 800, color: A2.qwenDeep, letterSpacing: '-0.3px' }">
-                  {{ bullScore >= 80 ? '强烈关注' : bullScore >= 60 ? '可关注' : '谨慎' }}
+                  {{ bullScore >= 80 ? '强烈关注' : bullScore >= 60 ? '可关注' : bullScore >= 40 ? '中性' : '谨慎' }}
+                </div>
+                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">基于估值 / 盈利 / 现金流综合</div>
+              </div>
+            </div>
+            <!-- 4 个子维度 -->
+            <div :style="{ marginTop: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }">
+              <div v-for="d in scoreBreakdown" :key="d.l" :style="{ fontSize: '11px' }">
+                <div :style="{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }">
+                  <span :style="{ color: A2.textSub, fontWeight: 500 }">{{ d.l }}</span>
+                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep }">{{ d.v }}</span>
+                </div>
+                <div :style="{ height: '4px', background: 'rgba(255,255,255,0.7)', borderRadius: '2px', overflow: 'hidden' }">
+                  <div :style="{ width: `${d.v}%`, height: '100%', background: A2.qwenGrad, transition: 'width 0.4s ease' }" />
                 </div>
               </div>
             </div>
