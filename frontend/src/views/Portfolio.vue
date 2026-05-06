@@ -16,25 +16,56 @@ const gotoDetail = (code) => router.push(`/detail/${code}`)
 const view = ref('持仓')
 const wl = useWatchlistStore()
 
-const holdings = [
-  { code: '600519.SH', name: '贵州茅台', sector: '食品饮料', qty: 200, cost: 1620.00, price: 1742.50, weight: 27.1, qwen: { tag: '继续持有', tone: 'up', note: '估值合理，护城河稳固' } },
-  { code: '300750.SZ', name: '宁德时代', sector: '电池', qty: 500, cost: 198.40, price: 245.30, weight: 22.4, qwen: { tag: '止盈一部分', tone: 'amber', note: '连续放量，建议落袋 30%' } },
-  { code: '688981.SH', name: '中芯国际', sector: '半导体', qty: 1000, cost: 64.20, price: 78.45, weight: 14.3, qwen: { tag: '可加仓', tone: 'up', note: '产能利用率回升' } },
-  { code: '600036.SH', name: '招商银行', sector: '银行', qty: 800, cost: 38.10, price: 42.18, weight: 6.1, qwen: { tag: '继续持有', tone: 'up', note: '股息稳定 4.8%' } },
-  { code: '002594.SZ', name: '比亚迪', sector: '汽车', qty: 300, cost: 268.00, price: 254.20, weight: 13.9, qwen: { tag: '关注突破', tone: 'qwen', note: '海外销量提速，关注 250 阻力' } },
-  { code: '601012.SH', name: '隆基绿能', sector: '光伏', qty: 1500, cost: 26.80, price: 21.45, weight: 5.9, qwen: { tag: '减仓观望', tone: 'down', note: '硅料价格未稳，盈利承压' } },
-  { code: '300760.SZ', name: '迈瑞医疗', sector: '医疗器械', qty: 200, cost: 264.30, price: 285.60, weight: 5.2, qwen: { tag: '继续持有', tone: 'up', note: '海外订单超预期' } },
-  { code: '000858.SZ', name: '五粮液', sector: '食品饮料', qty: 400, cost: 158.40, price: 152.30, weight: 5.1, qwen: { tag: '观望', tone: 'qwen', note: '动销偏弱，等待Q2拐点' } },
+// 模拟 / 演示组合：8 只示例（用户接入券商前的展示数据）
+const demoHoldings = [
+  { code: '600519.SH', name: '贵州茅台', sector: '食品饮料', qty: 200, cost: 1620.00, price: 1742.50, qwen: { tag: '继续持有', tone: 'up', note: '估值合理，护城河稳固' } },
+  { code: '300750.SZ', name: '宁德时代', sector: '电池', qty: 500, cost: 198.40, price: 245.30, qwen: { tag: '止盈一部分', tone: 'amber', note: '连续放量，建议落袋 30%' } },
+  { code: '688981.SH', name: '中芯国际', sector: '半导体', qty: 1000, cost: 64.20, price: 78.45, qwen: { tag: '可加仓', tone: 'up', note: '产能利用率回升' } },
+  { code: '600036.SH', name: '招商银行', sector: '银行', qty: 800, cost: 38.10, price: 42.18, qwen: { tag: '继续持有', tone: 'up', note: '股息稳定 4.8%' } },
+  { code: '002594.SZ', name: '比亚迪', sector: '汽车', qty: 300, cost: 268.00, price: 254.20, qwen: { tag: '关注突破', tone: 'qwen', note: '海外销量提速，关注 250 阻力' } },
+  { code: '601012.SH', name: '隆基绿能', sector: '光伏', qty: 1500, cost: 26.80, price: 21.45, qwen: { tag: '减仓观望', tone: 'down', note: '硅料价格未稳，盈利承压' } },
+  { code: '300760.SZ', name: '迈瑞医疗', sector: '医疗器械', qty: 200, cost: 264.30, price: 285.60, qwen: { tag: '继续持有', tone: 'up', note: '海外订单超预期' } },
+  { code: '000858.SZ', name: '五粮液', sector: '食品饮料', qty: 400, cost: 158.40, price: 152.30, qwen: { tag: '观望', tone: 'qwen', note: '动销偏弱，等待 Q2 拐点' } },
 ]
 
+// 真实 holdings：从 watchlist 派生（每只 100 股，refPrice 当成本）
+// 当 watchlist >= 3 只时启用真组合；否则回退到 demo
+const isDemo = computed(() => wl.items.length < 3)
+
+const holdings = computed(() => {
+  if (isDemo.value) {
+    const totalVal = demoHoldings.reduce((s, h) => s + h.price * h.qty, 0)
+    return demoHoldings.map((h) => ({ ...h, weight: (h.price * h.qty / totalVal) * 100 }))
+  }
+  // 真组合：每只 100 股，cost = refPrice，price 暂用 refPrice * 1.05 模拟
+  // 将来接行情后这里替换为真实当前价
+  const items = wl.items.map((w) => {
+    const cost = w.refPrice || 100
+    const qty = 100
+    const price = cost * 1.05  // 占位：暂时假设全部 +5%；接入实时行情后用真实 close
+    return {
+      code: w.code,
+      name: w.name || w.code,
+      sector: w.sector || '—',
+      qty,
+      cost,
+      price,
+      qwen: { tag: '观察', tone: 'qwen', note: '加入自选时间 ' + new Date(w.addedAt * 1000).toLocaleDateString('zh-CN') },
+    }
+  })
+  const totalVal = items.reduce((s, h) => s + h.price * h.qty, 0)
+  return items.map((h) => ({ ...h, weight: totalVal > 0 ? (h.price * h.qty / totalVal) * 100 : 0 }))
+})
+
 const totals = computed(() => {
-  const totalValue = holdings.reduce((s, h) => s + h.price * h.qty, 0)
-  const totalCost = holdings.reduce((s, h) => s + h.cost * h.qty, 0)
+  const list = holdings.value
+  const totalValue = list.reduce((s, h) => s + h.price * h.qty, 0)
+  const totalCost = list.reduce((s, h) => s + h.cost * h.qty, 0)
   return {
     totalValue,
     totalCost,
     totalPnl: totalValue - totalCost,
-    totalPnlPct: ((totalValue - totalCost) / totalCost) * 100,
+    totalPnlPct: totalCost > 0 ? ((totalValue - totalCost) / totalCost) * 100 : 0,
   }
 })
 
@@ -73,14 +104,17 @@ const stats = [
   { l: 'α (vs 沪深300)', v: '+9.2%', tone: A2.qwen },
 ]
 
-const sectorAlloc = [
-  { l: '食品饮料', v: 32.2, c: '#DC2626' },
-  { l: '电池/汽车', v: 36.3, c: '#2456D8' },
-  { l: '半导体', v: 14.3, c: '#7C3AED' },
-  { l: '银行', v: 6.1, c: '#059669' },
-  { l: '光伏', v: 5.9, c: '#D97706' },
-  { l: '其他', v: 5.2, c: '#9CA3AF' },
-]
+// 行业配置：从 holdings 真聚合
+const SECTOR_COLORS = ['#DC2626', '#2456D8', '#7C3AED', '#059669', '#D97706', '#0EA5E9', '#EC4899', '#9CA3AF']
+const sectorAlloc = computed(() => {
+  const map = new Map()
+  for (const h of holdings.value) {
+    const k = h.sector || '其他'
+    map.set(k, (map.get(k) || 0) + (h.weight || 0))
+  }
+  const entries = [...map.entries()].sort((a, b) => b[1] - a[1])
+  return entries.map(([l, v], i) => ({ l, v: Number(v.toFixed(1)), c: SECTOR_COLORS[i % SECTOR_COLORS.length] }))
+})
 
 const alerts = [
   { tone: A2.up, tag: '突破', stock: '宁德时代', desc: '今日放量 +5.55% 突破 60 日新高，建议关注止盈点位 ¥248', time: '14:25' },
@@ -113,9 +147,9 @@ const chart = computed(() => {
 
 // donut arcs
 const donutArcs = computed(() => {
-  const data = sectorAlloc
+  const data = sectorAlloc.value
   const size = 108
-  const total = data.reduce((s, d) => s + d.v, 0)
+  const total = data.reduce((s, d) => s + d.v, 0) || 1
   const r = size / 2 - 6, cx = size / 2, cy = size / 2
   let acc = 0
   const arcs = data.map(d => {
@@ -136,6 +170,15 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
 <template>
   <Shell>
     <div :style="{ flex: 1, overflow: 'auto', padding: '16px' }">
+      <!-- 演示态提示 -->
+      <div v-if="isDemo && view === '持仓'" :style="{ marginBottom: '12px', padding: '10px 14px', background: A2.bgDeep, color: A2.textSub, borderRadius: '8px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '10px', border: `1px solid ${A2.borderHair}` }">
+        <Icon name="shield" :size="13" :color="A2.textMuted" />
+        <span style="flex:1">下方为示例组合数据。<strong :style="{ color: A2.text }">添加 3 只以上自选股</strong>后将自动生成基于你自选的组合分析。</span>
+        <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="view = '自选'">
+          <Icon name="star" :size="11" /> 管理自选
+        </button>
+      </div>
+
       <!-- Hero: summary + equity -->
       <div :style="{ display: 'grid', gridTemplateColumns: '1.05fr 1.95fr', gap: '10px', marginBottom: '12px' }">
         <!-- Summary card -->
@@ -346,7 +389,7 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
                 <path v-for="(a, i) in donutArcs.arcs" :key="i" :d="a.d" :fill="a.c" />
                 <circle :cx="donutArcs.cx" :cy="donutArcs.cy" :r="donutArcs.r * 0.62" fill="#fff" />
                 <text :x="donutArcs.cx" :y="donutArcs.cy - 2" text-anchor="middle" font-size="10" fill="#7A776F" font-weight="500">总市值</text>
-                <text :x="donutArcs.cx" :y="donutArcs.cy + 12" text-anchor="middle" font-size="13" fill="#0E0E0C" font-weight="700" font-family="IBM Plex Mono, monospace">128.5万</text>
+                <text :x="donutArcs.cx" :y="donutArcs.cy + 12" text-anchor="middle" font-size="13" fill="#0E0E0C" font-weight="700" font-family="IBM Plex Mono, monospace">{{ totals.totalValue >= 10000 ? (totals.totalValue / 10000).toFixed(1) + '万' : Math.round(totals.totalValue) }}</text>
               </svg>
               <div :style="{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }">
                 <div v-for="s in sectorAlloc" :key="s.l" :style="{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }">
