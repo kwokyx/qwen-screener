@@ -96,8 +96,7 @@ onMounted(loadAll)
           </div>
         </template>
         <div v-else v-for="(idx, i) in indices" :key="idx.code"
-             class="card-hover"
-             :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '16px', borderRadius: '10px', position: 'relative', overflow: 'hidden', boxShadow: A2.shadow, cursor: 'pointer' }">
+             :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '16px', borderRadius: '10px', position: 'relative', overflow: 'hidden', boxShadow: A2.shadow }">
           <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }">
             <div>
               <div :style="{ fontSize: '12px', color: A2.textSub, fontWeight: 600 }">{{ idx.name }}</div>
@@ -235,7 +234,8 @@ onMounted(loadAll)
                 <Skeleton v-for="n in 3" :key="n" :height="11" :width="'80%'" :style="{ marginTop: n === 1 ? 0 : '6px' }" />
               </div>
             </div>
-            <button :style="{ width: '100%', marginTop: '12px', padding: '9px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }">
+            <button @click="router.push('/chat')"
+                    :style="{ width: '100%', marginTop: '12px', padding: '9px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }">
               <Icon name="sparkle" :size="12" /> 让千问帮我选股
             </button>
           </div>
@@ -253,7 +253,8 @@ onMounted(loadAll)
               <div v-else :style="{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }">
                 <div v-for="s in sectors" :key="s.name"
                      class="heat-tile"
-                     :title="s.leader_name ? `领涨 ${s.leader_name} ${s.leader_pct >= 0 ? '+' : ''}${s.leader_pct.toFixed(2)}%` : ''"
+                     :title="s.leader_name ? `领涨 ${s.leader_name} ${s.leader_pct >= 0 ? '+' : ''}${s.leader_pct.toFixed(2)}% · 点击让千问深挖` : ''"
+                     @click="router.push({ path: '/chat', query: { q: `推荐 ${s.name} 板块里基本面好、估值合理的股票` } })"
                      :style="{ background: heatBg(s.change_pct), padding: '10px 12px', borderRadius: '7px', color: '#fff', minHeight: '56px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }">
                   <div :style="{ fontSize: '12px', fontWeight: 600 }">{{ s.name }}</div>
                   <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">

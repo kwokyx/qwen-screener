@@ -34,34 +34,58 @@ const aiStreaming = ref(false)
 const aiError = ref('')
 let aiAbort = null
 
-const klineTabs = ['分时', '5日', '日K', '周K', '月K', '季K']
+// K 线采样周期：用 days 参数控制后端取多少个交易日
+// 因为现阶段 DB 是日级粒度（无分时），分时改成"近 5 天"，季 K 改成"两年"
+const klineTabs = [
+  { label: '5日',  days: 5 },
+  { label: '30日', days: 30 },
+  { label: '日K',  days: 80 },
+  { label: '半年', days: 120 },
+  { label: '一年', days: 240 },
+  { label: '两年', days: 480 },
+]
+const klinePeriod = ref(2)   // 默认 "日K"
 const indicators = ['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']
+const activeIndicator = ref(0)   // MA 默认开；其他纯标签
 const detailTabs = ['财务摘要', '估值', '基本信息']
+const detailTab = ref(0)
+
+async function reloadKline() {
+  const days = klineTabs[klinePeriod.value].days
+  try {
+    const kl = await stockApi.kline(code.value, days)
+    if (Array.isArray(kl) && kl.length > 0) {
+      klineData.value = [...kl].reverse().map((k) => ({
+        o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
+      }))
+    } else {
+      const base = detail.value?.latest?.close || 100
+      klineData.value = genKline(base * 0.85, days, 0.025, 99)
+    }
+  } catch {
+    const base = detail.value?.latest?.close || 100
+    klineData.value = genKline(base * 0.85, days, 0.025, 99)
+  }
+}
 
 async function load() {
   loading.value = true
   errorMsg.value = ''
   aiText.value = ''
   try {
+    const days = klineTabs[klinePeriod.value].days
     const [d, kl] = await Promise.all([
       stockApi.detail(code.value),
-      stockApi.kline(code.value, 80).catch(() => []),
+      stockApi.kline(code.value, days).catch(() => []),
     ])
     detail.value = d
-    // K 线后端返回时间倒序，需要反转给画图用
     if (Array.isArray(kl) && kl.length > 0) {
       klineData.value = [...kl].reverse().map((k) => ({
-        o: k.open,
-        c: k.close,
-        h: k.high,
-        l: k.low,
-        v: k.volume,
-        day: k.trade_date,
+        o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
       }))
     } else {
-      // 后端没历史时，用确定性 mock 占位
       const base = d.latest?.close || 100
-      klineData.value = genKline(base * 0.85, 80, 0.025, 99)
+      klineData.value = genKline(base * 0.85, days, 0.025, 99)
     }
   } catch (e) {
     errorMsg.value = e.response?.data?.detail || e.message
@@ -168,6 +192,20 @@ const market = computed(() => {
   if (c.endsWith('.BJ')) return '北交所'
   return '主板'
 })
+
+const valuationCells = computed(() => {
+  const l = detail.value?.latest
+  if (!l) return []
+  const fmt = (v, d = 2, suf = '') => v == null ? '—' : v.toFixed(d) + suf
+  // PE 颜色：< 行业一般水位 红（贵）；中位 灰；> 绿（便宜）—— 简化按区间
+  const peTone = l.pe == null || l.pe <= 0 ? A2.text : (l.pe < 15 ? A2.up : (l.pe > 40 ? A2.down : A2.text))
+  return [
+    { l: '市盈率 PE', v: fmt(l.pe), s: l.pe == null || l.pe <= 0 ? '—' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高'), tone: peTone },
+    { l: '市净率 PB', v: fmt(l.pb), s: l.pb == null ? '—' : (l.pb < 1.5 ? '破净 / 低 PB' : l.pb < 3 ? '合理' : '偏高'), tone: A2.text },
+    { l: '股息率 TTM', v: fmt(l.dividend_yield, 2, '%'), s: l.dividend_yield == null ? '—' : (l.dividend_yield > 4 ? '高股息' : l.dividend_yield > 2 ? '一般' : '偏低'), tone: l.dividend_yield > 4 ? A2.up : A2.text },
+    { l: '总市值', v: l.market_cap == null ? '—' : Math.round(l.market_cap).toLocaleString(), s: l.market_cap == null ? '—' : (l.market_cap > 1000 ? '大盘股' : l.market_cap > 100 ? '中盘股' : '小盘股'), tone: A2.text },
+  ]
+})
 </script>
 
 <template>
@@ -249,9 +287,13 @@ const market = computed(() => {
         <!-- K-line + tabs -->
         <div :style="{ background: A2.surface, overflow: 'auto', padding: '14px', borderRight: `1px solid ${A2.borderHair}` }">
           <div :style="{ display: 'flex', gap: 0, borderBottom: `1px solid ${A2.borderHair}`, marginBottom: '10px' }">
-            <div v-for="(t, i) in klineTabs" :key="t" :style="{ padding: '8px 16px', fontSize: '12px', color: i === 2 ? A2.text : A2.textMuted, fontWeight: i === 2 ? 700 : 500, cursor: 'pointer', borderBottom: i === 2 ? `2px solid ${A2.up}` : '2px solid transparent' }">{{ t }}</div>
+            <div v-for="(t, i) in klineTabs" :key="t.label"
+                 @click="klinePeriod = i; reloadKline()"
+                 :style="{ padding: '8px 16px', fontSize: '12px', color: klinePeriod === i ? A2.text : A2.textMuted, fontWeight: klinePeriod === i ? 700 : 500, cursor: 'pointer', borderBottom: klinePeriod === i ? `2px solid ${A2.up}` : '2px solid transparent', transition: 'color 0.15s, border-color 0.15s' }">{{ t.label }}</div>
             <div style="flex:1" />
-            <div v-for="(t, i) in indicators" :key="t" :style="{ padding: '8px 12px', fontSize: '11px', color: i === 0 ? A2.qwenDeep : A2.textMuted, fontWeight: i === 0 ? 700 : 500, cursor: 'pointer' }">{{ t }}</div>
+            <div v-for="(t, i) in indicators" :key="t"
+                 @click="activeIndicator = i"
+                 :style="{ padding: '8px 12px', fontSize: '11px', color: activeIndicator === i ? A2.qwenDeep : A2.textMuted, fontWeight: activeIndicator === i ? 700 : 500, cursor: 'pointer', transition: 'color 0.15s' }">{{ t }}</div>
           </div>
           <div :style="{ position: 'relative', background: A2.bgDeep, borderRadius: '8px', padding: '10px' }">
             <FullCandle :data="klineData" :width="760" :height="340" />
@@ -259,30 +301,49 @@ const market = computed(() => {
 
           <!-- Tabs below chart -->
           <div :style="{ display: 'flex', gap: 0, borderBottom: `1px solid ${A2.borderHair}`, marginTop: '18px' }">
-            <div v-for="(t, i) in detailTabs" :key="t" :style="{ padding: '10px 16px', fontSize: '12px', color: i === 0 ? A2.text : A2.textMuted, fontWeight: i === 0 ? 700 : 500, cursor: 'pointer', borderBottom: i === 0 ? `2px solid ${A2.text}` : '2px solid transparent' }">{{ t }}</div>
+            <div v-for="(t, i) in detailTabs" :key="t"
+                 @click="detailTab = i"
+                 :style="{ padding: '10px 16px', fontSize: '12px', color: detailTab === i ? A2.text : A2.textMuted, fontWeight: detailTab === i ? 700 : 500, cursor: 'pointer', borderBottom: detailTab === i ? `2px solid ${A2.text}` : '2px solid transparent', transition: 'color 0.15s, border-color 0.15s' }">{{ t }}</div>
           </div>
-          <div :style="{ padding: '14px 4px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px' }">
-            <div>
-              <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">核心财务指标 · 最新报告期</div>
-              <table :style="{ width: '100%', fontSize: '11.5px', borderCollapse: 'collapse' }">
-                <tbody>
-                  <tr v-for="(r, i) in finRows" :key="i" :style="{ borderTop: i === 0 ? 'none' : `1px solid ${A2.borderHair}` }">
-                    <td :style="{ padding: '8px 8px', color: A2.textMuted, fontWeight: 500 }">{{ r.l }}</td>
-                    <td :style="{ padding: '8px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.text }">{{ r.v }}</td>
-                  </tr>
-                </tbody>
-              </table>
+
+          <!-- 财务摘要 -->
+          <div v-if="detailTab === 0" :style="{ padding: '14px 4px' }">
+            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">核心财务指标 · 最新报告期</div>
+            <table :style="{ width: '100%', fontSize: '11.5px', borderCollapse: 'collapse' }">
+              <tbody>
+                <tr v-for="(r, i) in finRows" :key="i" :style="{ borderTop: i === 0 ? 'none' : `1px solid ${A2.borderHair}` }">
+                  <td :style="{ padding: '9px 8px', color: A2.textMuted, fontWeight: 500, width: '40%' }">{{ r.l }}</td>
+                  <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: r.v.startsWith('+') ? A2.up : (r.v.startsWith('-') ? A2.down : A2.text) }">{{ r.v }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 估值 -->
+          <div v-else-if="detailTab === 1" :style="{ padding: '14px 4px' }">
+            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">估值水平</div>
+            <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }">
+              <div v-for="m in valuationCells" :key="m.l" :style="{ background: A2.bgDeep, border: `1px solid ${A2.borderHair}`, borderRadius: '7px', padding: '12px 14px' }">
+                <div :style="{ fontSize: '10px', color: A2.textMuted, marginBottom: '4px', fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase' }">{{ m.l }}</div>
+                <div :style="{ fontSize: '20px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: m.tone, letterSpacing: '-0.5px' }">{{ m.v }}</div>
+                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">{{ m.s }}</div>
+              </div>
             </div>
-            <div>
-              <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">基本信息</div>
-              <div :style="{ fontSize: '11.5px', lineHeight: 1.9, color: A2.textSub }">
-                <div>所属行业：<strong :style="{ color: A2.text }">{{ detail.industry || '—' }}</strong></div>
-                <div>上市板块：<strong :style="{ color: A2.text }">{{ market }}</strong></div>
-                <div>更新时间：<strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.latest?.trade_date || '—' }}</strong></div>
-              </div>
-              <div :style="{ marginTop: '14px', padding: '10px 12px', background: A2.amberSoft, borderRadius: '7px', fontSize: '11px', color: A2.amber, lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
-                <Icon name="shield" :size="11" /> 数据仅供研究参考，不构成投资建议。
-              </div>
+          </div>
+
+          <!-- 基本信息 -->
+          <div v-else :style="{ padding: '14px 4px' }">
+            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">基本信息</div>
+            <div :style="{ fontSize: '12px', lineHeight: 2, color: A2.textSub }">
+              <div>股票代码：<strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.code }}</strong></div>
+              <div>股票名称：<strong :style="{ color: A2.text }">{{ detail.name }}</strong></div>
+              <div>所属行业：<strong :style="{ color: A2.text }">{{ detail.industry || '—' }}</strong></div>
+              <div>上市板块：<strong :style="{ color: A2.text }">{{ market }}</strong></div>
+              <div>最新交易日：<strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.latest?.trade_date || '—' }}</strong></div>
+              <div>K 线采样：<strong :style="{ color: A2.text }">最近 {{ klineTabs[klinePeriod].days }} 个交易日 · {{ klineData.length }} 根</strong></div>
+            </div>
+            <div :style="{ marginTop: '14px', padding: '10px 12px', background: A2.amberSoft, borderRadius: '7px', fontSize: '11px', color: A2.amber, lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
+              <Icon name="shield" :size="11" /> 数据仅供研究参考，不构成投资建议。
             </div>
           </div>
         </div>

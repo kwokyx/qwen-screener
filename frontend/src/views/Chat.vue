@@ -1,6 +1,6 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
 import Sparkline from '../components/charts/Sparkline.vue'
@@ -9,6 +9,7 @@ import { genKline } from '../shared/data.js'
 import { streamNL } from '../api/screener'
 
 const router = useRouter()
+const route = useRoute()
 
 const input = ref('')
 const lastQuery = ref('')
@@ -148,6 +149,17 @@ function pickPreset(p) {
   input.value = p
   send()
 }
+
+// 从其他页面跳转携带 ?q=xxx 时自动发送
+onMounted(() => {
+  const q = route.query.q
+  if (q && typeof q === 'string') {
+    input.value = q
+    send()
+    // 用过即清，刷新不重发
+    router.replace({ path: '/chat' })
+  }
+})
 
 // ---- 右侧 inspector：每阶段对应一行 ----
 const stages = computed(() => {

@@ -230,7 +230,10 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
       <div :style="{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '10px' }">
         <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow }">
           <div :style="{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}` }">
-            <div :style="{ fontSize: '13px', fontWeight: 700 }">持仓明细</div>
+            <div :style="{ display: 'flex', alignItems: 'center', gap: '8px' }">
+              <div :style="{ fontSize: '13px', fontWeight: 700 }">{{ view === '自选' ? '自选股' : view === '千问跟踪' ? '千问跟踪' : '持仓明细' }}</div>
+              <span v-if="view === '持仓' || view === '千问跟踪'" :style="{ fontSize: '9px', padding: '2px 6px', background: A2.amberSoft, color: A2.amber, borderRadius: '3px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">DEMO</span>
+            </div>
             <div style="flex:1" />
             <div :style="{ display: 'flex', gap: '2px', padding: '3px', background: A2.bgDeep, borderRadius: '6px' }">
               <div v-for="t in ['持仓', '自选', '千问跟踪']" :key="t" @click="view = t"
@@ -339,7 +342,10 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
         <div :style="{ display: 'flex', flexDirection: 'column', gap: '10px' }">
           <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px', boxShadow: A2.shadow }">
             <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }">
-              <div :style="{ fontSize: '13px', fontWeight: 700 }">行业配置</div>
+              <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
+                <div :style="{ fontSize: '13px', fontWeight: 700 }">行业配置</div>
+                <span :style="{ fontSize: '9px', padding: '2px 6px', background: A2.amberSoft, color: A2.amber, borderRadius: '3px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">DEMO</span>
+              </div>
               <span :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">8 持仓</span>
             </div>
             <div :style="{ display: 'flex', alignItems: 'center', gap: '12px' }">
@@ -361,7 +367,10 @@ const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.
 
           <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow, flex: 1 }">
             <div :style="{ padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
-              <div :style="{ fontSize: '13px', fontWeight: 700 }">千问预警</div>
+              <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
+                <div :style="{ fontSize: '13px', fontWeight: 700 }">千问预警</div>
+                <span :style="{ fontSize: '9px', padding: '2px 6px', background: A2.amberSoft, color: A2.amber, borderRadius: '3px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">DEMO</span>
+              </div>
               <span :style="{ fontSize: '10px', padding: '2px 6px', background: A2.upSoft, color: A2.up, borderRadius: '3px', fontWeight: 600, fontFamily: 'IBM Plex Mono, monospace' }">3 条新</span>
             </div>
             <div>

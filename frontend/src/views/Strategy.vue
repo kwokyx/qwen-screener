@@ -286,10 +286,12 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
           <div :style="{ fontSize: '12px', color: A2.textMuted, marginTop: '3px' }">用千问描述策略，或从模板出发 · 回测窗口 2024-01-01 至 2026-04-30</div>
         </div>
         <div :style="{ display: 'flex', gap: '8px' }">
-          <button :style="{ padding: '8px 14px', background: A2.surface, border: `1px solid ${A2.borderHair}`, color: A2.textSub, fontSize: '12px', fontWeight: 600, borderRadius: '7px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }">
-            <Icon name="bookmark" :size="11" /> 我的策略 (4)
+          <button @click="router.push('/portfolio')"
+                  :style="{ padding: '8px 14px', background: A2.surface, border: `1px solid ${A2.borderHair}`, color: A2.textSub, fontSize: '12px', fontWeight: 600, borderRadius: '7px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }">
+            <Icon name="bookmark" :size="11" /> 我的策略 ({{ strategies.length }})
           </button>
-          <button :style="{ padding: '8px 14px', background: A2.qwenGrad, border: 'none', color: '#fff', fontSize: '12px', fontWeight: 600, borderRadius: '7px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">
+          <button @click="router.push({ path: '/chat', query: { q: '帮我设计一个稳健的选股策略，列出量化条件' } })"
+                  :style="{ padding: '8px 14px', background: A2.qwenGrad, border: 'none', color: '#fff', fontSize: '12px', fontWeight: 600, borderRadius: '7px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">
             <Icon name="sparkle" :size="11" /> 让千问写一个策略
           </button>
         </div>
@@ -337,7 +339,7 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
             <div :style="{ marginBottom: '12px' }">
               <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '5px' }">
                 <div :style="{ fontSize: '10px', color: A2.textMuted, fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase' }">买入条件</div>
-                <span :style="{ fontSize: '10px', color: A2.qwen, cursor: 'pointer' }">+ 添加</span>
+                <span :style="{ fontSize: '10px', color: A2.textDim }">{{ entryRules.length }} 条</span>
               </div>
               <div v-for="r in entryRules" :key="r.k" :style="{ display: 'flex', gap: '4px', marginBottom: '5px', alignItems: 'center' }">
                 <div :style="{ flex: 1, padding: '6px 9px', background: A2.bgDeep, border: `1px solid ${A2.borderHair}`, borderRadius: '5px', fontSize: '11px', color: A2.textSub }">{{ r.k }}</div>
