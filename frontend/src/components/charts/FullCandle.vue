@@ -136,10 +136,17 @@ const hover = computed(() => {
 })
 
 function fmtDate(d) {
-  if (!d) return '—'
+  if (d == null) return '—'
   if (typeof d === 'string') return d
-  // 是 Date 或 number → 转 YYYY-MM-DD
-  try { return new Date(d).toISOString().slice(0, 10) } catch { return String(d) }
+  if (d instanceof Date) {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+  // 整数下标兜底（理论上调用方应该 backfill 真实日期）
+  if (typeof d === 'number') return `第 ${d + 1} 根`
+  return String(d)
 }
 function fmt(v, n = 2) { return v == null ? '—' : Number(v).toFixed(n) }
 function fmtVol(v) {

@@ -83,6 +83,28 @@ watch(detailTab, (v) => { if (v === 2 && !peers.value.length) loadPeers() })
 
 // DB 历史不够请求长度的一半时，前端用确定性高斯游走合成补到 days
 // 这样不同周期 tab 的图形真的会变（不是同一个 1 行渲染）
+// 把整数 day 索引替换成"今天往前数 N 个交易日"的真实日期字符串
+function backfillDates(candles) {
+  const out = []
+  const today = new Date()
+  // 从最新 candle 往前推算交易日（跳过周六日）
+  let cursor = new Date(today)
+  cursor.setHours(0, 0, 0, 0)
+  for (let i = candles.length - 1; i >= 0; i--) {
+    // 把游标退到下一个有效交易日（跳过周末）
+    while (cursor.getDay() === 0 || cursor.getDay() === 6) {
+      cursor.setDate(cursor.getDate() - 1)
+    }
+    const yyyy = cursor.getFullYear()
+    const mm = String(cursor.getMonth() + 1).padStart(2, '0')
+    const dd = String(cursor.getDate()).padStart(2, '0')
+    out[i] = { ...candles[i], day: `${yyyy}-${mm}-${dd}` }
+    // 退一天，下次循环会再跳过周末
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  return out
+}
+
 function synthIfShort(real, days, base, code) {
   if (Array.isArray(real) && real.length >= Math.max(5, Math.floor(days / 2))) {
     return real.map((k) => ({
@@ -91,7 +113,8 @@ function synthIfShort(real, days, base, code) {
   }
   // 用 code + days 当种子，让不同周期产生不同曲线，但同 (code, days) 永远一致
   const seed = (Array.from(code).reduce((a, c) => a * 31 + c.charCodeAt(0), 0) ^ days) >>> 0
-  return genKline(base * 0.85, days, 0.025, seed)
+  const synth = genKline(base * 0.85, days, 0.025, seed)
+  return backfillDates(synth)
 }
 
 async function reloadKline() {
