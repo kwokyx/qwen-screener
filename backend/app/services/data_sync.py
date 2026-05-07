@@ -112,6 +112,71 @@ def sync_daily_em(db: Session, trade_date: date | None = None) -> int:
     return len(rows)
 
 
+# ---------- 行情同步（方案 A2：新浪全市场，无 PE/PB） ----------
+
+def sync_daily_sina(db: Session, trade_date: date | None = None) -> int:
+    """新浪源全市场行情快照，5500+ 只一次拉完。
+    缺 PE/PB/总市值/换手率/股息率，只覆盖 OHLC + volume + amount。
+    适合在东方财富不可达时打底——保证行情类查询（涨跌榜/板块涨跌）覆盖全市场。
+    """
+    import akshare as ak
+
+    logger.info("[SINA] 拉取全市场实时快照（无 PE/市值）...")
+    df = ak.stock_zh_a_spot()
+    today = trade_date or date.today()
+    rows = []
+    for _, r in df.iterrows():
+        raw = str(r.get("代码", "")).strip().lower()
+        # 新浪格式：sh600000 / sz000001 / bj920000
+        if raw.startswith("sh"):
+            code = raw[2:] + ".SH"
+        elif raw.startswith("sz"):
+            code = raw[2:] + ".SZ"
+        elif raw.startswith("bj"):
+            code = raw[2:] + ".BJ"
+        else:
+            # 已是数字或不识别
+            sym = ''.join(c for c in raw if c.isdigit())
+            if not sym:
+                continue
+            code = _to_code(sym.zfill(6))
+        rows.append({
+            "code": code,
+            "trade_date": today,
+            "open": _f(r.get("今开")),
+            "high": _f(r.get("最高")),
+            "low": _f(r.get("最低")),
+            "close": _f(r.get("最新价")),
+            "volume": _f(r.get("成交量")),
+            "amount": _f(r.get("成交额")),
+            # PE/PB/市值/换手率/股息率 没有 —— 让 csi500 同步过的那 800 只继续保留 NULL
+        })
+    if not rows:
+        logger.warning("[SINA] 拉到 0 行，跳过")
+        return 0
+    # 关键：先删掉今天的行（如果之前 csi300/500 同步过有部分数据）再 insert
+    # 但要保留 csi500 同步进来的 PE/PB 等字段——所以改成 upsert 模式
+    existing = {
+        d.code: d for d in db.query(StockDaily).filter(StockDaily.trade_date == today).all()
+    }
+    inserted = 0
+    updated = 0
+    for r in rows:
+        d = existing.get(r["code"])
+        if d:
+            # 仅覆盖 OHLC/volume/amount，保留已有 PE/PB/市值/换手率
+            for k in ("open", "high", "low", "close", "volume", "amount"):
+                if r[k] is not None:
+                    setattr(d, k, r[k])
+            updated += 1
+        else:
+            db.add(StockDaily(**r))
+            inserted += 1
+    db.commit()
+    logger.info("[SINA] 完成：新增 {} / 更新 {}", inserted, updated)
+    return inserted + updated
+
+
 # ---------- 行情同步（方案B：股票池 + 雪球逐只） ----------
 
 POOL_PRESETS = {

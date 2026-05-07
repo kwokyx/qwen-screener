@@ -2,7 +2,8 @@
 
 用法：
     python -m scripts.sync_data basic                    # A 股全量基本信息
-    python -m scripts.sync_data daily-em                 # 东方财富批量行情（如可用）
+    python -m scripts.sync_data daily-em                 # 东方财富批量行情（含 PE/PB/市值，部分网络易超时）
+    python -m scripts.sync_data daily-sina               # 新浪批量行情（5500 只全市场，不含 PE/市值）
     python -m scripts.sync_data pool [csi300|csi500|sse50]    # 雪球逐只行情 + 股息率
     python -m scripts.sync_data industry [pool]          # 补行业 + 上市时间
     python -m scripts.sync_data financial [pool]         # 补 ROE / 营收 / 净利等财务指标
@@ -25,6 +26,8 @@ def main():
             data_sync.sync_basic(db)
         elif cmd == "daily-em":
             data_sync.sync_daily_em(db)
+        elif cmd == "daily-sina":
+            data_sync.sync_daily_sina(db)
         elif cmd == "pool":
             data_sync.sync_pool_xq(db, pool=pool)
         elif cmd == "industry":
