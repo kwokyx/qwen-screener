@@ -64,8 +64,15 @@ def get_meta() -> dict[str, dict]:
         )).all()
     out = {}
     for r in rows:
+        ts = r.last_run_at
+        if ts is None:
+            ts_str = None
+        elif isinstance(ts, str):
+            ts_str = ts
+        else:
+            ts_str = ts.isoformat()
         out[r.name] = {
-            "last_run_at": r.last_run_at.isoformat() if r.last_run_at else None,
+            "last_run_at": ts_str,
             "status": r.status,
             "duration_ms": r.duration_ms,
             "detail": r.detail,

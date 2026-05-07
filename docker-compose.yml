@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qwen-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # 强制覆盖：容器内 SQLite 放到挂载卷
+      - DATABASE_URL=sqlite:////app/data/stock.db
+    volumes:
+      - backend_data:/app/data
+    expose:
+      - "8000"
+    # 想直接调试后端可以解开下面这行（host 8001 → 容器 8000）
+    # ports:
+    #   - "8001:8000"
+    networks:
+      - qwen-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: qwen-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+    networks:
+      - qwen-net
+
+networks:
+  qwen-net:
+    driver: bridge
+
+volumes:
+  backend_data:
