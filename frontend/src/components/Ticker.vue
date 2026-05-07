@@ -1,15 +1,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { A2 } from '../shared/theme.js'
-import { INDICES as MOCK_INDICES } from '../shared/data.js'
 import { ticker as fetchTicker, movers as fetchMovers } from '../api/market'
 
 // 模块级缓存：跨路由切换不重复拉
 let cache = null
 let pending = null
 
-const indices = ref(MOCK_INDICES.map((i) => ({ name: i.name, code: i.code, value: i.value, change: i.change, change_pct: i.changePct })))
-const totalAmount = ref(8247)
+const indices = ref([])
+const totalAmount = ref(0)
 const advancers = ref(null)
 const decliners = ref(null)
 const tradeDate = ref('—')
