@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily, StockFinancial
-from app.services import qwen_client, scheduler
+from app.services import cache, qwen_client, scheduler
 
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -45,6 +45,12 @@ def data_health(db: Session = Depends(get_db)):
         },
         "sync_meta": sync_meta,
     }
+
+
+@router.get("/cache")
+def cache_health():
+    """Redis 缓存健康度 + 命中率。"""
+    return cache.stats()
 
 
 @router.post("/sync/{job_name}")

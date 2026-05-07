@@ -325,16 +325,129 @@ def _extract_json(text: str) -> dict:
     raise RuntimeError(f"模型返回非 JSON: {text[:200]}")
 
 
+# --------- Function Calling tool schema for screener ---------
+
+_SCREEN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "screen_stocks",
+        "description": "Apply structured filters to A-share stocks and return matches.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "conditions": {
+                    "type": "array",
+                    "description": "List of filter conditions to apply.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {
+                                "type": "string",
+                                "enum": [
+                                    "pe", "pb", "roe", "market_cap", "dividend_yield",
+                                    "revenue_yoy", "profit_yoy", "gross_margin", "debt_ratio",
+                                    "industry", "market", "close", "turnover",
+                                ],
+                                "description": "字段：pe(倍)、pb(倍)、roe(%)、market_cap(亿元)、dividend_yield(%)、revenue_yoy(%)、profit_yoy(%)、gross_margin(%)、debt_ratio(%)、close(元)、turnover(%)、industry(字符串)、market(主板/创业板/科创板/北交所)",
+                            },
+                            "op": {
+                                "type": "string",
+                                "enum": ["gt", "gte", "lt", "lte", "eq", "between", "in"],
+                            },
+                            "value": {
+                                "description": "between → [低,高] 数组；in → 字符串数组（仅 industry/market）；其他 → 单个数或字符串",
+                            },
+                        },
+                        "required": ["field", "op", "value"],
+                    },
+                },
+                "logic": {"type": "string", "enum": ["AND", "OR"], "default": "AND"},
+                "sort_by": {"type": "string", "description": "排序字段，可为空"},
+                "sort_desc": {"type": "boolean", "default": True},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+            },
+            "required": ["conditions"],
+        },
+    },
+}
+
+
+def _openai_call_tool(user_query: str) -> dict | None:
+    """Function Calling 路径：让模型直接生成结构化参数。
+    成功返回参数 dict；任何失败/不支持都返回 None，由调用方走 JSON 模式兜底。
+    """
+    if not settings.openai_api_key:
+        return None
+    try:
+        client = _openai_client()
+        sys_msg = (
+            "你是一个 A 股量化筛选助手。把用户的自然语言筛选需求转成 screen_stocks 工具调用。"
+            "翻译规则：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长股=revenue_yoy>20且profit_yoy>20；"
+            "白马股=roe>15且market_cap>500；小盘股=market_cap<100，中盘=100~500，大盘>500。"
+            "industry 用中文短词（银行/白酒/半导体/光伏/医药/新能源车）。"
+        )
+        resp = client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": user_query},
+            ],
+            tools=[_SCREEN_TOOL],
+            tool_choice={"type": "function", "function": {"name": "screen_stocks"}},
+            timeout=60.0,
+        )
+        msg = resp.choices[0].message
+        calls = getattr(msg, "tool_calls", None) or []
+        if not calls:
+            return None
+        args_str = calls[0].function.arguments
+        return json.loads(args_str)
+    except Exception as e:
+        logger.warning("FC 路径不可用，回退 JSON: {}", str(e)[:120])
+        return None
+
+
 def parse_nl_query(user_query: str) -> ScreenRequest:
-    prompt = _load_prompt("nl_to_filter.md").replace("{user_query}", user_query)
-    text = _call(prompt, json_mode=True)
-    data = _extract_json(text)
-    return ScreenRequest(**data)
+    """自然语言 → ScreenRequest。
+    优先级：缓存 → Function Calling → JSON-mode prompt。
+    """
+    from app.services import cache as _cache
+
+    key = _cache.make_key("nl", user_query.strip())
+    cached = _cache.get_json(key)
+    if cached is not None:
+        try:
+            return ScreenRequest(**cached)
+        except Exception:
+            pass  # 损坏的缓存：忽略并重新生成
+
+    # 1) Function Calling
+    data = _openai_call_tool(user_query)
+
+    # 2) JSON-mode 兜底
+    if not data:
+        prompt = _load_prompt("nl_to_filter.md").replace("{user_query}", user_query)
+        text = _call(prompt, json_mode=True)
+        data = _extract_json(text)
+
+    req = ScreenRequest(**data)
+    _cache.set_json(key, req.model_dump(), ttl=3600)
+    return req
 
 
 def analyze_stock(snapshot: dict) -> str:
+    """生成投资分析文本，按 snapshot 哈希缓存（默认 1 小时 TTL）。"""
+    from app.services import cache as _cache
+
+    key = _cache.make_key("analyze", snapshot)
+    cached = _cache.get_text(key)
+    if cached:
+        return cached
+
     template = _load_prompt("stock_analysis.md")
     for k, v in snapshot.items():
         template = template.replace("{" + k + "}", "" if v is None else str(v))
-    text = _call(template, json_mode=False)
-    return text.strip()
+    text = _call(template, json_mode=False).strip()
+    if text:
+        _cache.set_text(key, text, ttl=3600)
+    return text
