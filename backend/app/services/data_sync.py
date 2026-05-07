@@ -233,6 +233,13 @@ def sync_pool_financial(db: Session, pool: str = "csi300", sleep_sec: float = 0.
             if row is None:
                 row = StockFinancial(code=p["code"], report_date=rep_date)
                 db.add(row)
+            # akshare 给的 ROE / 毛利率 / 资产负债率 都是 YTD 累计口径；
+            # ROE 折算到年化便于跨季度横向对比（Q1 ×4 / Q2 ×2 / Q3 ×4/3 / Q4 ×1）
+            if picked.get("roe") is not None:
+                m = rep_date.month
+                factor = {3: 4.0, 6: 2.0, 9: 4 / 3, 12: 1.0}.get(m, 1.0)
+                picked["roe"] = picked["roe"] * factor
+
             for k, v in picked.items():
                 if k in {"net_profit", "revenue"} and v is not None:
                     v = v / 1e8  # 元 → 亿元

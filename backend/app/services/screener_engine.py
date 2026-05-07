@@ -39,16 +39,73 @@ def _build_clause(cond: FilterCondition):
         raise ValueError(f"不支持的筛选字段: {cond.field}")
     col = FIELD_MAP[cond.field]
     op, v = cond.op, cond.value
-    if op == "gt":
-        return col > v
-    if op == "gte":
-        return col >= v
-    if op == "lt":
-        return col < v
-    if op == "lte":
-        return col <= v
-    if op == "eq":
-        return col == v
+
+    # industry 字段对千问输出的"宽口径行业名"做模糊匹配
+    # 例如千问说 "家电"，DB 里只有 "白色家电"/"小家电"/"黑色家电"/"厨卫电器"
+    # → 用 LIKE '%家电%' 命中前三；并附加同义词扩展（家电 → 家居用品等不需）
+    if cond.field == "industry":
+        terms = []
+        if op == "in" and isinstance(v, list):
+            terms = [str(x) for x in v if x]
+        elif op == "eq" and v is not None:
+            terms = [str(v)]
+        else:
+            # 其他操作符（gt/lt 等）对字符串无意义，回退到原行为
+            return _basic_clause(col, op, v)
+        # 同义词 / 简称扩展：用户/千问 常用词 → DB 里的具体行业字符串集合
+        SYN = {
+            "食品饮料": ["食品", "饮料"],
+            "消费":     ["白酒", "食品", "饮料", "美容", "纺织", "服装", "家电", "家居", "零售", "旅游", "酒店", "影视", "游戏", "教育", "医疗服务"],
+            "大消费":   ["白酒", "食品", "饮料", "美容", "纺织", "服装", "家电", "家居", "零售", "旅游", "酒店"],
+            "家电":     ["家电", "厨卫电器"],
+            "纺织服饰": ["纺织", "服装"],
+            "纺服":     ["纺织", "服装"],
+            "服装":     ["服装"],
+            "商贸零售": ["零售", "贸易", "医药商业"],
+            "零售":     ["零售"],
+            "社会服务": ["社会服务", "旅游", "酒店", "教育"],
+            "旅游":     ["旅游", "酒店"],
+            "金融":     ["银行", "证券", "保险", "多元金融"],
+            "周期":     ["钢铁", "煤炭", "有色", "化工", "石油"],
+            "新能源":   ["电池", "光伏", "风电", "新能源"],
+            "新能源车": ["汽车", "电池"],
+            "汽车":     ["汽车"],
+            "半导体":   ["半导体"],
+            "医药":     ["制药", "中药", "生物制品", "医疗", "医药"],
+            "TMT":      ["半导体", "软件", "通信", "传媒", "游戏", "IT", "消费电子", "光学"],
+            "科技":     ["半导体", "软件", "通信", "光学", "消费电子", "IT"],
+            "AI":       ["半导体", "软件", "IT", "通信", "消费电子"],
+            "军工":     ["军工"],
+        }
+        # 把每个 term 拆出关键字 patterns
+        patterns: list[str] = []
+        for t in terms:
+            if t in SYN:
+                patterns.extend(SYN[t])
+            else:
+                patterns.append(t)
+        # 去重
+        seen, dedup = set(), []
+        for p in patterns:
+            if p not in seen:
+                seen.add(p); dedup.append(p)
+        # 拼 OR(LIKE)
+        clauses = [col.like(f"%{p}%") for p in dedup]
+        if not clauses:
+            return col.is_(None)  # 不会命中
+        if len(clauses) == 1:
+            return clauses[0]
+        return or_(*clauses)
+
+    return _basic_clause(col, op, v)
+
+
+def _basic_clause(col, op, v):
+    if op == "gt":   return col > v
+    if op == "gte":  return col >= v
+    if op == "lt":   return col < v
+    if op == "lte":  return col <= v
+    if op == "eq":   return col == v
     if op == "between":
         if not isinstance(v, list) or len(v) != 2:
             raise ValueError("between 需要长度为 2 的数组")
