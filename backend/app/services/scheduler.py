@@ -113,26 +113,39 @@ def job_daily_market():
 
 
 def job_daily_value():
-    """价值面：csi300 + csi500 共 800 只，含 PE/PB/股息率。"""
+    """价值面：csi300 + csi500（雪球，含股息率）+ 北交所（东方财富，无股息率）。
+    单条失败不影响整体，写 sync_meta 时取累计 affected。
+    """
     logger.info("[SCHED] daily_value 开始")
     db = SessionLocal()
     try:
-        a = data_sync.sync_pool_xq(db, pool="csi300") or 0
-        b = data_sync.sync_pool_xq(db, pool="csi500") or 0
-        return a + b
+        cnt = 0
+        for pool in ("csi300", "csi500"):
+            try:
+                cnt += data_sync.sync_pool_xq(db, pool=pool) or 0
+            except Exception as e:
+                logger.warning("[SCHED] daily_value pool={} 失败: {}", pool, str(e)[:120])
+        try:
+            cnt += data_sync.sync_bj_valuation_em(db) or 0
+        except Exception as e:
+            logger.warning("[SCHED] daily_value bj-em 失败: {}", str(e)[:120])
+        return cnt
     finally:
         db.close()
 
 
 def job_weekly_fundamentals():
-    """行业 + 财务（季度数据不每天变）。"""
+    """行业 + 财务（季度数据不每天变）。覆盖 csi300/csi500/bj。"""
     logger.info("[SCHED] weekly_fundamentals 开始")
     db = SessionLocal()
     try:
         cnt = 0
-        for pool in ("csi300", "csi500"):
-            cnt += data_sync.sync_pool_industry(db, pool=pool) or 0
-            cnt += data_sync.sync_pool_financial(db, pool=pool) or 0
+        for pool in ("csi300", "csi500", "bj"):
+            try:
+                cnt += data_sync.sync_pool_industry(db, pool=pool) or 0
+                cnt += data_sync.sync_pool_financial(db, pool=pool) or 0
+            except Exception as e:
+                logger.warning("[SCHED] weekly_fundamentals pool={} 失败: {}", pool, str(e)[:120])
         return cnt
     finally:
         db.close()

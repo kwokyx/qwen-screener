@@ -187,11 +187,27 @@ POOL_PRESETS = {
 
 
 def fetch_pool(pool: str = "csi300") -> list[dict]:
-    """获取指数成分股列表，返回 [{code, name, industry?}, ...]"""
+    """获取股票池成分列表，返回 [{code, name}, ...]
+    支持指数池（csi300/csi500/sse50）和"bj"（北交所全量）。
+    """
     import akshare as ak
 
+    if pool == "bj":
+        df = ak.stock_info_bj_name_code()
+        return [
+            {
+                "code": str(r["证券代码"]) + ".BJ",
+                "name": str(r["证券简称"]),
+                # 北交所列表里直接带行业 / 上市日期 / 总股本，省去逐只查雪球
+                "_industry": str(r.get("所属行业") or "") or None,
+                "_list_date": r.get("上市日期"),
+                "_total_share": _f(r.get("总股本"), scale=1e8),
+            }
+            for _, r in df.iterrows()
+        ]
+
     if pool not in POOL_PRESETS:
-        raise ValueError(f"未知股票池: {pool}，支持 {list(POOL_PRESETS)}")
+        raise ValueError(f"未知股票池: {pool}，支持 {list(POOL_PRESETS) + ['bj']}")
 
     df = ak.index_stock_cons_csindex(symbol=POOL_PRESETS[pool])
     return [
@@ -204,11 +220,32 @@ def fetch_pool(pool: str = "csi300") -> list[dict]:
 
 
 def sync_pool_industry(db: Session, pool: str = "csi300", sleep_sec: float = 0.1) -> int:
-    """逐只补 stock_basic 的 industry / 上市时间 / 总股本（雪球 individual_basic_info）"""
-    import akshare as ak
-
+    """补 stock_basic 的 industry / 上市时间 / 总股本。
+    - 指数池（csi300/csi500/sse50）：逐只调雪球 individual_basic_info
+    - bj 池：股票列表本身就带行业/上市日期/总股本，直接用，不需要逐只远程调用
+    """
     pool_list = fetch_pool(pool)
     logger.info("[INDUSTRY] 池 {}：{} 只，补行业...", pool, len(pool_list))
+
+    if pool == "bj":
+        # 快路径：列表已带行业/上市日期/总股本，无需 312 次雪球调用
+        updated = 0
+        for p in pool_list:
+            basic = db.get(StockBasic, p["code"])
+            if basic is None:
+                continue
+            basic.industry = p.get("_industry")
+            basic.market = "北交所"
+            basic.total_share = p.get("_total_share")
+            ld = p.get("_list_date")
+            if isinstance(ld, date):
+                basic.list_date = ld
+            updated += 1
+        db.commit()
+        logger.info("[INDUSTRY] bj 完成：更新 {}", updated)
+        return updated
+
+    import akshare as ak
     updated = 0
     failed = 0
     for i, p in enumerate(pool_list, 1):
@@ -321,6 +358,56 @@ def sync_pool_financial(db: Session, pool: str = "csi300", sleep_sec: float = 0.
     db.commit()
     logger.info("[FIN] 完成：更新 {} / 失败 {}", updated, failed)
     return updated
+
+
+def sync_bj_valuation_em(db: Session, trade_date: date | None = None) -> int:
+    """北交所估值（PE/PB/总市值/换手率）。一次东方财富快照里筛 BJ 行 upsert。
+    雪球 spot 对北交所不返回 PE，所以单独跑这条。其它板块的 PE 来自 sync_pool_xq，互不覆盖。
+    """
+    import akshare as ak
+
+    today = trade_date or date.today()
+    logger.info("[BJ-EM] 拉东方财富全市场快照，筛北交所...")
+    df = ak.stock_zh_a_spot_em()
+    bj = df[df["代码"].astype(str).str.startswith(("920", "8", "43"))]
+    if bj.empty:
+        logger.warning("[BJ-EM] 0 行北交所，跳过")
+        return 0
+
+    existing = {
+        d.code: d for d in db.query(StockDaily).filter(StockDaily.trade_date == today).all()
+    }
+    inserted = 0
+    updated = 0
+    for _, r in bj.iterrows():
+        symbol = str(r.get("代码", "")).zfill(6)
+        if not symbol.isdigit():
+            continue
+        code = symbol + ".BJ"
+        fields = {
+            "open": _f(r.get("今开")),
+            "high": _f(r.get("最高")),
+            "low": _f(r.get("最低")),
+            "close": _f(r.get("最新价")),
+            "volume": _f(r.get("成交量")),
+            "amount": _f(r.get("成交额")),
+            "pe": _f(r.get("市盈率-动态")),
+            "pb": _f(r.get("市净率")),
+            "market_cap": _f(r.get("总市值"), scale=1e8),
+            "turnover": _f(r.get("换手率")),
+        }
+        d = existing.get(code)
+        if d:
+            for k, v in fields.items():
+                if v is not None:
+                    setattr(d, k, v)
+            updated += 1
+        else:
+            db.add(StockDaily(code=code, trade_date=today, **fields))
+            inserted += 1
+    db.commit()
+    logger.info("[BJ-EM] 完成：新增 {} / 更新 {}", inserted, updated)
+    return inserted + updated
 
 
 def sync_pool_xq(
