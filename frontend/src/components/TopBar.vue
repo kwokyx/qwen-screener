@@ -7,6 +7,7 @@ import { useAuthStore } from '../stores/auth'
 import Icon from './Icon.vue'
 import NotificationsPanel from './NotificationsPanel.vue'
 import CommandPalette from './CommandPalette.vue'
+import DataFreshness from './DataFreshness.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -119,7 +120,8 @@ watch(() => route.name, async () => {
              :style="{ left: indicator.left + 'px', width: indicator.width + 'px' }" />
       </div>
       <div style="flex:1" />
-      <div :style="{ display: 'flex', gap: '4px', alignItems: 'center' }">
+      <div :style="{ display: 'flex', gap: '8px', alignItems: 'center' }">
+        <DataFreshness />
         <button class="btn-ghost cmdk-btn" title="搜索 ⌘K" @click="paletteOpen = true">
           <Icon name="search" :size="15" />
           <span class="kbd">⌘K</span>
