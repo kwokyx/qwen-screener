@@ -36,12 +36,19 @@ def detail(code: str, db: Session = Depends(get_db)):
     basic = db.get(StockBasic, code)
     if not basic:
         raise HTTPException(404, "股票不存在")
-    latest_daily = (
+    last2 = (
         db.query(StockDaily)
         .filter(StockDaily.code == code)
         .order_by(desc(StockDaily.trade_date))
-        .first()
+        .limit(2)
+        .all()
     )
+    latest_daily = last2[0] if last2 else None
+    prev_close = last2[1].close if len(last2) > 1 else None
+    change_pct = None
+    if latest_daily and prev_close and latest_daily.close is not None:
+        change_pct = (latest_daily.close - prev_close) / prev_close * 100
+
     latest_fin = (
         db.query(StockFinancial)
         .filter(StockFinancial.code == code)
@@ -53,6 +60,8 @@ def detail(code: str, db: Session = Depends(get_db)):
         name=basic.name,
         industry=basic.industry,
         latest=StockDailyOut.model_validate(latest_daily) if latest_daily else None,
+        prev_close=prev_close,
+        change_pct=change_pct,
         roe=latest_fin.roe if latest_fin else None,
         revenue_yoy=latest_fin.revenue_yoy if latest_fin else None,
         profit_yoy=latest_fin.profit_yoy if latest_fin else None,

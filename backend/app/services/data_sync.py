@@ -188,9 +188,19 @@ POOL_PRESETS = {
 
 def fetch_pool(pool: str = "csi300") -> list[dict]:
     """获取股票池成分列表，返回 [{code, name}, ...]
-    支持指数池（csi300/csi500/sse50）和"bj"（北交所全量）。
+    支持：csi300/csi500/sse50（指数）、bj（北交所全量）、all（全 A 股 5500+ 只）。
     """
     import akshare as ak
+
+    if pool == "all":
+        df = ak.stock_info_a_code_name()
+        return [
+            {
+                "code": _to_code(str(r["code"]).zfill(6)),
+                "name": str(r["name"]),
+            }
+            for _, r in df.iterrows()
+        ]
 
     if pool == "bj":
         df = ak.stock_info_bj_name_code()
@@ -207,7 +217,7 @@ def fetch_pool(pool: str = "csi300") -> list[dict]:
         ]
 
     if pool not in POOL_PRESETS:
-        raise ValueError(f"未知股票池: {pool}，支持 {list(POOL_PRESETS) + ['bj']}")
+        raise ValueError(f"未知股票池: {pool}，支持 {list(POOL_PRESETS) + ['bj', 'all']}")
 
     df = ak.index_stock_cons_csindex(symbol=POOL_PRESETS[pool])
     return [
@@ -256,9 +266,14 @@ def sync_pool_industry(db: Session, pool: str = "csi300", sleep_sec: float = 0.1
             if basic is None:
                 continue
             ind = kv.get("affiliate_industry") or {}
-            basic.industry = (ind.get("ind_name") if isinstance(ind, dict) else None) or None
+            ind_name = (ind.get("ind_name") if isinstance(ind, dict) else None) or None
+            # 只在拉到值时覆盖（保留 bj 快路径已经写入的字段）
+            if ind_name:
+                basic.industry = ind_name
             basic.market = _market_from_code(p["code"])
-            basic.total_share = _f(kv.get("reg_asset"), scale=1e8)  # 注册资本 ≈ 总股本（近似）
+            ts_share = _f(kv.get("reg_asset"), scale=1e8)
+            if ts_share is not None:
+                basic.total_share = ts_share
             ts = kv.get("listed_date")
             if isinstance(ts, (int, float)) and ts > 0:
                 basic.list_date = datetime.fromtimestamp(ts / 1000).date()
@@ -267,7 +282,7 @@ def sync_pool_industry(db: Session, pool: str = "csi300", sleep_sec: float = 0.1
             failed += 1
             if failed <= 5:
                 logger.warning("[INDUSTRY] {} 失败: {}", p["code"], str(e)[:60])
-        if i % 50 == 0:
+        if i % 200 == 0:
             db.commit()
             logger.info("[INDUSTRY] 进度 {}/{}", i, len(pool_list))
         time.sleep(sleep_sec)

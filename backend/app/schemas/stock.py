@@ -33,6 +33,8 @@ class StockDetailOut(BaseModel):
     name: str
     industry: str | None
     latest: StockDailyOut | None
+    prev_close: float | None = None
+    change_pct: float | None = None
     roe: float | None = None
     revenue_yoy: float | None = None
     profit_yoy: float | None = None

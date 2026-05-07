@@ -135,17 +135,28 @@ def job_daily_value():
 
 
 def job_weekly_fundamentals():
-    """行业 + 财务（季度数据不每天变）。覆盖 csi300/csi500/bj。"""
+    """行业 + 财务（季度数据不每天变）。
+    bj 先走快路径（列表自带行业，秒级完成 312 只），再 all 覆盖剩余 5200 只。
+    单只失败跳过，整体不中断。
+    """
     logger.info("[SCHED] weekly_fundamentals 开始")
     db = SessionLocal()
     try:
         cnt = 0
-        for pool in ("csi300", "csi500", "bj"):
-            try:
-                cnt += data_sync.sync_pool_industry(db, pool=pool) or 0
-                cnt += data_sync.sync_pool_financial(db, pool=pool) or 0
-            except Exception as e:
-                logger.warning("[SCHED] weekly_fundamentals pool={} 失败: {}", pool, str(e)[:120])
+        # 1) 北交所快路径（不走雪球，纯本地映射）
+        try:
+            cnt += data_sync.sync_pool_industry(db, pool="bj") or 0
+        except Exception as e:
+            logger.warning("[SCHED] weekly_fundamentals bj-industry 失败: {}", str(e)[:120])
+        # 2) 全市场逐只雪球：行业 + 财务，覆盖 5500+
+        try:
+            cnt += data_sync.sync_pool_industry(db, pool="all") or 0
+        except Exception as e:
+            logger.warning("[SCHED] weekly_fundamentals all-industry 失败: {}", str(e)[:120])
+        try:
+            cnt += data_sync.sync_pool_financial(db, pool="all") or 0
+        except Exception as e:
+            logger.warning("[SCHED] weekly_fundamentals all-financial 失败: {}", str(e)[:120])
         return cnt
     finally:
         db.close()
