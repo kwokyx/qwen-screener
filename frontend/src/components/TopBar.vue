@@ -102,7 +102,8 @@ watch(() => route.name, async () => {
   <div :style="{ position: 'relative' }">
     <div :style="{ display: 'flex', alignItems: 'center', height: '46px', background: A2.surface, boxShadow: '0 1px 0 ' + A2.borderHair, padding: '0 16px', flexShrink: 0 }">
       <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '22px' }">
-        <div :style="{ width: '24px', height: '24px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: '12px', borderRadius: '6px', boxShadow: '0 2px 6px rgba(36,86,216,0.30)' }">千</div>
+        <img src="/logo.png" alt="logo"
+             :style="{ width: '26px', height: '26px', objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(36,86,216,0.25))' }" />
         <div :style="{ fontWeight: 700, fontSize: '13px', letterSpacing: '-0.2px' }">
           Qwen
           <span :style="{ color: A2.textMuted, fontWeight: 500, fontSize: '10px', letterSpacing: '1.2px', marginLeft: '2px' }">TERMINAL</span>
