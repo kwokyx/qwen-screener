@@ -72,6 +72,12 @@ def detail(code: str, db: Session = Depends(get_db)):
 
 @router.get("/{code}/kline", response_model=list[StockDailyOut])
 def kline(code: str, days: int = 120, db: Session = Depends(get_db)):
+    """返回最近 N 个交易日 OHLCV。本地行数不够时，
+    先去 akshare 拉一次历史回填，避免 sparkline / 详情页 K 线画不出来。
+    """
+    have = db.query(StockDaily).filter(StockDaily.code == code).count()
+    if have < days:
+        _backfill_kline(db, code, days)
     return (
         db.query(StockDaily)
         .filter(StockDaily.code == code)
@@ -79,6 +85,60 @@ def kline(code: str, days: int = 120, db: Session = Depends(get_db)):
         .limit(days)
         .all()
     )
+
+
+def _backfill_kline(db: Session, code: str, days: int) -> int:
+    """从 akshare 拉 daily hist 写入 stock_daily。已有日期 skip。"""
+    from datetime import date, timedelta
+    import akshare as ak
+
+    sym = code.split(".")[0]
+    end = date.today()
+    # 多拉 60 天缓冲（节假日、停牌）
+    start = end - timedelta(days=max(days * 2, 60))
+    try:
+        df = ak.stock_zh_a_hist(
+            symbol=sym, period="daily",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+            adjust="qfq",
+        )
+    except Exception:
+        return 0
+    if df is None or df.empty:
+        return 0
+
+    have_dates = {r[0] for r in db.query(StockDaily.trade_date).filter(StockDaily.code == code).all()}
+    inserted = 0
+    for _, r in df.iterrows():
+        raw = r.get("日期")
+        if isinstance(raw, date):
+            td = raw
+        else:
+            try:
+                td = date.fromisoformat(str(raw))
+            except Exception:
+                continue
+        if td in have_dates:
+            continue
+        try:
+            db.add(StockDaily(
+                code=code, trade_date=td,
+                open=float(r.get("开盘") or 0) or None,
+                high=float(r.get("最高") or 0) or None,
+                low=float(r.get("最低") or 0) or None,
+                close=float(r.get("收盘") or 0) or None,
+                volume=float(r.get("成交量") or 0) or None,
+                amount=float(r.get("成交额") or 0) or None,
+                turnover=float(r.get("换手率") or 0) or None,
+            ))
+            inserted += 1
+        except Exception:
+            db.rollback()
+            continue
+    if inserted:
+        db.commit()
+    return inserted
 
 
 # ----- 自选股 -----

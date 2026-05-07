@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
@@ -10,9 +10,9 @@ import StarButton from '../components/StarButton.vue'
 import Skeleton from '../components/Skeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
-import { genKline, seededRand } from '../shared/data.js'
 import { friendlyError } from '../shared/errors.js'
 import * as marketApi from '../api/market'
+import { kline as fetchKline } from '../api/stock.js'
 
 const router = useRouter()
 
@@ -30,8 +30,25 @@ const loadingMovers = ref(true)
 const errorMsg = ref('')
 
 const moversShown = computed(() => (movers.value ? movers.value[moverTab.value] || [] : []))
-const stockKline = computed(() => moversShown.value.map((s, i) => genKline(100, 30, 0.02, hashString(s.code) + i)))
 const idxSpark = computed(() => indices.value.map((idx) => idx.spark || []))
+
+// 涨跌榜真实 sparkline：每只调一次 /kline?days=30，并行
+// 缓存按 code 走，切 tab 时只会拉新出现的
+const klineCache = ref({})  // { code: [closes] }
+async function loadMoverKlines() {
+  const codes = moversShown.value.map((s) => s.code).filter((c) => c && !(c in klineCache.value))
+  if (!codes.length) return
+  const results = await Promise.allSettled(codes.map((c) => fetchKline(c, 30)))
+  const next = { ...klineCache.value }
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      next[codes[i]] = (r.value || []).map((d) => d.close).filter((v) => v != null)
+    } else {
+      next[codes[i]] = []
+    }
+  })
+  klineCache.value = next
+}
 
 // 板块按涨跌幅切两半
 const sectorsUp = computed(() => [...sectors.value].filter((s) => s.change_pct >= 0).sort((a, b) => b.change_pct - a.change_pct))
@@ -57,18 +74,12 @@ const marketStats = computed(() => {
   }
 })
 
-function hashString(s) {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = (h << 5) - h + s.charCodeAt(i)
-  return Math.abs(h) % 1000
-}
-
 async function loadAll() {
   errorMsg.value = ''
   Promise.allSettled([
     marketApi.indices().then((d) => { indices.value = d }).finally(() => { loadingIndices.value = false }),
     marketApi.sectors(20).then((d) => { sectors.value = d }).finally(() => { loadingSectors.value = false }),
-    marketApi.movers(10).then((d) => { movers.value = d }).finally(() => { loadingMovers.value = false }),
+    marketApi.movers(10).then((d) => { movers.value = d; loadMoverKlines() }).finally(() => { loadingMovers.value = false }),
     marketApi.ticker().then((d) => { tickerInfo.value = d }).catch(() => {}),
   ]).then((rs) => {
     const failed = rs.filter((r) => r.status === 'rejected')
@@ -103,6 +114,8 @@ function moversValueColumn(s) {
 }
 
 onMounted(loadAll)
+// 切换涨跌榜 tab 时拉新股票的 kline
+watch(moverTab, () => loadMoverKlines())
 </script>
 
 <template>
@@ -247,7 +260,7 @@ onMounted(loadAll)
                 <td :style="{ padding: '9px 6px' }">
                   <span :style="{ fontSize: '10px', padding: '2px 7px', background: A2.bgDeep, color: A2.textSub, borderRadius: '3px', fontWeight: 500 }">{{ s.industry || '—' }}</span>
                 </td>
-                <td :style="{ padding: '8px 14px' }"><Sparkline :data="stockKline[i] ? stockKline[i].map(d => d.c) : []" :width="76" :height="20" /></td>
+                <td :style="{ padding: '8px 14px' }"><Sparkline :data="klineCache[s.code] || []" :width="76" :height="20" /></td>
               </tr>
             </tbody>
           </table>

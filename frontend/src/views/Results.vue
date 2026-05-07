@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
@@ -9,8 +9,8 @@ import StarButton from '../components/StarButton.vue'
 import Skeleton from '../components/Skeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
-import { genKline, seededRand } from '../shared/data.js'
 import { screen } from '../api/screener'
+import { kline as fetchKline } from '../api/stock.js'
 
 const router = useRouter()
 
@@ -33,8 +33,21 @@ const total = ref(0)
 const loading = ref(true)
 const errorMsg = ref('')
 
-// 用 ECharts 生成 mock 走势线（API 没返回历史数据，单独再加 /kline 调用太重，先用确定性 mock 占位）
-const klines = computed(() => items.value.map((_, i) => genKline(100, 30, 0.02, i + 21)))
+// 真实 sparkline：每只调一次 /kline?days=30，并行；切换筛选时只拉新出现的代码
+const klineCache = ref({})  // { code: [closes] }
+async function loadResultKlines() {
+  const codes = items.value.map((s) => s.code).filter((c) => c && !(c in klineCache.value))
+  if (!codes.length) return
+  const results = await Promise.allSettled(codes.map((c) => fetchKline(c, 30)))
+  const next = { ...klineCache.value }
+  results.forEach((r, i) => {
+    next[codes[i]] = r.status === 'fulfilled'
+      ? (r.value || []).map((d) => d.close).filter((v) => v != null)
+      : []
+  })
+  klineCache.value = next
+}
+watch(items, loadResultKlines)
 
 const stats = computed(() => {
   const arr = items.value
@@ -192,7 +205,7 @@ onMounted(load)
                     <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '10.5px' }">{{ bullScore(s) }}</span>
                   </div>
                 </td>
-                <td :style="{ padding: '7px 8px' }"><Sparkline :data="klines[i]?.map(d => d.c)" :width="64" :height="20" /></td>
+                <td :style="{ padding: '7px 8px' }"><Sparkline :data="klineCache[s.code] || []" :width="64" :height="20" /></td>
                 <td :style="{ padding: '9px 8px', textAlign: 'right' }">
                   <span :style="{ color: A2.qwen, fontSize: '11px', fontWeight: 600 }">详情 →</span>
                 </td>
