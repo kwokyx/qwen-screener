@@ -8,7 +8,7 @@ const routes = [
   { path: '/chat', name: 'chat', component: () => import('../views/Chat.vue'), meta: { public: true, label: '02 · 千问对话筛选' } },
   { path: '/results', name: 'results', component: () => import('../views/Results.vue'), meta: { public: true, label: '03 · 因子筛选 + 结果列表' } },
   { path: '/detail/:code?', name: 'detail', component: () => import('../views/Detail.vue'), meta: { public: true, label: '04 · 股票详情 + 千问解读' } },
-  { path: '/portfolio', name: 'portfolio', component: () => import('../views/Portfolio.vue'), meta: { public: true, label: '05 · 自选 / 持仓' } },
+  { path: '/portfolio', name: 'portfolio', component: () => import('../views/Portfolio.vue'), meta: { public: true, label: '05 · 自选监控' } },
   { path: '/strategy', name: 'strategy', component: () => import('../views/Strategy.vue'), meta: { public: true, label: '06 · 策略回测' } },
 ]
 

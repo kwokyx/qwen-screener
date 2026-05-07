@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
@@ -8,153 +8,108 @@ import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
-import { seededRand } from '../shared/data.js'
 import { useWatchlistStore } from '../stores/watchlist'
+import { detail as fetchDetail } from '../api/stock.js'
 
 const router = useRouter()
 const gotoDetail = (code) => router.push(`/detail/${code}`)
-const view = ref('持仓')
 const wl = useWatchlistStore()
 
-// 模拟 / 演示组合：8 只示例（用户接入券商前的展示数据）
-const demoHoldings = [
-  { code: '600519.SH', name: '贵州茅台', sector: '食品饮料', qty: 200, cost: 1620.00, price: 1742.50, qwen: { tag: '继续持有', tone: 'up', note: '估值合理，护城河稳固' } },
-  { code: '300750.SZ', name: '宁德时代', sector: '电池', qty: 500, cost: 198.40, price: 245.30, qwen: { tag: '止盈一部分', tone: 'amber', note: '连续放量，建议落袋 30%' } },
-  { code: '688981.SH', name: '中芯国际', sector: '半导体', qty: 1000, cost: 64.20, price: 78.45, qwen: { tag: '可加仓', tone: 'up', note: '产能利用率回升' } },
-  { code: '600036.SH', name: '招商银行', sector: '银行', qty: 800, cost: 38.10, price: 42.18, qwen: { tag: '继续持有', tone: 'up', note: '股息稳定 4.8%' } },
-  { code: '002594.SZ', name: '比亚迪', sector: '汽车', qty: 300, cost: 268.00, price: 254.20, qwen: { tag: '关注突破', tone: 'qwen', note: '海外销量提速，关注 250 阻力' } },
-  { code: '601012.SH', name: '隆基绿能', sector: '光伏', qty: 1500, cost: 26.80, price: 21.45, qwen: { tag: '减仓观望', tone: 'down', note: '硅料价格未稳，盈利承压' } },
-  { code: '300760.SZ', name: '迈瑞医疗', sector: '医疗器械', qty: 200, cost: 264.30, price: 285.60, qwen: { tag: '继续持有', tone: 'up', note: '海外订单超预期' } },
-  { code: '000858.SZ', name: '五粮液', sector: '食品饮料', qty: 400, cost: 158.40, price: 152.30, qwen: { tag: '观望', tone: 'qwen', note: '动销偏弱，等待 Q2 拐点' } },
-]
+const loading = ref(false)
+const errorMsg = ref('')
+const details = ref({})  // { code: detailObj }
 
-// 真实 holdings：从 watchlist 派生（每只 100 股，refPrice 当成本）
-// 当 watchlist >= 3 只时启用真组合；否则回退到 demo
-const isDemo = computed(() => wl.items.length < 3)
-
-const holdings = computed(() => {
-  if (isDemo.value) {
-    const totalVal = demoHoldings.reduce((s, h) => s + h.price * h.qty, 0)
-    return demoHoldings.map((h) => ({ ...h, weight: (h.price * h.qty / totalVal) * 100 }))
+async function loadAll() {
+  if (!wl.items.length) {
+    details.value = {}
+    return
   }
-  // 真组合：每只 100 股，cost = refPrice，price 暂用 refPrice * 1.05 模拟
-  // 将来接行情后这里替换为真实当前价
-  const items = wl.items.map((w) => {
-    const cost = w.refPrice || 100
-    const qty = 100
-    const price = cost * 1.05  // 占位：暂时假设全部 +5%；接入实时行情后用真实 close
-    return {
-      code: w.code,
-      name: w.name || w.code,
-      sector: w.sector || '—',
-      qty,
-      cost,
-      price,
-      qwen: { tag: '观察', tone: 'qwen', note: '加入自选时间 ' + new Date(w.addedAt * 1000).toLocaleDateString('zh-CN') },
-    }
-  })
-  const totalVal = items.reduce((s, h) => s + h.price * h.qty, 0)
-  return items.map((h) => ({ ...h, weight: totalVal > 0 ? (h.price * h.qty / totalVal) * 100 : 0 }))
-})
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    const results = await Promise.allSettled(wl.items.map(w => fetchDetail(w.code)))
+    const map = {}
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') map[wl.items[i].code] = r.value
+    })
+    details.value = map
+  } catch (e) {
+    errorMsg.value = e?.message || '加载失败'
+  } finally {
+    loading.value = false
+  }
+}
 
-const totals = computed(() => {
-  const list = holdings.value
-  const totalValue = list.reduce((s, h) => s + h.price * h.qty, 0)
-  const totalCost = list.reduce((s, h) => s + h.cost * h.qty, 0)
+onMounted(loadAll)
+watch(() => wl.items.length, loadAll)
+
+// 给每只自选股拼一个统一对象（合并 watchlist + detail）
+const rows = computed(() => wl.items.map((w) => {
+  const d = details.value[w.code] || {}
+  const latest = d.latest || {}
+  const close = latest.close
+  const ref_price = w.refPrice
+  const sinceCost = (close != null && ref_price) ? (close - ref_price) / ref_price * 100 : null
   return {
-    totalValue,
-    totalCost,
-    totalPnl: totalValue - totalCost,
-    totalPnlPct: totalCost > 0 ? ((totalValue - totalCost) / totalCost) * 100 : 0,
+    code: w.code,
+    name: w.name || d.name || w.code,
+    industry: d.industry || w.sector || null,
+    close,
+    changePct: d.change_pct,
+    pe: latest.pe,
+    pb: latest.pb,
+    marketCap: latest.market_cap,
+    roe: d.roe,
+    refPrice: ref_price,
+    sinceCost,
+    addedAt: w.addedAt,
+    alerts: w.alerts || [],
   }
+}))
+
+const summary = computed(() => {
+  const total = rows.value.length
+  const withPct = rows.value.filter(r => r.changePct != null)
+  const up = withPct.filter(r => r.changePct > 0).length
+  const flat = withPct.filter(r => r.changePct === 0).length
+  const down = withPct.filter(r => r.changePct < 0).length
+  const avg = withPct.length ? withPct.reduce((s, r) => s + r.changePct, 0) / withPct.length : null
+  let topGainer = null, topLoser = null
+  withPct.forEach(r => {
+    if (!topGainer || r.changePct > topGainer.changePct) topGainer = r
+    if (!topLoser || r.changePct < topLoser.changePct) topLoser = r
+  })
+  const alertsCount = rows.value.reduce((s, r) => s + (r.alerts?.length || 0), 0)
+  return { total, up, flat, down, avg, topGainer, topLoser, alertsCount }
 })
 
-// deterministic equity / bench curves
-const curves = computed(() => {
-  const equity = []
-  const bench = []
-  let v = 1100000, b = 1100000
-  const r1 = seededRand(31), r2 = seededRand(57)
-  for (let i = 0; i < 60; i++) {
-    v *= 1 + (r1() - 0.42) * 0.012
-    b *= 1 + (r2() - 0.48) * 0.009
-    equity.push(v)
-    bench.push(b)
-  }
-  equity[equity.length - 1] = totals.value.totalValue
-  return { equity, bench }
-})
-
-const toneColor = (t) => ({ up: A2.up, down: A2.down, amber: A2.amber, qwen: A2.qwen })[t] || A2.textSub
-
-const summaryMetrics = [
-  { l: '今日盈亏', v: '+¥18,420', s: '+1.46%', tone: 'up' },
-  { l: '本周盈亏', v: '+¥42,810', s: '+3.22%', tone: 'up' },
-  { l: '本月盈亏', v: '+¥86,420', s: '+7.18%', tone: 'up' },
-  { l: '可用资金', v: '¥124,560', s: '占比 8.8%', tone: 'sub' },
-  { l: '持仓数', v: '8', s: '自选 24', tone: 'sub' },
-  { l: '风险等级', v: 'R3', s: '中等偏积极', tone: 'qwen' },
-]
-
-const stats = [
-  { l: '年化收益', v: '+22.4%', tone: A2.up },
-  { l: '最大回撤', v: '-8.6%', tone: A2.down },
-  { l: '夏普比率', v: '1.84', tone: A2.text },
-  { l: '波动率', v: '14.2%', tone: A2.text },
-  { l: 'α (vs 沪深300)', v: '+9.2%', tone: A2.qwen },
-]
-
-// 行业配置：从 holdings 真聚合
-const SECTOR_COLORS = ['#DC2626', '#2456D8', '#7C3AED', '#059669', '#D97706', '#0EA5E9', '#EC4899', '#9CA3AF']
+// 行业分布（真实，自选股聚合）
+const SECTOR_COLORS = ['#2456D8', '#DC2626', '#7C3AED', '#059669', '#D97706', '#0EA5E9', '#EC4899', '#9CA3AF']
 const sectorAlloc = computed(() => {
   const map = new Map()
-  for (const h of holdings.value) {
-    const k = h.sector || '其他'
-    map.set(k, (map.get(k) || 0) + (h.weight || 0))
+  for (const r of rows.value) {
+    const k = r.industry || '未分类'
+    map.set(k, (map.get(k) || 0) + 1)
   }
+  const total = rows.value.length || 1
   const entries = [...map.entries()].sort((a, b) => b[1] - a[1])
-  return entries.map(([l, v], i) => ({ l, v: Number(v.toFixed(1)), c: SECTOR_COLORS[i % SECTOR_COLORS.length] }))
-})
-
-const alerts = [
-  { tone: A2.up, tag: '突破', stock: '宁德时代', desc: '今日放量 +5.55% 突破 60 日新高，建议关注止盈点位 ¥248', time: '14:25' },
-  { tone: A2.down, tag: '止损', stock: '隆基绿能', desc: '跌破成本线 -19.96%，已触发你设置的 -15% 风控线', time: '13:58' },
-  { tone: A2.amber, tag: '集中度', stock: '组合', desc: '前 3 持仓占比 63.8%，超过你设定的 60% 风险阈值', time: '11:30' },
-  { tone: A2.qwen, tag: '机会', stock: '迈瑞医疗', desc: '本周机构调研 12 家，海外订单超预期，可考虑加仓', time: '10:12' },
-]
-
-// equity chart paths
-const chart = computed(() => {
-  const w = 700, h = 200, pad = { l: 10, r: 10, t: 10, b: 22 }
-  const all = [...curves.value.equity, ...curves.value.bench]
-  const min = Math.min(...all), max = Math.max(...all)
-  const xStep = (w - pad.l - pad.r) / (curves.value.equity.length - 1)
-  const yScale = (v) => pad.t + (h - pad.t - pad.b) * (1 - (v - min) / (max - min))
-  const equityPath = curves.value.equity.map((v, i) => `${i === 0 ? 'M' : 'L'} ${pad.l + i * xStep} ${yScale(v)}`).join(' ')
-  const benchPath = curves.value.bench.map((v, i) => `${i === 0 ? 'M' : 'L'} ${pad.l + i * xStep} ${yScale(v)}`).join(' ')
-  const fillPath = `${equityPath} L ${pad.l + (curves.value.equity.length - 1) * xStep} ${h - pad.b} L ${pad.l} ${h - pad.b} Z`
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ v: min + (max - min) * p }))
-  yTicks.forEach(t => t.y = yScale(t.v))
-  const lastEquityY = yScale(curves.value.equity[curves.value.equity.length - 1])
-  const lastEquityX = pad.l + (curves.value.equity.length - 1) * xStep
-  const dateMarks = [0, Math.floor(curves.value.equity.length * 0.25), Math.floor(curves.value.equity.length * 0.5), Math.floor(curves.value.equity.length * 0.75), curves.value.equity.length - 1].map((i, k) => ({
-    x: pad.l + i * xStep,
-    label: ['03-01', '03-15', '04-01', '04-15', '05-01'][k],
-    anchor: k === 0 ? 'start' : k === 4 ? 'end' : 'middle',
+  return entries.map(([l, n], i) => ({
+    l,
+    n,
+    pct: Number((n / total * 100).toFixed(1)),
+    c: SECTOR_COLORS[i % SECTOR_COLORS.length],
   }))
-  return { w, h, pad, equityPath, benchPath, fillPath, yTicks, lastEquityX, lastEquityY, dateMarks }
 })
 
-// donut arcs
 const donutArcs = computed(() => {
   const data = sectorAlloc.value
   const size = 108
-  const total = data.reduce((s, d) => s + d.v, 0) || 1
+  const total = data.reduce((s, d) => s + d.pct, 0) || 1
   const r = size / 2 - 6, cx = size / 2, cy = size / 2
   let acc = 0
   const arcs = data.map(d => {
     const start = (acc / total) * 2 * Math.PI - Math.PI / 2
-    acc += d.v
+    acc += d.pct
     const end = (acc / total) * 2 * Math.PI - Math.PI / 2
     const large = end - start > Math.PI ? 1 : 0
     const x1 = cx + r * Math.cos(start), y1 = cy + r * Math.sin(start)
@@ -164,258 +119,198 @@ const donutArcs = computed(() => {
   return { arcs, size, cx, cy, r }
 })
 
-const fmtToneColor = (tone) => tone === 'sub' ? A2.text : (tone === 'qwen' ? A2.qwen : (tone === 'up' ? A2.up : A2.down))
+// 自选股的告警规则汇总
+const allAlerts = computed(() => {
+  const out = []
+  for (const r of rows.value) {
+    for (const a of r.alerts) {
+      out.push({ ...a, code: r.code, name: r.name })
+    }
+  }
+  return out
+})
+
+const fmtMC = (v) => v == null ? '—' : (v >= 10000 ? (v / 10000).toFixed(1) + '万亿' : v >= 1 ? v.toFixed(1) + '亿' : '<1亿')
+const fmtPE = (v) => v == null ? '—' : v < 0 ? '亏损' : v.toFixed(1)
+const fmtROE = (v) => v == null ? '—' : (v.toFixed(1) + '%')
+const fmtDays = (ts) => {
+  if (!ts) return '—'
+  const d = Math.floor((Date.now() / 1000 - ts) / 86400)
+  return d <= 0 ? '今天' : `${d} 天`
+}
 </script>
 
 <template>
   <Shell>
     <div :style="{ flex: 1, overflow: 'auto', padding: '16px' }">
-      <!-- 演示态提示 -->
-      <div v-if="isDemo && view === '持仓'" :style="{ marginBottom: '12px', padding: '10px 14px', background: A2.bgDeep, color: A2.textSub, borderRadius: '8px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '10px', border: `1px solid ${A2.borderHair}` }">
-        <Icon name="shield" :size="13" :color="A2.textMuted" />
-        <span style="flex:1">下方为示例组合数据。<strong :style="{ color: A2.text }">添加 3 只以上自选股</strong>后将自动生成基于你自选的组合分析。</span>
-        <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="view = '自选'">
-          <Icon name="star" :size="11" /> 管理自选
-        </button>
-      </div>
-
-      <!-- Hero: summary + equity -->
-      <div :style="{ display: 'grid', gridTemplateColumns: '1.05fr 1.95fr', gap: '10px', marginBottom: '12px' }">
-        <!-- Summary card -->
-        <div class="card-hover" :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '18px', boxShadow: A2.shadow, position: 'relative', overflow: 'hidden' }">
-          <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }">
-            <div>
-              <div :style="{ fontSize: '11px', color: A2.textMuted, letterSpacing: '0.6px', textTransform: 'uppercase', fontWeight: 600 }">Net Asset Value</div>
-              <div :style="{ fontSize: '11px', color: A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">账户 · 个人 #28461</div>
-            </div>
-            <div :style="{ fontSize: '10px', color: A2.textMuted, padding: '3px 8px', background: A2.bgDeep, border: `1px solid ${A2.borderHair}`, borderRadius: '4px', fontFamily: 'IBM Plex Mono, monospace' }">2026-05-01</div>
-          </div>
-
-          <div :style="{ fontSize: '36px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '-1px', lineHeight: 1.1 }">¥{{ totals.totalValue.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) }}</div>
+      <!-- Hero summary -->
+      <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }">
+        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+          <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">自选数</div>
+          <div :style="{ fontSize: '26px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '-1px', marginTop: '4px' }">{{ summary.total }}</div>
+          <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '2px' }">告警规则 {{ summary.alertsCount }} 条</div>
+        </div>
+        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+          <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">今日涨跌分布</div>
           <div :style="{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '4px' }">
-            <span :style="{ fontSize: '14px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: totals.totalPnl >= 0 ? A2.up : A2.down }">{{ totals.totalPnl >= 0 ? '+' : '' }}¥{{ Math.round(totals.totalPnl).toLocaleString() }}</span>
-            <PctChip :pct="totals.totalPnlPct" size="sm" />
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">累计</span>
+            <span :style="{ fontSize: '20px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', color: A2.up }">{{ summary.up }}</span>
+            <span :style="{ fontSize: '13px', color: A2.textMuted }">/</span>
+            <span :style="{ fontSize: '20px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ summary.flat }}</span>
+            <span :style="{ fontSize: '13px', color: A2.textMuted }">/</span>
+            <span :style="{ fontSize: '20px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', color: A2.down }">{{ summary.down }}</span>
           </div>
-
-          <div :style="{ height: '1px', background: A2.borderHair, margin: '16px 0' }" />
-
-          <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }">
-            <div v-for="m in summaryMetrics" :key="m.l">
-              <div :style="{ fontSize: '10px', color: A2.textMuted, fontWeight: 500, marginBottom: '3px' }">{{ m.l }}</div>
-              <div :style="{ fontSize: '15px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: fmtToneColor(m.tone), letterSpacing: '-0.3px' }">{{ m.v }}</div>
-              <div :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ m.s }}</div>
-            </div>
-          </div>
+          <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '2px' }">涨 / 平 / 跌</div>
         </div>
-
-        <!-- Equity curve -->
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '16px', boxShadow: A2.shadow, display: 'flex', flexDirection: 'column' }">
-          <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }">
-            <div>
-              <div :style="{ fontSize: '13px', fontWeight: 700 }">组合净值曲线</div>
-              <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '1px' }">近 60 个交易日 · 对比沪深 300</div>
-            </div>
-            <div :style="{ display: 'flex', gap: '14px', alignItems: 'center' }">
-              <div :style="{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: A2.textSub }">
-                <div :style="{ width: '12px', height: '2px', background: A2.qwen, borderRadius: '1px' }" /> 我的组合
-              </div>
-              <div :style="{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: A2.textMuted }">
-                <div :style="{ width: '12px', height: '2px', background: A2.textDim, borderRadius: '1px' }" /> 沪深 300
-              </div>
-              <div :style="{ display: 'flex', gap: '2px', padding: '3px', background: A2.bgDeep, borderRadius: '6px', marginLeft: '8px' }">
-                <div v-for="(t, i) in ['1W', '1M', '3M', '1Y', 'ALL']" :key="t"
-                     :style="{ padding: '4px 10px', background: i === 1 ? A2.surface : 'transparent', color: i === 1 ? A2.text : A2.textMuted, fontSize: '10px', fontWeight: 600, cursor: 'pointer', borderRadius: '4px', boxShadow: i === 1 ? A2.shadow : 'none', fontFamily: 'IBM Plex Mono, monospace' }">{{ t }}</div>
-              </div>
-            </div>
+        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+          <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">自选平均涨幅</div>
+          <div :style="{ marginTop: '4px' }">
+            <PctChip v-if="summary.avg != null" :pct="summary.avg" size="md" />
+            <span v-else :style="{ color: A2.textDim, fontSize: '14px' }">—</span>
           </div>
-
-          <div :style="{ flex: 1, position: 'relative', minHeight: '200px' }">
-            <svg :viewBox="`0 0 ${chart.w} ${chart.h}`" preserveAspectRatio="none" :style="{ width: '100%', height: '100%' }">
-              <defs>
-                <linearGradient id="eq-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#2456D8" stop-opacity="0.18" />
-                  <stop offset="100%" stop-color="#2456D8" stop-opacity="0" />
-                </linearGradient>
-              </defs>
-              <line v-for="(t, i) in chart.yTicks" :key="i" :x1="chart.pad.l" :x2="chart.w - chart.pad.r" :y1="t.y" :y2="t.y" stroke="rgba(14,14,12,0.06)" :stroke-dasharray="i === 0 || i === chart.yTicks.length - 1 ? '0' : '2,3'" stroke-width="0.5" />
-              <path :d="chart.fillPath" fill="url(#eq-fill)" />
-              <path :d="chart.benchPath" fill="none" stroke="#B8B4A8" stroke-width="1.2" stroke-dasharray="3,3" />
-              <path :d="chart.equityPath" fill="none" stroke="#2456D8" stroke-width="1.6" />
-              <circle :cx="chart.lastEquityX" :cy="chart.lastEquityY" r="3" fill="#2456D8" stroke="#fff" stroke-width="1.2" />
-              <text v-for="m in chart.dateMarks" :key="m.x" :x="m.x" :y="chart.h - 6" font-size="9" fill="#B8B4A8" :text-anchor="m.anchor" font-family="IBM Plex Mono, monospace">{{ m.label }}</text>
-            </svg>
-          </div>
-
-          <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', paddingTop: '12px', marginTop: '8px', borderTop: `1px dashed ${A2.borderHair}` }">
-            <div v-for="s in stats" :key="s.l">
-              <div :style="{ fontSize: '10px', color: A2.textMuted, fontWeight: 500, marginBottom: '2px' }">{{ s.l }}</div>
-              <div :style="{ fontSize: '14px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: s.tone, letterSpacing: '-0.3px' }">{{ s.v }}</div>
+          <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '4px' }">基于今日 vs 上一交易日</div>
+        </div>
+        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+          <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">今日领涨 / 领跌</div>
+          <div v-if="summary.topGainer || summary.topLoser" :style="{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '12px' }">
+            <div v-if="summary.topGainer" :style="{ display: 'flex', justifyContent: 'space-between', gap: '8px' }">
+              <span :style="{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ summary.topGainer.name }}</span>
+              <PctChip :pct="summary.topGainer.changePct" size="sm" />
+            </div>
+            <div v-if="summary.topLoser" :style="{ display: 'flex', justifyContent: 'space-between', gap: '8px' }">
+              <span :style="{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ summary.topLoser.name }}</span>
+              <PctChip :pct="summary.topLoser.changePct" size="sm" />
             </div>
           </div>
+          <div v-else :style="{ marginTop: '6px', color: A2.textDim, fontSize: '13px' }">—</div>
         </div>
       </div>
 
-      <!-- Qwen daily review -->
-      <div :style="{ background: A2.qwenGradSoft, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '12px 16px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: A2.shadow }">
-        <div :style="{ width: '30px', height: '30px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '13px', fontWeight: 800, borderRadius: '7px', flexShrink: 0, boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">千</div>
-        <div style="flex:1">
-          <div :style="{ fontSize: '11px', color: A2.qwenDeep, fontWeight: 700, letterSpacing: '0.4px', marginBottom: '2px', textTransform: 'uppercase' }">千问每日组合体检</div>
-          <div :style="{ fontSize: '12px', color: A2.textSub, lineHeight: 1.55 }">
-            整体配置<strong>偏成长</strong>，集中度<strong :style="{ color: A2.amber }">偏高</strong>（前 3 占 63.8%）。建议关注：<strong>宁德时代</strong>放量已达止盈线、<strong>隆基绿能</strong>跌破支撑可考虑止损。新能源板块整体仓位 47%，建议降至 35% 以下以平衡风险。
-          </div>
-        </div>
-        <button :style="{ padding: '7px 14px', background: A2.qwenGrad, color: '#fff', border: 'none', borderRadius: '6px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0, boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">
-          <Icon name="sparkle" :size="11" /> 让千问优化组合
-        </button>
-      </div>
-
-      <!-- Holdings + sidebar -->
+      <!-- Main grid -->
       <div :style="{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '10px' }">
+        <!-- 自选明细表 -->
         <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow }">
           <div :style="{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}` }">
-            <div :style="{ fontSize: '13px', fontWeight: 700 }">{{ view === '自选' ? '自选股' : view === '千问跟踪' ? '千问跟踪' : '持仓明细' }}</div>
+            <div :style="{ fontSize: '13px', fontWeight: 700 }">自选明细</div>
+            <div v-if="loading" :style="{ marginLeft: '10px', fontSize: '11px', color: A2.textMuted }">加载中…</div>
             <div style="flex:1" />
-            <div :style="{ display: 'flex', gap: '2px', padding: '3px', background: A2.bgDeep, borderRadius: '6px' }">
-              <div v-for="t in ['持仓', '自选', '千问跟踪']" :key="t" @click="view = t"
-                   :style="{ padding: '4px 11px', background: view === t ? A2.surface : 'transparent', color: view === t ? A2.text : A2.textMuted, fontSize: '11px', fontWeight: 600, cursor: 'pointer', borderRadius: '4px', boxShadow: view === t ? A2.shadow : 'none' }">{{ t }}</div>
-            </div>
-            <div :style="{ marginLeft: '10px', fontSize: '11px', color: A2.textMuted, display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }">
-              <Icon name="plus" :size="11" /> 添加
-            </div>
+            <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="loadAll" :disabled="loading">
+              <Icon name="refresh" :size="11" /> 刷新
+            </button>
           </div>
-          <!-- 自选 tab：使用本地 watchlist store -->
-          <table v-if="view === '自选'" :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }">
-            <thead>
-              <tr :style="{ color: A2.textMuted, fontSize: '10px', fontWeight: 600, letterSpacing: '0.5px' }">
-                <th :style="{ textAlign: 'left', padding: '8px 16px', fontWeight: 600 }">名称 / 代码</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">加入价</th>
-                <th :style="{ textAlign: 'left', padding: '8px 12px', fontWeight: 600 }">行业</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">预警</th>
-                <th :style="{ textAlign: 'right', padding: '8px 16px', fontWeight: 600 }">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="!wl.items.length">
-                <td colspan="5" :style="{ padding: 0 }">
-                  <EmptyState icon="star" title="自选列表为空" subtitle="在 ⌘K 搜索 / 行情 / 因子 / 详情页点星标加入" />
-                </td>
-              </tr>
-              <tr v-for="w in wl.items" :key="w.code" class="row-hover" @click="gotoDetail(w.code)" :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }">
-                <td :style="{ padding: '11px 16px' }">
-                  <div :style="{ display: 'flex', alignItems: 'center', gap: '8px' }">
-                    <StarButton :stock="{ code: w.code, name: w.name, sector: w.sector, refPrice: w.refPrice }" :size="13" @click.stop />
-                    <div>
-                      <div :style="{ fontWeight: 600, fontSize: '13px' }">{{ w.name || '—' }}</div>
-                      <div :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ w.code }}</div>
-                    </div>
-                  </div>
-                </td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ w.refPrice != null ? w.refPrice.toFixed(2) : '—' }}</td>
-                <td :style="{ padding: '11px 12px', color: A2.textSub, fontSize: '11.5px' }">{{ w.sector || '—' }}</td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right' }">
-                  <span v-if="w.alerts.length" :style="{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '4px', fontSize: '11px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">
-                    <Icon name="bell" :size="10" /> {{ w.alerts.length }}
-                  </span>
-                  <span v-else :style="{ color: A2.textDim, fontSize: '11px' }">无</span>
-                </td>
-                <td :style="{ padding: '11px 16px', textAlign: 'right' }" @click.stop>
-                  <AlertRuleEditor :code="w.code" />
-                </td>
-              </tr>
-            </tbody>
-          </table>
 
-          <!-- 持仓 / 千问跟踪 tab：原 mock 数据 -->
-          <table v-else :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }">
+          <table :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }">
             <thead>
               <tr :style="{ color: A2.textMuted, fontSize: '10px', fontWeight: 600, letterSpacing: '0.5px' }">
                 <th :style="{ textAlign: 'left', padding: '8px 16px', fontWeight: 600 }">名称 / 代码</th>
                 <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">现价</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">涨跌</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">持仓</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">成本</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">盈亏</th>
-                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">占比</th>
-                <th :style="{ textAlign: 'left', padding: '8px 12px', fontWeight: 600 }">千问观点</th>
+                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">今日</th>
+                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">PE</th>
+                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">PB</th>
+                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">ROE</th>
+                <th :style="{ textAlign: 'left', padding: '8px 12px', fontWeight: 600 }">行业</th>
+                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">加入价 / 至今</th>
+                <th :style="{ textAlign: 'right', padding: '8px 6px', fontWeight: 600 }">关注</th>
+                <th :style="{ textAlign: 'right', padding: '8px 16px', fontWeight: 600 }">告警</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="h in holdings" :key="h.code" class="row-hover row-clickable" @click="gotoDetail(h.code)" :style="{ borderTop: `1px solid ${A2.borderHair}` }">
+              <tr v-if="!rows.length">
+                <td colspan="10" :style="{ padding: 0 }">
+                  <EmptyState icon="star" title="自选列表为空"
+                              subtitle="在 ⌘K 搜索 / 行情 / 因子 / 详情页点星标加入" />
+                </td>
+              </tr>
+              <tr v-for="r in rows" :key="r.code" class="row-hover"
+                  @click="gotoDetail(r.code)"
+                  :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }">
                 <td :style="{ padding: '11px 16px' }">
                   <div :style="{ display: 'flex', alignItems: 'center', gap: '8px' }">
-                    <Icon name="starF" :size="12" color="#F59E0B" />
+                    <StarButton :stock="{ code: r.code, name: r.name, sector: r.industry, refPrice: r.refPrice }" :size="13" @click.stop />
                     <div>
-                      <div :style="{ fontWeight: 600, fontSize: '13px' }">{{ h.name }}</div>
-                      <div :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ h.code }} · {{ h.sector }}</div>
+                      <div :style="{ fontWeight: 600, fontSize: '13px' }">{{ r.name }}</div>
+                      <div :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ r.code }}</div>
                     </div>
                   </div>
                 </td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: h.price >= h.cost ? A2.up : A2.down }">{{ h.price.toFixed(2) }}</td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right' }"><PctChip :pct="((h.price - h.cost) / h.cost) * 100" size="sm" /></td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub, fontSize: '11px' }">{{ h.qty.toLocaleString() }}</td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textMuted, fontSize: '11px' }">{{ h.cost.toFixed(2) }}</td>
-                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: (h.price - h.cost) * h.qty >= 0 ? A2.up : A2.down }">{{ (h.price - h.cost) * h.qty >= 0 ? '+' : '' }}{{ Math.round((h.price - h.cost) * h.qty).toLocaleString() }}</td>
+                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700,
+                              color: r.changePct == null ? A2.textSub : (r.changePct >= 0 ? A2.up : A2.down) }">
+                  {{ r.close != null ? r.close.toFixed(2) : '—' }}
+                </td>
                 <td :style="{ padding: '11px 6px', textAlign: 'right' }">
-                  <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '6px' }">
-                    <div :style="{ width: '36px', height: '4px', background: A2.bgDeep, borderRadius: '2px', overflow: 'hidden' }">
-                      <div :style="{ width: `${Math.min(100, h.weight * 3)}%`, height: '100%', background: A2.qwen }" />
-                    </div>
-                    <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '11px', color: A2.textSub, fontWeight: 600 }">{{ h.weight.toFixed(1) }}%</span>
+                  <PctChip v-if="r.changePct != null" :pct="r.changePct" size="sm" />
+                  <span v-else :style="{ color: A2.textDim }">—</span>
+                </td>
+                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ fmtPE(r.pe) }}</td>
+                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ r.pb != null ? r.pb.toFixed(2) : '—' }}</td>
+                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ fmtROE(r.roe) }}</td>
+                <td :style="{ padding: '11px 12px', color: A2.textSub, fontSize: '11.5px' }">{{ r.industry || '—' }}</td>
+                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontSize: '11px' }">
+                  <div :style="{ color: A2.textMuted }">{{ r.refPrice != null ? r.refPrice.toFixed(2) : '—' }}</div>
+                  <div v-if="r.sinceCost != null" :style="{ marginTop: '1px' }">
+                    <PctChip :pct="r.sinceCost" size="sm" />
                   </div>
                 </td>
-                <td :style="{ padding: '11px 12px', minWidth: '220px' }">
-                  <div :style="{ display: 'flex', flexDirection: 'column', gap: '3px' }">
-                    <span :style="{ fontSize: '10px', padding: '2px 7px', background: toneColor(h.qwen.tone) + '15', color: toneColor(h.qwen.tone), borderRadius: '4px', fontWeight: 600, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px', alignSelf: 'flex-start' }">
-                      <Icon name="sparkle" :size="9" /> {{ h.qwen.tag }}
-                    </span>
-                    <span :style="{ fontSize: '11px', color: A2.textMuted, lineHeight: 1.45 }">{{ h.qwen.note }}</span>
-                  </div>
+                <td :style="{ padding: '11px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textMuted, fontSize: '11px' }">
+                  {{ fmtDays(r.addedAt) }}
+                </td>
+                <td :style="{ padding: '11px 16px', textAlign: 'right' }" @click.stop>
+                  <AlertRuleEditor :code="r.code" />
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <!-- Right column -->
+        <!-- 右栏 -->
         <div :style="{ display: 'flex', flexDirection: 'column', gap: '10px' }">
+          <!-- 行业分布 -->
           <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px', boxShadow: A2.shadow }">
             <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }">
-              <div :style="{ fontSize: '13px', fontWeight: 700 }">行业配置</div>
-              <span :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">8 持仓</span>
+              <div :style="{ fontSize: '13px', fontWeight: 700 }">行业分布</div>
+              <span :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ rows.length }} 只</span>
             </div>
-            <div :style="{ display: 'flex', alignItems: 'center', gap: '12px' }">
+            <div v-if="!rows.length" :style="{ padding: '24px 0', textAlign: 'center', color: A2.textDim, fontSize: '12px' }">无数据</div>
+            <div v-else :style="{ display: 'flex', alignItems: 'center', gap: '12px' }">
               <svg :width="donutArcs.size" :height="donutArcs.size" :viewBox="`0 0 ${donutArcs.size} ${donutArcs.size}`">
                 <path v-for="(a, i) in donutArcs.arcs" :key="i" :d="a.d" :fill="a.c" />
                 <circle :cx="donutArcs.cx" :cy="donutArcs.cy" :r="donutArcs.r * 0.62" fill="#fff" />
-                <text :x="donutArcs.cx" :y="donutArcs.cy - 2" text-anchor="middle" font-size="10" fill="#7A776F" font-weight="500">总市值</text>
-                <text :x="donutArcs.cx" :y="donutArcs.cy + 12" text-anchor="middle" font-size="13" fill="#0E0E0C" font-weight="700" font-family="IBM Plex Mono, monospace">{{ totals.totalValue >= 10000 ? (totals.totalValue / 10000).toFixed(1) + '万' : Math.round(totals.totalValue) }}</text>
+                <text :x="donutArcs.cx" :y="donutArcs.cy - 2" text-anchor="middle" font-size="10" fill="#7A776F" font-weight="500">行业</text>
+                <text :x="donutArcs.cx" :y="donutArcs.cy + 12" text-anchor="middle" font-size="13" fill="#0E0E0C" font-weight="700" font-family="IBM Plex Mono, monospace">{{ sectorAlloc.length }}</text>
               </svg>
               <div :style="{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }">
                 <div v-for="s in sectorAlloc" :key="s.l" :style="{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px' }">
                   <div :style="{ width: '8px', height: '8px', background: s.c, borderRadius: '2px' }" />
-                  <span :style="{ flex: 1, color: A2.textSub }">{{ s.l }}</span>
-                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">{{ s.v }}%</span>
+                  <span :style="{ flex: 1, color: A2.textSub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ s.l }}</span>
+                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">{{ s.n }}</span>
                 </div>
               </div>
             </div>
           </div>
 
+          <!-- 告警规则 -->
           <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow, flex: 1 }">
             <div :style="{ padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
-              <div :style="{ fontSize: '13px', fontWeight: 700 }">千问预警</div>
-              <span :style="{ fontSize: '10px', padding: '2px 6px', background: A2.upSoft, color: A2.up, borderRadius: '3px', fontWeight: 600, fontFamily: 'IBM Plex Mono, monospace' }">3 条新</span>
+              <div :style="{ fontSize: '13px', fontWeight: 700 }">已设告警</div>
+              <span :style="{ fontSize: '10px', padding: '2px 6px', background: A2.bgDeep, color: A2.textSub, borderRadius: '3px', fontWeight: 600, fontFamily: 'IBM Plex Mono, monospace' }">{{ allAlerts.length }} 条</span>
             </div>
-            <div>
-              <div v-for="(a, i) in alerts" :key="i" :style="{ padding: '10px 16px', borderTop: i ? `1px solid ${A2.borderHair}` : 'none', display: 'flex', gap: '8px' }">
-                <div :style="{ width: '3px', alignSelf: 'stretch', background: a.tone, borderRadius: '2px', flexShrink: 0 }" />
-                <div style="flex:1">
-                  <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }">
-                    <span :style="{ fontSize: '9px', padding: '1px 6px', background: a.tone + '15', color: a.tone, borderRadius: '3px', fontWeight: 700 }">{{ a.tag }}</span>
-                    <span :style="{ fontSize: '12px', fontWeight: 700 }">{{ a.stock }}</span>
-                    <span :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ a.time }}</span>
-                  </div>
-                  <div :style="{ fontSize: '11px', color: A2.textSub, lineHeight: 1.5 }">{{ a.desc }}</div>
+            <div v-if="!allAlerts.length" :style="{ padding: '24px 16px', textAlign: 'center', color: A2.textDim, fontSize: '12px' }">
+              点击表格右侧的"+"按钮设置价格 / 涨跌幅告警
+            </div>
+            <div v-else>
+              <div v-for="(a, i) in allAlerts" :key="i" class="row-hover"
+                   @click="gotoDetail(a.code)"
+                   :style="{ padding: '10px 16px', borderTop: i ? `1px solid ${A2.borderHair}` : 'none', cursor: 'pointer' }">
+                <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }">
+                  <span :style="{ fontSize: '12px', fontWeight: 700 }">{{ a.name }}</span>
+                  <span :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ a.code }}</span>
+                </div>
+                <div :style="{ fontSize: '11px', color: A2.textSub }">
+                  <span v-if="a.type === 'pct_up'">累计涨幅 ≥ {{ a.threshold }}%</span>
+                  <span v-else-if="a.type === 'pct_down'">累计跌幅 ≥ {{ a.threshold }}%</span>
+                  <span v-else-if="a.type === 'price_gt'">现价 ≥ ¥{{ a.threshold }}</span>
+                  <span v-else-if="a.type === 'price_lt'">现价 ≤ ¥{{ a.threshold }}</span>
+                  <span v-else-if="a.type === 'day_pct'">日内涨跌 ≥ {{ a.threshold }}%</span>
+                  <span v-else>{{ a.type }} · {{ a.threshold }}</span>
                 </div>
               </div>
             </div>

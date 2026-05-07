@@ -42,7 +42,7 @@ const tabs = [
   { id: 'chat', label: '千问筛选' },
   { id: 'results', label: '因子' },
   { id: 'detail', label: '详情' },
-  { id: 'portfolio', label: '持仓' },
+  { id: 'portfolio', label: '自选监控' },
   { id: 'strategy', label: '策略' },
 ]
 
@@ -103,7 +103,7 @@ watch(() => route.name, async () => {
     <div :style="{ display: 'flex', alignItems: 'center', height: '46px', background: A2.surface, boxShadow: '0 1px 0 ' + A2.borderHair, padding: '0 16px', flexShrink: 0 }">
       <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', marginRight: '22px' }">
         <img src="/logo.png" alt="logo"
-             :style="{ width: '26px', height: '26px', objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(36,86,216,0.25))' }" />
+             :style="{ width: '36px', height: '36px', objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(36,86,216,0.25))' }" />
         <div :style="{ fontWeight: 700, fontSize: '13px', letterSpacing: '-0.2px' }">
           Qwen
           <span :style="{ color: A2.textMuted, fontWeight: 500, fontSize: '10px', letterSpacing: '1.2px', marginLeft: '2px' }">TERMINAL</span>
