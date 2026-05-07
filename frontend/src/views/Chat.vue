@@ -9,6 +9,9 @@ import { A2 } from '../shared/theme.js'
 import { genKline } from '../shared/data.js'
 import { streamNL } from '../api/screener'
 import { friendlyError } from '../shared/errors.js'
+import { useAiStatusStore } from '../stores/aiStatus'
+
+const aiStatus = useAiStatusStore()
 
 const router = useRouter()
 const route = useRoute()
@@ -249,6 +252,18 @@ const stageColor = (s) => ({
       <!-- Main chat -->
       <div :style="{ background: A2.bg, display: 'flex', flexDirection: 'column', overflow: 'hidden' }">
         <div :style="{ flex: 1, overflow: 'auto', padding: '24px 36px' }">
+          <!-- AI 离线时的状态条 -->
+          <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
+            <Icon name="alert" :size="13" />
+            <span style="flex:1">
+              <strong>千问 AI 服务暂时不可达</strong>
+              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 你可以试试结构化筛选（左侧"因子"标签）</span>
+            </span>
+            <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">
+              <Icon name="refresh" :size="11" /> 重新检测
+            </button>
+          </div>
+
           <!-- 起始引导 -->
           <div v-if="!lastQuery" :style="{ textAlign: 'center', padding: '60px 0', color: A2.textMuted }">
             <div :style="{ display: 'inline-grid', placeItems: 'center', width: '52px', height: '52px', borderRadius: '50%', background: A2.qwenSoft, color: A2.qwen, marginBottom: '12px' }">
@@ -389,14 +404,20 @@ const stageColor = (s) => ({
                       placeholder="例如：找出 PE 低于 15、ROE > 15%、近三年净利润复合增速 > 20% 的消费股…"
                       :style="{ width: '100%', height: '40px', border: 'none', outline: 'none', fontSize: '13.5px', fontFamily: 'IBM Plex Sans, Noto Sans SC, sans-serif', resize: 'none', background: 'transparent', opacity: isStreaming ? 0.6 : 1 }" />
             <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
-              <span :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '解析中…' : phase === 'screening' ? '执行中…' : 'Stream · SSE' }}</span>
+              <span v-if="!aiStatus.isUp" :style="{ fontSize: '10px', color: A2.amber, display: 'flex', alignItems: 'center', gap: '4px' }">
+                <span :style="{ width: '6px', height: '6px', borderRadius: '50%', background: A2.amber }" />
+                AI 服务暂时不可用
+              </span>
+              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '解析中…' : phase === 'screening' ? '执行中…' : 'Stream · SSE' }}</span>
               <div style="flex:1" />
               <button v-if="isStreaming" @click="stop"
                       :style="{ padding: '7px 14px', background: '#3F3D38', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
                 <Icon name="x" :size="12" /> 停止
               </button>
               <button v-else @click="send"
-                      :style="{ padding: '7px 14px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
+                      :disabled="!aiStatus.isUp"
+                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}）` : ''"
+                      :style="{ padding: '7px 14px', background: !aiStatus.isUp ? '#B8B4A8' : A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: !aiStatus.isUp ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: !aiStatus.isUp ? 0.7 : 1 }">
                 发送 <Icon name="send" :size="12" />
               </button>
             </div>

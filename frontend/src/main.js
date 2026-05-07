@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import { startAlertEngine } from './services/alertEngine'
 import { useWatchlistStore } from './stores/watchlist'
+import { useAiStatusStore } from './stores/aiStatus'
 
 import './assets/global.css'
 
@@ -17,3 +18,6 @@ useWatchlistStore().syncFromBackend()
 
 // 启动价格预警轮询
 startAlertEngine()
+
+// 启动 AI 上游可用性探测（每 2 分钟一次）
+useAiStatusStore().startAutoProbe()

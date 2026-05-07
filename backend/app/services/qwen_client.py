@@ -64,6 +64,37 @@ def _load_prompt(name: str) -> str:
 
 # ---------------------- OpenAI / Responses API 调用 ----------------------
 
+def probe_health(timeout: float = 4.0) -> dict:
+    """轻量探测上游 AI 是否可用。
+    只发一个 4s 超时的 HEAD /v1/models（比真的发对话便宜得多），
+    返回 {ok: bool, latency_ms: int|None, reason: str|None}。
+    被 /api/v1/health/ai 调用，结果可被前端缓存几秒。
+    """
+    import time as _t
+    if not settings.openai_api_key:
+        return {"ok": False, "latency_ms": None, "reason": "未配置 OPENAI_API_KEY"}
+    try:
+        import httpx
+        base = (settings.openai_base_url or "https://api.openai.com").rstrip("/")
+        url = f"{base}/v1/models"
+        headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+        t0 = _t.time()
+        # 用 GET 而非 HEAD：有些中转不实现 HEAD
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as c:
+            r = c.get(url, headers=headers)
+        latency_ms = int((_t.time() - t0) * 1000)
+        if r.status_code in (200, 401, 403):
+            # 401/403 也认为 reachable（说明上游能处理鉴权，只是 key 错），不是网络挂
+            return {"ok": r.status_code == 200, "latency_ms": latency_ms,
+                    "reason": None if r.status_code == 200 else "鉴权失败"}
+        return {"ok": False, "latency_ms": latency_ms, "reason": f"HTTP {r.status_code}"}
+    except Exception as e:
+        msg = str(e).lower()
+        if "reset" in msg or "refused" in msg or "timed out" in msg or "timeout" in msg:
+            return {"ok": False, "latency_ms": None, "reason": "上游网络不可达"}
+        return {"ok": False, "latency_ms": None, "reason": "服务暂时不可用"}
+
+
 def _openai_client():
     if not settings.openai_api_key:
         raise RuntimeError("未配置 OPENAI_API_KEY，请在 backend/.env 中填入")

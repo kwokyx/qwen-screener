@@ -1,0 +1,44 @@
+// 全局 AI 上游可用性状态。每 2 分钟主动 ping 一次后端 /health/ai。
+// 前端 AI 触发处（Detail 问千问 / Chat 发送）直接读 isUp 决定按钮是否灰。
+
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import client from '../api/client'
+
+export const useAiStatusStore = defineStore('aiStatus', () => {
+  const isUp = ref(true)        // 默认乐观；首次探之前不要禁用按钮
+  const reason = ref('')
+  const latencyMs = ref(null)
+  const lastChecked = ref(0)
+  let timer = null
+
+  async function check() {
+    try {
+      const { data } = await client.get('/health/ai')
+      isUp.value = !!data.ok
+      reason.value = data.reason || ''
+      latencyMs.value = data.latency_ms
+    } catch {
+      isUp.value = false
+      reason.value = '后端无响应'
+      latencyMs.value = null
+    } finally {
+      lastChecked.value = Date.now()
+    }
+  }
+
+  function startAutoProbe() {
+    if (timer) return
+    check()
+    timer = setInterval(check, 120_000)
+  }
+
+  function stopAutoProbe() {
+    if (timer) { clearInterval(timer); timer = null }
+  }
+
+  // 每次发起 AI 调用前/后都可以手动让前端立刻重测
+  async function recheck() { await check() }
+
+  return { isUp, reason, latencyMs, lastChecked, check, recheck, startAutoProbe, stopAutoProbe }
+})

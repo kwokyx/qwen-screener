@@ -12,6 +12,9 @@ import * as stockApi from '../api/stock'
 import * as qwenApi from '../api/qwen'
 import * as screenerApi from '../api/screener'
 import EmptyState from '../components/EmptyState.vue'
+import { useAiStatusStore } from '../stores/aiStatus'
+
+const aiStatus = useAiStatusStore()
 import { marked } from 'marked'
 import { friendlyError } from '../shared/errors.js'
 
@@ -368,9 +371,11 @@ const valuationCells = computed(() => {
             <StarButton variant="button" :stock="{ code: detail.code, name: detail.name, sector: detail.industry, refPrice: detail.latest?.close }" :size="12" />
             <AlertRuleEditor v-if="wl.has(detail.code)" :code="detail.code" />
             <button @click="askQwen"
-                    :style="{ padding: '8px 16px', background: aiStreaming ? '#3F3D38' : A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', borderRadius: '7px', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
+                    :disabled="!aiStreaming && !aiStatus.isUp"
+                    :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}）` : ''"
+                    :style="{ padding: '8px 16px', background: aiStreaming ? '#3F3D38' : (!aiStatus.isUp ? '#B8B4A8' : A2.qwenGrad), color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: !aiStreaming && !aiStatus.isUp ? 'not-allowed' : 'pointer', borderRadius: '7px', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: !aiStreaming && !aiStatus.isUp ? 0.7 : 1 }">
               <Icon :name="aiStreaming ? 'x' : 'sparkle'" :size="12" />
-              {{ aiStreaming ? '停止' : (aiText ? '重新生成' : '问千问') }}
+              {{ aiStreaming ? '停止' : (!aiStatus.isUp ? '千问离线' : (aiText ? '重新生成' : '问千问')) }}
             </button>
           </div>
         </div>
