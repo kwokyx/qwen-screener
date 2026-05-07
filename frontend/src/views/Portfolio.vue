@@ -145,12 +145,12 @@ const fmtDays = (ts) => {
     <div :style="{ flex: 1, overflow: 'auto', padding: '16px' }">
       <!-- Hero summary -->
       <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }">
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+        <div class="card" :style="{ padding: '14px 16px' }">
           <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">自选数</div>
           <div :style="{ fontSize: '26px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '-1px', marginTop: '4px' }">{{ summary.total }}</div>
           <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '2px' }">告警规则 {{ summary.alertsCount }} 条</div>
         </div>
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+        <div class="card" :style="{ padding: '14px 16px' }">
           <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">今日涨跌分布</div>
           <div :style="{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '4px' }">
             <span :style="{ fontSize: '20px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', color: A2.up }">{{ summary.up }}</span>
@@ -161,7 +161,7 @@ const fmtDays = (ts) => {
           </div>
           <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '2px' }">涨 / 平 / 跌</div>
         </div>
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+        <div class="card" :style="{ padding: '14px 16px' }">
           <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">自选平均涨幅</div>
           <div :style="{ marginTop: '4px' }">
             <PctChip v-if="summary.avg != null" :pct="summary.avg" size="md" />
@@ -169,7 +169,7 @@ const fmtDays = (ts) => {
           </div>
           <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '4px' }">基于今日 vs 上一交易日</div>
         </div>
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px 16px', boxShadow: A2.shadow }">
+        <div class="card" :style="{ padding: '14px 16px' }">
           <div :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600 }">今日领涨 / 领跌</div>
           <div v-if="summary.topGainer || summary.topLoser" :style="{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '12px' }">
             <div v-if="summary.topGainer" :style="{ display: 'flex', justifyContent: 'space-between', gap: '8px' }">
@@ -188,7 +188,7 @@ const fmtDays = (ts) => {
       <!-- Main grid -->
       <div :style="{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '10px' }">
         <!-- 自选明细表 -->
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow }">
+        <div class="card card-overflow-hidden">
           <div :style="{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}` }">
             <div :style="{ fontSize: '13px', fontWeight: 700 }">自选明细</div>
             <div v-if="loading" :style="{ marginLeft: '10px', fontSize: '11px', color: A2.textMuted }">加载中…</div>
@@ -264,7 +264,7 @@ const fmtDays = (ts) => {
         <!-- 右栏 -->
         <div :style="{ display: 'flex', flexDirection: 'column', gap: '10px' }">
           <!-- 行业分布 -->
-          <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '14px', boxShadow: A2.shadow }">
+          <div class="card card-pad">
             <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }">
               <div :style="{ fontSize: '13px', fontWeight: 700 }">行业分布</div>
               <span :style="{ fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ rows.length }} 只</span>
@@ -288,7 +288,7 @@ const fmtDays = (ts) => {
           </div>
 
           <!-- 告警规则 -->
-          <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', overflow: 'hidden', boxShadow: A2.shadow, flex: 1 }">
+          <div class="card card-overflow-hidden" :style="{ flex: 1 }">
             <div :style="{ padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
               <div :style="{ fontSize: '13px', fontWeight: 700 }">已设告警</div>
               <span :style="{ fontSize: '10px', padding: '2px 6px', background: A2.bgDeep, color: A2.textSub, borderRadius: '3px', fontWeight: 600, fontFamily: 'IBM Plex Mono, monospace' }">{{ allAlerts.length }} 条</span>

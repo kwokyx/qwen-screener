@@ -144,3 +144,33 @@ button:focus-visible {
   transition: opacity 0.18s ease;
 }
 .page-fade-enter-from, .page-fade-leave-to { opacity: 0; }
+
+/* ---------- Layout utilities (替代散落各 view 的 :style 重复) ---------- */
+
+/* 标准卡片：白底、淡边框、圆角、阴影 */
+.card {
+  background: #FFFFFF;
+  border: 1px solid rgba(14,14,12,0.06);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(14,14,12,0.04);
+}
+.card-pad { padding: 14px; }
+.card-pad-lg { padding: 18px; }
+.card-overflow-hidden { overflow: hidden; }
+.card-flex { display: flex; flex-direction: column; }
+
+/* 卡片头：下划线分隔区 */
+.card-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(14,14,12,0.06);
+}
+
+/* 字号 / 字重快捷 */
+.section-title { font-size: 13px; font-weight: 700; }
+.label-tiny { font-size: 11px; color: #7A776F; font-weight: 600; }
+.mono { font-family: 'IBM Plex Mono', monospace; }
+.text-muted { color: #7A776F; }
+.text-dim   { color: #B8B4A8; }
+.text-sub   { color: #3F3D38; }
