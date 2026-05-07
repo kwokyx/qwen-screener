@@ -7,7 +7,7 @@ import Sparkline from '../components/charts/Sparkline.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { streamNL } from '../api/screener'
-import { kline as fetchKline } from '../api/stock.js'
+import { useKlineCache } from '../composables/useKlineCache.js'
 import { friendlyError } from '../shared/errors.js'
 import { useAiStatusStore } from '../stores/aiStatus'
 import { useChatHistoryStore } from '../stores/chatHistory'
@@ -54,21 +54,8 @@ function bullScore(it) {
   return Math.round(Math.max(0, Math.min(99, s)))
 }
 
-// 真实 sparkline：每只调一次 /kline?days=30，并行；按 code 缓存
-const sparkCache = ref({})  // { code: [closes] }
-async function loadSparks(codes) {
-  const need = codes.filter((c) => c && !(c in sparkCache.value))
-  if (!need.length) return
-  const results = await Promise.allSettled(need.map((c) => fetchKline(c, 30)))
-  const next = { ...sparkCache.value }
-  results.forEach((r, i) => {
-    next[need[i]] = r.status === 'fulfilled'
-      ? (r.value || []).map((d) => d.close).filter((v) => v != null)
-      : []
-  })
-  sparkCache.value = next
-}
-function spark(code) { return sparkCache.value[code] || [] }
+// 真实 sparkline：composable 共享逻辑
+const { load: loadSparks, get: spark } = useKlineCache(30)
 
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
 function fmtCond(c) {

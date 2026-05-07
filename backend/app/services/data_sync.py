@@ -1,12 +1,12 @@
 """AKShare 数据同步
 
-三个入口：
-- sync_basic：A 股全量基本信息（5500+ 只，秒级）
-- sync_daily_em：全市场行情快照（东方财富批量，含 PE/PB/市值）—— 可能因网络受限失败
-- sync_pool_xq：基于股票池逐只查询雪球（如沪深300 = 300 只 ≈ 2-3 分钟），含 PE/PB/股息率
-                网络受限时用这个，对学年设计 demo 量级足够
-
-财务相关字段（股息率/每股净资产）顺手写入 stock_financial 表。
+主要入口（被 scheduler 调度，写 stock_basic / stock_daily / stock_financial）：
+- sync_basic：A 股代码 + 名字（akshare stock_info_a_code_name，秒级）
+- sync_daily_sina：全市场 OHLC 快照（新浪 5500+ 一次拉完，无 PE）
+- sync_full_valuation_em：全市场 PE/PB/市值/换手率（东财一次调用）
+- sync_pool_xq：股票池逐只调雪球（300/500 只，~2-3 分钟），追加 TTM-PE + 股息率
+- sync_pool_industry / sync_pool_financial：池内逐只补行业 / 财务字段
+- 全部使用 upsert 模式，不 delete-then-insert，避免半路失败清空已有数据
 """
 import time
 from datetime import date, datetime
@@ -49,70 +49,40 @@ def _f(v, scale: float = 1.0) -> float | None:
 # ---------- 基本信息 ----------
 
 def sync_basic(db: Session) -> int:
-    """同步 A 股基本信息表（5500+ 只）"""
+    """同步 A 股基本信息表（5500+ 只）。upsert：保留已写入的 industry / list_date 等字段。"""
     import akshare as ak
 
     logger.info("拉取 A 股基本信息...")
     df = ak.stock_info_a_code_name()
-    rows = [
-        {
-            "code": _to_code(str(r["code"])),
-            "name": str(r["name"]),
-            "industry": None,
-            "market": None,
-            "list_date": None,
-            "total_share": None,
-            "updated_at": datetime.utcnow(),
-        }
-        for _, r in df.iterrows()
-    ]
-    db.query(StockBasic).delete()
-    db.commit()
-    db.bulk_insert_mappings(StockBasic, rows)
-    db.commit()
-    logger.info("基本信息同步完成，共 {} 条", len(rows))
-    return len(rows)
+    if df is None or df.empty:
+        logger.warning("akshare 返回空，跳过 basic 同步避免清空已有数据")
+        return 0
 
-
-# ---------- 行情同步（方案A：东方财富批量） ----------
-
-def sync_daily_em(db: Session, trade_date: date | None = None) -> int:
-    """全市场实时快照（东方财富）。一次拉 5500+ 只，含 PE/PB/总市值。
-    在部分网络下可能 RemoteDisconnected，失败时请改用 sync_pool_xq。
-    """
-    import akshare as ak
-
-    logger.info("[EM] 拉取全市场实时快照...")
-    df = ak.stock_zh_a_spot_em()
-    today = trade_date or date.today()
-    rows = []
+    existing = {b.code: b for b in db.query(StockBasic).all()}
+    inserted = 0
+    updated = 0
     for _, r in df.iterrows():
-        symbol = str(r.get("代码", "")).zfill(6)
-        if not symbol.isdigit():
-            continue
-        rows.append({
-            "code": _to_code(symbol),
-            "trade_date": today,
-            "open": _f(r.get("今开")),
-            "high": _f(r.get("最高")),
-            "low": _f(r.get("最低")),
-            "close": _f(r.get("最新价")),
-            "volume": _f(r.get("成交量")),
-            "amount": _f(r.get("成交额")),
-            "pe": _f(r.get("市盈率-动态")),
-            "pb": _f(r.get("市净率")),
-            "market_cap": _f(r.get("总市值"), scale=1e8),
-            "turnover": _f(r.get("换手率")),
-        })
-    db.query(StockDaily).filter(StockDaily.trade_date == today).delete()
+        code = _to_code(str(r["code"]))
+        name = str(r["name"])
+        b = existing.get(code)
+        if b:
+            if b.name != name:
+                b.name = name
+            b.updated_at = datetime.utcnow()
+            updated += 1
+        else:
+            db.add(StockBasic(
+                code=code, name=name,
+                industry=None, market=None, list_date=None, total_share=None,
+                updated_at=datetime.utcnow(),
+            ))
+            inserted += 1
     db.commit()
-    db.bulk_insert_mappings(StockDaily, rows)
-    db.commit()
-    logger.info("[EM] 行情快照同步完成，共 {} 条", len(rows))
-    return len(rows)
+    logger.info("基本信息同步完成：新增 {} / 更新 {}", inserted, updated)
+    return inserted + updated
 
 
-# ---------- 行情同步（方案 A2：新浪全市场，无 PE/PB） ----------
+# ---------- 行情同步：新浪全市场（OHLC，无 PE） ----------
 
 def sync_daily_sina(db: Session, trade_date: date | None = None) -> int:
     """新浪源全市场行情快照，5500+ 只一次拉完。

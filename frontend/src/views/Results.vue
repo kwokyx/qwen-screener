@@ -10,7 +10,7 @@ import Skeleton from '../components/Skeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { screen } from '../api/screener'
-import { kline as fetchKline } from '../api/stock.js'
+import { useKlineCache } from '../composables/useKlineCache.js'
 
 const router = useRouter()
 
@@ -33,21 +33,9 @@ const total = ref(0)
 const loading = ref(true)
 const errorMsg = ref('')
 
-// 真实 sparkline：每只调一次 /kline?days=30，并行；切换筛选时只拉新出现的代码
-const klineCache = ref({})  // { code: [closes] }
-async function loadResultKlines() {
-  const codes = items.value.map((s) => s.code).filter((c) => c && !(c in klineCache.value))
-  if (!codes.length) return
-  const results = await Promise.allSettled(codes.map((c) => fetchKline(c, 30)))
-  const next = { ...klineCache.value }
-  results.forEach((r, i) => {
-    next[codes[i]] = r.status === 'fulfilled'
-      ? (r.value || []).map((d) => d.close).filter((v) => v != null)
-      : []
-  })
-  klineCache.value = next
-}
-watch(items, loadResultKlines)
+// 真实 sparkline：composable 缓存，items 变化时只拉新出现的代码
+const { load: loadResultKlines, get: resultSpark } = useKlineCache(30)
+watch(items, () => loadResultKlines(items.value.map((s) => s.code)))
 
 const stats = computed(() => {
   const arr = items.value
@@ -205,7 +193,7 @@ onMounted(load)
                     <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '10.5px' }">{{ bullScore(s) }}</span>
                   </div>
                 </td>
-                <td :style="{ padding: '7px 8px' }"><Sparkline :data="klineCache[s.code] || []" :width="64" :height="20" /></td>
+                <td :style="{ padding: '7px 8px' }"><Sparkline :data="resultSpark(s.code)" :width="64" :height="20" /></td>
                 <td :style="{ padding: '9px 8px', textAlign: 'right' }">
                   <span :style="{ color: A2.qwen, fontSize: '11px', fontWeight: 600 }">详情 →</span>
                 </td>
