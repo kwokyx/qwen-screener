@@ -32,8 +32,9 @@ WORKDIR /app
 # 从 builder 拷贝已装好的 site-packages
 COPY --from=builder /root/.local /root/.local
 
-# 拷贝代码
+# 拷贝代码 + 测试（tests 体积小，留在镜像里方便 `docker exec ... pytest`）
 COPY app ./app
+COPY tests ./tests
 COPY scripts ./scripts
 
 # 暴露 FastAPI 默认端口

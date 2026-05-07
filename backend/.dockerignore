@@ -19,4 +19,4 @@ htmlcov/
 .DS_Store
 *.log
 docs/
-tests/
+# 保留 tests/ 进镜像，方便 `docker exec qwen-backend pytest` 跑测试
