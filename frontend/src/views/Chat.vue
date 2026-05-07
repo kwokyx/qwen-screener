@@ -6,9 +6,8 @@ import Icon from '../components/Icon.vue'
 import Sparkline from '../components/charts/Sparkline.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
-import { streamNL } from '../api/screener'
 import { useKlineCache } from '../composables/useKlineCache.js'
-import { friendlyError } from '../shared/errors.js'
+import { useNlStream } from '../composables/useNlStream.js'
 import { useAiStatusStore } from '../stores/aiStatus'
 import { useChatHistoryStore } from '../stores/chatHistory'
 
@@ -19,21 +18,17 @@ const router = useRouter()
 const route = useRoute()
 
 const input = ref('')
-const lastQuery = ref('')
 
-// 流式状态机：idle → thinking → parsed → screening → done | error
-const phase = ref('idle')
-const thinkingBuf = ref('')          // 累积 JSON token，用于"思考预览"
-const parsedConditions = ref([])     // parsed 事件
-const screenMeta = ref(null)         // { logic, sort_by, sort_desc, limit }
-const result = ref(null)             // result 事件 { items, total, parsed_conditions }
-const errorMsg = ref('')
-let abortCtrl = null
+// 真实 sparkline 缓存（result 到达 / 历史恢复时调用 loadSparks）
+const { load: loadSparks, get: spark } = useKlineCache(30)
 
-// 时间戳记录每个阶段，用于在右侧 inspector 显示用时
-const tStart = ref(0)
-const tParsed = ref(0)
-const tDone = ref(0)
+// SSE 状态机：把流式逻辑都委托给 composable
+const stream = useNlStream(history, { onResult: loadSparks })
+const {
+  phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, errorMsg,
+  tStart, tParsed, tDone, isStreaming,
+  send: streamSend, stop, restoreFromHistory: streamRestore, reset,
+} = stream
 
 const presetPrompts = [
   '低估值高分红的银行股',
@@ -42,10 +37,6 @@ const presetPrompts = [
   '股息率超过 5% 的大蓝筹',
 ]
 
-const isStreaming = computed(() =>
-  phase.value === 'thinking' || phase.value === 'parsed' || phase.value === 'screening'
-)
-
 function bullScore(it) {
   let s = 60
   if (it.pe && it.pe > 0) s += Math.max(0, Math.min(20, 25 - it.pe * 0.5))
@@ -53,9 +44,6 @@ function bullScore(it) {
   if (it.roe) s += Math.min(15, it.roe)
   return Math.round(Math.max(0, Math.min(99, s)))
 }
-
-// 真实 sparkline：composable 共享逻辑
-const { load: loadSparks, get: spark } = useKlineCache(30)
 
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
 function fmtCond(c) {
@@ -82,85 +70,11 @@ const thinkingPreview = computed(() => {
   return '…' + s.slice(-200)
 })
 
-function reset() {
-  phase.value = 'idle'
-  thinkingBuf.value = ''
-  parsedConditions.value = []
-  screenMeta.value = null
-  result.value = null
-  errorMsg.value = ''
-}
-
 async function send() {
   const q = input.value.trim()
-  if (!q || isStreaming.value) return
-
-  reset()
-  lastQuery.value = q
-  phase.value = 'thinking'
-  tStart.value = Date.now()
-  tParsed.value = 0
-  tDone.value = 0
-  abortCtrl = new AbortController()
-
-  try {
-    await streamNL(q, (ev) => {
-      if (ev.type === 'thinking') {
-        thinkingBuf.value += ev.text
-      } else if (ev.type === 'parsed') {
-        parsedConditions.value = ev.conditions || []
-        screenMeta.value = { logic: ev.logic, sort_by: ev.sort_by, sort_desc: ev.sort_desc, limit: ev.limit }
-        phase.value = 'parsed'
-        tParsed.value = Date.now()
-      } else if (ev.type === 'screening') {
-        phase.value = 'screening'
-      } else if (ev.type === 'result') {
-        result.value = {
-          items: ev.items || [],
-          total: ev.total || 0,
-          parsed_conditions: ev.parsed_conditions || parsedConditions.value,
-        }
-        loadSparks((ev.items || []).map((s) => s.code))
-      } else if (ev.type === 'done') {
-        phase.value = 'done'
-        tDone.value = Date.now()
-      } else if (ev.type === 'error') {
-        errorMsg.value = friendlyError(ev.message, { context: 'ai' })
-        phase.value = 'error'
-      }
-    }, abortCtrl.signal)
-
-    // 流正常结束但没收到 'done'
-    if (phase.value !== 'error' && phase.value !== 'done') {
-      phase.value = 'done'
-      tDone.value = Date.now()
-    }
-
-    if (phase.value === 'done') {
-      // 保存到历史 store（持久化）
-      history.add({
-        query: q,
-        parsedConditions: parsedConditions.value,
-        items: result.value?.items || [],
-        total: result.value?.total || 0,
-        screenMeta: screenMeta.value,
-      })
-      input.value = ''
-    }
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      phase.value = 'idle'
-    } else {
-      errorMsg.value = friendlyError(e, { context: 'ai' })
-      phase.value = 'error'
-    }
-  } finally {
-    abortCtrl = null
-  }
-}
-
-function stop() {
-  abortCtrl?.abort()
+  if (!q) return
+  await streamSend(q)
+  if (phase.value === 'done') input.value = ''
 }
 
 function pickPreset(p) {
@@ -168,32 +82,13 @@ function pickPreset(p) {
   send()
 }
 
-// 点历史 → 恢复整个会话（不重新调用 AI）
 function restoreFromHistory(id) {
-  if (isStreaming.value) return
-  const it = history.get(id)
-  if (!it) return
-  reset()
-  lastQuery.value = it.query
-  parsedConditions.value = it.parsedConditions || []
-  screenMeta.value = it.screenMeta || null
-  result.value = {
-    items: it.items || [],
-    total: it.total || 0,
-    parsed_conditions: it.parsedConditions || [],
-  }
-  loadSparks((it.items || []).map((s) => s.code))
-  phase.value = 'done'
-  tStart.value = it.ts * 1000
-  tParsed.value = it.ts * 1000
-  tDone.value = it.ts * 1000
-  history.activate(id)
+  if (streamRestore(id)) history.activate(id)
 }
 
 function newSession() {
   if (isStreaming.value) stop()
   reset()
-  lastQuery.value = ''
   history.newSession()
 }
 
