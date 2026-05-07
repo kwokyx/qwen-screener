@@ -6,8 +6,8 @@ import Icon from '../components/Icon.vue'
 import Sparkline from '../components/charts/Sparkline.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
-import { genKline } from '../shared/data.js'
 import { streamNL } from '../api/screener'
+import { kline as fetchKline } from '../api/stock.js'
 import { friendlyError } from '../shared/errors.js'
 import { useAiStatusStore } from '../stores/aiStatus'
 import { useChatHistoryStore } from '../stores/chatHistory'
@@ -54,13 +54,21 @@ function bullScore(it) {
   return Math.round(Math.max(0, Math.min(99, s)))
 }
 
-const sparkCache = new Map()
-function spark(code, idx) {
-  if (!sparkCache.has(code)) {
-    sparkCache.set(code, genKline(100, 30, 0.02, idx + 11).map((d) => d.c))
-  }
-  return sparkCache.get(code)
+// 真实 sparkline：每只调一次 /kline?days=30，并行；按 code 缓存
+const sparkCache = ref({})  // { code: [closes] }
+async function loadSparks(codes) {
+  const need = codes.filter((c) => c && !(c in sparkCache.value))
+  if (!need.length) return
+  const results = await Promise.allSettled(need.map((c) => fetchKline(c, 30)))
+  const next = { ...sparkCache.value }
+  results.forEach((r, i) => {
+    next[need[i]] = r.status === 'fulfilled'
+      ? (r.value || []).map((d) => d.close).filter((v) => v != null)
+      : []
+  })
+  sparkCache.value = next
 }
+function spark(code) { return sparkCache.value[code] || [] }
 
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
 function fmtCond(c) {
@@ -125,6 +133,7 @@ async function send() {
           total: ev.total || 0,
           parsed_conditions: ev.parsed_conditions || parsedConditions.value,
         }
+        loadSparks((ev.items || []).map((s) => s.code))
       } else if (ev.type === 'done') {
         phase.value = 'done'
         tDone.value = Date.now()
@@ -186,6 +195,7 @@ function restoreFromHistory(id) {
     total: it.total || 0,
     parsed_conditions: it.parsedConditions || [],
   }
+  loadSparks((it.items || []).map((s) => s.code))
   phase.value = 'done'
   tStart.value = it.ts * 1000
   tParsed.value = it.ts * 1000
@@ -457,7 +467,7 @@ const stageColor = (s) => ({
                         <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '11px' }">{{ bullScore(s) }}</span>
                       </div>
                     </td>
-                    <td :style="{ padding: '11px 8px' }"><Sparkline :data="spark(s.code, i)" :width="72" :height="20" /></td>
+                    <td :style="{ padding: '11px 8px' }"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></td>
                   </tr>
                 </tbody>
               </table>

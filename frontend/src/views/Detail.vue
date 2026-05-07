@@ -7,7 +7,6 @@ import PctChip from '../components/charts/PctChip.vue'
 import Donut from '../components/charts/Donut.vue'
 import FullCandle from '../components/charts/FullCandle.vue'
 import { A2 } from '../shared/theme.js'
-import { genKline } from '../shared/data.js'
 import * as stockApi from '../api/stock'
 import * as qwenApi from '../api/qwen'
 import * as screenerApi from '../api/screener'
@@ -81,51 +80,22 @@ async function loadPeers() {
 watch(() => detail.value?.industry, (v) => { if (v) loadPeers() })
 watch(detailTab, (v) => { if (v === 2 && !peers.value.length) loadPeers() })
 
-// DB 历史不够请求长度的一半时，前端用确定性高斯游走合成补到 days
-// 这样不同周期 tab 的图形真的会变（不是同一个 1 行渲染）
-// 把整数 day 索引替换成"今天往前数 N 个交易日"的真实日期字符串
-function backfillDates(candles) {
-  const out = []
-  const today = new Date()
-  // 从最新 candle 往前推算交易日（跳过周六日）
-  let cursor = new Date(today)
-  cursor.setHours(0, 0, 0, 0)
-  for (let i = candles.length - 1; i >= 0; i--) {
-    // 把游标退到下一个有效交易日（跳过周末）
-    while (cursor.getDay() === 0 || cursor.getDay() === 6) {
-      cursor.setDate(cursor.getDate() - 1)
-    }
-    const yyyy = cursor.getFullYear()
-    const mm = String(cursor.getMonth() + 1).padStart(2, '0')
-    const dd = String(cursor.getDate()).padStart(2, '0')
-    out[i] = { ...candles[i], day: `${yyyy}-${mm}-${dd}` }
-    // 退一天，下次循环会再跳过周末
-    cursor.setDate(cursor.getDate() - 1)
-  }
-  return out
-}
 
-function synthIfShort(real, days, base, code) {
-  if (Array.isArray(real) && real.length >= Math.max(5, Math.floor(days / 2))) {
-    return real.map((k) => ({
-      o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
-    }))
-  }
-  // 用 code + days 当种子，让不同周期产生不同曲线，但同 (code, days) 永远一致
-  const seed = (Array.from(code).reduce((a, c) => a * 31 + c.charCodeAt(0), 0) ^ days) >>> 0
-  const synth = genKline(base * 0.85, days, 0.025, seed)
-  return backfillDates(synth)
+function mapKline(real) {
+  if (!Array.isArray(real)) return []
+  return real.map((k) => ({
+    o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
+  }))
 }
 
 async function reloadKline() {
   const days = klineTabs[klinePeriod.value].days
-  const base = detail.value?.latest?.close || 100
   try {
     const kl = await stockApi.kline(code.value, days)
     const real = Array.isArray(kl) ? [...kl].reverse() : []
-    klineData.value = synthIfShort(real, days, base, code.value)
+    klineData.value = mapKline(real)
   } catch {
-    klineData.value = synthIfShort([], days, base, code.value)
+    klineData.value = []
   }
 }
 
@@ -141,8 +111,7 @@ async function load() {
     ])
     detail.value = d
     const real = Array.isArray(kl) ? [...kl].reverse() : []
-    const base = d.latest?.close || 100
-    klineData.value = synthIfShort(real, days, base, code.value)
+    klineData.value = mapKline(real)
   } catch (e) {
     const status = e.response?.status
     if (status === 404) {
