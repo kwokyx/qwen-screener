@@ -10,8 +10,10 @@ import { genKline } from '../shared/data.js'
 import { streamNL } from '../api/screener'
 import { friendlyError } from '../shared/errors.js'
 import { useAiStatusStore } from '../stores/aiStatus'
+import { useChatHistoryStore } from '../stores/chatHistory'
 
 const aiStatus = useAiStatusStore()
+const history = useChatHistoryStore()
 
 const router = useRouter()
 const route = useRoute()
@@ -33,7 +35,6 @@ const tStart = ref(0)
 const tParsed = ref(0)
 const tDone = ref(0)
 
-const todayChats = ref([])
 const presetPrompts = [
   '低估值高分红的银行股',
   'ROE 大于 15 且最新季度净利润同比正增长的成长股',
@@ -140,9 +141,13 @@ async function send() {
     }
 
     if (phase.value === 'done') {
-      todayChats.value.unshift({
-        t: q,
-        time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      // 保存到历史 store（持久化）
+      history.add({
+        query: q,
+        parsedConditions: parsedConditions.value,
+        items: result.value?.items || [],
+        total: result.value?.total || 0,
+        screenMeta: screenMeta.value,
       })
       input.value = ''
     }
@@ -165,6 +170,52 @@ function stop() {
 function pickPreset(p) {
   input.value = p
   send()
+}
+
+// 点历史 → 恢复整个会话（不重新调用 AI）
+function restoreFromHistory(id) {
+  if (isStreaming.value) return
+  const it = history.get(id)
+  if (!it) return
+  reset()
+  lastQuery.value = it.query
+  parsedConditions.value = it.parsedConditions || []
+  screenMeta.value = it.screenMeta || null
+  result.value = {
+    items: it.items || [],
+    total: it.total || 0,
+    parsed_conditions: it.parsedConditions || [],
+  }
+  phase.value = 'done'
+  tStart.value = it.ts * 1000
+  tParsed.value = it.ts * 1000
+  tDone.value = it.ts * 1000
+  history.activate(id)
+}
+
+function newSession() {
+  if (isStreaming.value) stop()
+  reset()
+  lastQuery.value = ''
+  history.newSession()
+}
+
+function deleteHistory(id, ev) {
+  ev?.stopPropagation()
+  history.remove(id)
+}
+
+function fmtRelTime(ts) {
+  const now = Date.now() / 1000
+  const diff = now - ts
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  const d = new Date(ts * 1000)
+  const today = new Date()
+  if (d.toDateString() === today.toDateString()) {
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  }
+  return `${d.getMonth() + 1}-${d.getDate()}`
 }
 
 // 从其他页面跳转携带 ?q=xxx 时自动发送
@@ -224,20 +275,40 @@ const stageColor = (s) => ({
       <!-- Sidebar -->
       <div :style="{ background: A2.surface, padding: '14px', fontSize: '12px', overflow: 'auto', borderRight: `1px solid ${A2.borderHair}` }">
         <button :style="{ width: '100%', padding: '10px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', marginBottom: '16px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }"
-                @click="stop(); reset(); lastQuery = ''">
+                @click="newSession">
           <Icon name="plus" :size="12" /> 新建对话
         </button>
-        <div :style="{ fontSize: '10px', color: A2.textDim, fontWeight: 700, letterSpacing: '1.2px', marginBottom: '8px' }">本次会话</div>
-        <div v-if="!todayChats.length" :style="{ fontSize: '11px', color: A2.textMuted, padding: '8px 10px', lineHeight: 1.6 }">
+
+        <div v-if="!history.items.length" :style="{ fontSize: '11px', color: A2.textMuted, padding: '12px 10px', lineHeight: 1.6, textAlign: 'center' }">
           下方输入框试试看吧 ↓
         </div>
-        <div v-for="c in todayChats" :key="c.time + c.t"
-             @click="!isStreaming && pickPreset(c.t)"
-             :title="isStreaming ? '当前对话进行中，请先停止' : '点击重新提问'"
-             :style="{ padding: '9px 11px', fontSize: '12px', cursor: isStreaming ? 'wait' : 'pointer', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '7px', marginBottom: '3px', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderLeft: `2px solid ${A2.qwen}`, opacity: isStreaming ? 0.5 : 1 }">
-          <span :style="{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }">{{ c.t }}</span>
-          <span :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ c.time }}</span>
-        </div>
+
+        <!-- 分组：今天 / 昨天 / 本周 / 更早 -->
+        <template v-for="group in [
+          { key: 'today', label: '今天', list: history.grouped.today },
+          { key: 'yesterday', label: '昨天', list: history.grouped.yesterday },
+          { key: 'thisWeek', label: '本周', list: history.grouped.thisWeek },
+          { key: 'earlier', label: '更早', list: history.grouped.earlier },
+        ]" :key="group.key">
+          <div v-if="group.list.length" :style="{ fontSize: '10px', color: A2.textDim, fontWeight: 700, letterSpacing: '1.2px', marginBottom: '6px', marginTop: '12px', paddingLeft: '4px' }">{{ group.label }}</div>
+          <div v-for="c in group.list" :key="c.id"
+               class="history-item"
+               :class="{ active: c.id === history.activeId }"
+               @click="restoreFromHistory(c.id)"
+               :title="isStreaming ? '当前对话进行中，请先停止' : c.query"
+               :style="{ padding: '8px 10px', borderRadius: '7px', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '6px', cursor: isStreaming ? 'wait' : 'pointer' }">
+            <span :style="{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11.5px' }">{{ c.query }}</span>
+            <span :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ c.total }} 只</span>
+            <button class="history-del" @click="deleteHistory(c.id, $event)" title="删除">
+              <Icon name="x" :size="10" />
+            </button>
+          </div>
+        </template>
+
+        <button v-if="history.items.length" @click="history.clear()"
+                :style="{ marginTop: '12px', width: '100%', padding: '6px', background: 'transparent', border: 'none', color: A2.textMuted, fontSize: '10.5px', cursor: 'pointer', borderRadius: '5px' }">
+          清空全部历史 ({{ history.items.length }})
+        </button>
 
         <div :style="{ marginTop: '22px', padding: '12px', background: A2.bgDeep, borderRadius: '8px' }">
           <div :style="{ fontSize: '11px', fontWeight: 700, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }">
@@ -466,6 +537,40 @@ const stageColor = (s) => ({
     </div>
   </Shell>
 </template>
+
+<style scoped>
+.history-item {
+  position: relative;
+  background: transparent;
+  color: #3F3D38;
+  font-weight: 500;
+  border-left: 2px solid transparent;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.history-item:hover {
+  background: #EFEDE6;
+  color: #111110;
+}
+.history-item.active {
+  background: #EAF0FE;
+  color: #1E3FA8;
+  font-weight: 600;
+  border-left-color: #2456D8;
+}
+.history-del {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: #B8B4A8;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  flex-shrink: 0;
+}
+.history-item:hover .history-del { display: inline-flex; }
+.history-del:hover { background: rgba(200, 49, 42, 0.10); color: #C8312A; }
+</style>
 
 <style scoped>
 .row-hover { transition: background 0.15s; }
