@@ -360,18 +360,18 @@ def sync_pool_financial(db: Session, pool: str = "csi300", sleep_sec: float = 0.
     return updated
 
 
-def sync_bj_valuation_em(db: Session, trade_date: date | None = None) -> int:
-    """北交所估值（PE/PB/总市值/换手率）。一次东方财富快照里筛 BJ 行 upsert。
-    雪球 spot 对北交所不返回 PE，所以单独跑这条。其它板块的 PE 来自 sync_pool_xq，互不覆盖。
+def sync_full_valuation_em(db: Session, trade_date: date | None = None) -> int:
+    """全市场估值（PE/PB/总市值/换手率）—— 一次东方财富 spot 调用覆盖 5500+ 只。
+    雪球 spot 对小盘 / 北交所返回 None，所以这里改用东财作为主源。
+    upsert 模式，不删现有行（保留 csi300/csi500 后续覆盖的 xq-TTM PE 和股息率）。
     """
     import akshare as ak
 
     today = trade_date or date.today()
-    logger.info("[BJ-EM] 拉东方财富全市场快照，筛北交所...")
+    logger.info("[EM-VAL] 拉东方财富全市场快照（PE/PB/市值/换手率）...")
     df = ak.stock_zh_a_spot_em()
-    bj = df[df["代码"].astype(str).str.startswith(("920", "8", "43"))]
-    if bj.empty:
-        logger.warning("[BJ-EM] 0 行北交所，跳过")
+    if df is None or df.empty:
+        logger.warning("[EM-VAL] 拉到 0 行，跳过")
         return 0
 
     existing = {
@@ -379,11 +379,11 @@ def sync_bj_valuation_em(db: Session, trade_date: date | None = None) -> int:
     }
     inserted = 0
     updated = 0
-    for _, r in bj.iterrows():
+    for _, r in df.iterrows():
         symbol = str(r.get("代码", "")).zfill(6)
-        if not symbol.isdigit():
+        if not symbol.isdigit() or len(symbol) != 6:
             continue
-        code = symbol + ".BJ"
+        code = _to_code(symbol)
         fields = {
             "open": _f(r.get("今开")),
             "high": _f(r.get("最高")),
@@ -406,7 +406,7 @@ def sync_bj_valuation_em(db: Session, trade_date: date | None = None) -> int:
             db.add(StockDaily(code=code, trade_date=today, **fields))
             inserted += 1
     db.commit()
-    logger.info("[BJ-EM] 完成：新增 {} / 更新 {}", inserted, updated)
+    logger.info("[EM-VAL] 完成：新增 {} / 更新 {}", inserted, updated)
     return inserted + updated
 
 
@@ -468,11 +468,25 @@ def sync_pool_xq(
             logger.info("[XQ] 进度 {}/{}", i, len(pool_list))
         time.sleep(sleep_sec)
 
-    db.query(StockDaily).filter(StockDaily.trade_date == today).delete()
-    db.commit()
-    if daily_rows:
-        db.bulk_insert_mappings(StockDaily, daily_rows)
+    # upsert：不清桌子，保留 EM 全市场写入的 PE/PB；csi300/csi500 这 800 只用 xq-TTM PE + 股息率覆盖
+    existing = {
+        d.code: d for d in db.query(StockDaily).filter(StockDaily.trade_date == today).all()
+    }
+    inserted = 0
+    updated = 0
+    for r in daily_rows:
+        d = existing.get(r["code"])
+        if d:
+            for k, v in r.items():
+                if k in ("code", "trade_date"):
+                    continue
+                if v is not None:
+                    setattr(d, k, v)
+            updated += 1
+        else:
+            db.add(StockDaily(**r))
+            inserted += 1
     db.commit()
 
-    logger.info("[XQ] 完成：行情 {} / 失败 {}", len(daily_rows), failed)
-    return len(daily_rows)
+    logger.info("[XQ] 完成：新增 {} / 更新 {} / 失败 {}", inserted, updated, failed)
+    return inserted + updated

@@ -113,22 +113,22 @@ def job_daily_market():
 
 
 def job_daily_value():
-    """价值面：csi300 + csi500（雪球，含股息率）+ 北交所（东方财富，无股息率）。
-    单条失败不影响整体，写 sync_meta 时取累计 affected。
+    """价值面：先东财一次性铺满 5500+（PE/PB/市值/换手率），再雪球 csi300+csi500
+    用 TTM-PE 和股息率覆盖那 800 只，单条失败不影响整体。
     """
     logger.info("[SCHED] daily_value 开始")
     db = SessionLocal()
     try:
         cnt = 0
+        try:
+            cnt += data_sync.sync_full_valuation_em(db) or 0
+        except Exception as e:
+            logger.warning("[SCHED] daily_value em-full 失败: {}", str(e)[:120])
         for pool in ("csi300", "csi500"):
             try:
                 cnt += data_sync.sync_pool_xq(db, pool=pool) or 0
             except Exception as e:
                 logger.warning("[SCHED] daily_value pool={} 失败: {}", pool, str(e)[:120])
-        try:
-            cnt += data_sync.sync_bj_valuation_em(db) or 0
-        except Exception as e:
-            logger.warning("[SCHED] daily_value bj-em 失败: {}", str(e)[:120])
         return cnt
     finally:
         db.close()
