@@ -17,6 +17,23 @@ from sqlalchemy.orm import Session
 from app.models.stock import StockBasic, StockDaily, StockFinancial
 
 
+# ---------- akshare 全局超时补丁 ----------
+# akshare 内部用 requests.Session.send，默认无 timeout，单只股票卡住会拖死整个 sync。
+# 这里给所有 requests 强制兜底 15s（不覆盖调用方主动设置的更大值）。
+def _install_requests_timeout(default_timeout: float = 15.0):
+    import requests
+    _orig_send = requests.Session.send
+    if getattr(_orig_send, "_timeout_patched", False):
+        return
+    def send(self, request, **kwargs):
+        kwargs.setdefault("timeout", default_timeout)
+        return _orig_send(self, request, **kwargs)
+    send._timeout_patched = True
+    requests.Session.send = send
+
+_install_requests_timeout()
+
+
 # ---------- 通用工具 ----------
 
 def _to_code(symbol: str) -> str:
