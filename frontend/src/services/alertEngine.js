@@ -48,8 +48,10 @@ async function fetchQuote(code) {
       prevClose: l.prev_close ?? null,
     }
   } catch (e) {
-    // 后端没数据——切到 demo
-    demoMode = true
+    // 后端没数据：默认 quote=null（不告警），仅在 ?demo=1 时切到游走价格驱动告警
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('demo')) {
+      demoMode = true
+    }
     return null
   }
 }

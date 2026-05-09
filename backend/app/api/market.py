@@ -1,16 +1,15 @@
 """行情聚合接口（Dashboard 三块卡片）。
 
-数据全部来自 StockBasic + StockDaily 的最新一天快照；今日涨跌幅由 (close-open)/open 推算。
-现阶段 DB 只存"当日"快照，所以指数 / 板块的 30 日 sparkline 用确定性合成。
+- 指数：直连 akshare stock_zh_index_daily 拿真实点位 + 30 日折线，1h Redis 缓存
+- 板块 / 涨跌榜：DB 里 StockBasic + StockDaily 聚合，change_pct 用 prev_close + 流通市值加权
 """
 from __future__ import annotations
 
-import math
-import random
 from collections import defaultdict
 from datetime import date as Date
 
 from fastapi import APIRouter, Depends, Query
+from loguru import logger
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
@@ -22,19 +21,18 @@ from app.schemas.market import (
     MoversResponse,
     SectorQuote,
 )
+from app.services import cache as _cache
 
 
 router = APIRouter(prefix="/market", tags=["market"])
 
 
-# ---------------------- 指数定义 ----------------------
-# 用代码前缀粗略归类四大指数；anchor_value 是惯例点位，方便前端不显得"小"。
-# change_pct 由该集合内股票的市值加权平均计算，real。
+# 4 大指数：内部 code → akshare symbol
 INDEX_DEFS = [
-    {"name": "上证指数", "code": "SH000001", "anchor": 3186.42, "match": lambda c: c.startswith("60") or c.startswith("68")},
-    {"name": "深证成指", "code": "SZ399001", "anchor": 10524.18, "match": lambda c: c.startswith("00") or c.startswith("30")},
-    {"name": "创业板指", "code": "SZ399006", "anchor": 2148.62, "match": lambda c: c.startswith("30")},
-    {"name": "科创50",   "code": "SH000688", "anchor": 962.45,   "match": lambda c: c.startswith("688")},
+    {"name": "上证指数", "code": "SH000001", "ak": "sh000001", "constituents_match": lambda c: c.startswith("60") or c.startswith("68")},
+    {"name": "深证成指", "code": "SZ399001", "ak": "sz399001", "constituents_match": lambda c: c.startswith("00") or c.startswith("30")},
+    {"name": "创业板指", "code": "SZ399006", "ak": "sz399006", "constituents_match": lambda c: c.startswith("30")},
+    {"name": "科创50",   "code": "SH000688", "ak": "sh000688", "constituents_match": lambda c: c.startswith("688")},
 ]
 
 
@@ -48,92 +46,77 @@ def _change_pct(open_p: float | None, close_p: float | None) -> float | None:
     return (close_p - open_p) / open_p * 100.0
 
 
-def _spark(seed_key: str, anchor: float, current_change_pct: float, n: int = 30) -> list[float]:
-    """围绕 anchor 做高斯游走，最后一点对齐到 anchor*(1+change/100)。确定性。"""
-    rng = random.Random(hash(seed_key) & 0xFFFFFFFF)
-    p = anchor
-    series = []
-    for _ in range(n):
-        p = max(0.01, p * (1 + rng.gauss(0, 0.006)))
-        series.append(p)
-    target = anchor * (1 + current_change_pct / 100.0)
-    if series:
-        adj = target / series[-1]
-        # 平滑收敛：最后 5 点逐渐拉到 target
-        n_smooth = min(5, len(series))
-        for i in range(n_smooth):
-            w = (i + 1) / n_smooth
-            idx = len(series) - n_smooth + i
-            series[idx] = series[idx] * (1 + (adj - 1) * w)
-    return [round(v, 2) for v in series]
+def _fetch_index_real(ak_symbol: str, days: int = 30) -> dict | None:
+    """直连 akshare 拉真实指数日线，返回 {value, change, change_pct, spark, count}。
+    数据由 1h Redis 缓存包裹，调用方走 _real_indices()。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_zh_index_daily(symbol=ak_symbol)
+    except Exception as e:
+        logger.warning("[INDEX] {} 拉取失败: {}", ak_symbol, str(e)[:120])
+        return None
+    if df is None or df.empty or len(df) < 2:
+        return None
+    tail = df.tail(days)
+    closes = [round(float(v), 2) for v in tail["close"].tolist()]
+    if len(closes) < 2:
+        return None
+    latest = closes[-1]
+    prev = closes[-2]
+    change = round(latest - prev, 2)
+    change_pct = round((latest - prev) / prev * 100, 2) if prev > 0 else 0.0
+    return {
+        "value": latest,
+        "change": change,
+        "change_pct": change_pct,
+        "spark": closes,
+    }
+
+
+def _real_indices() -> dict[str, dict]:
+    """4 大指数完整快照，1h Redis 缓存。"""
+    key = _cache.make_key("indices_real_v1", "all")
+    cached = _cache.get_json(key)
+    if cached:
+        return cached
+    out: dict[str, dict] = {}
+    for d in INDEX_DEFS:
+        snap = _fetch_index_real(d["ak"])
+        if snap is not None:
+            out[d["code"]] = snap
+    if out:
+        _cache.set_json(key, out, ttl=3600)
+    return out
 
 
 # ---------------------- /market/indices ----------------------
 
 @router.get("/indices", response_model=list[IndexQuote])
 def get_indices(db: Session = Depends(get_db)):
-    """4 大指数：流通市值加权 × 真涨跌幅（close vs prev_close）。
-    冷启动只有一天数据时退回盘中口径 (close-open)/open。
+    """4 大指数：直连 akshare 拉真实指数日线（点位 / 涨跌幅 / 30 日折线全为真），
+    1h Redis 缓存。constituents 用 DB 中匹配前缀的成分股数。
+    若 akshare 不可达，对应指数从结果列表中省略，不再回退到合成。
     """
-    last_dates = (
-        db.query(StockDaily.trade_date).distinct()
-        .order_by(desc(StockDaily.trade_date)).limit(2).all()
-    )
-    if not last_dates:
-        return []
-    td = last_dates[0][0]
-    prev_td = last_dates[1][0] if len(last_dates) > 1 else None
+    real = _real_indices()
 
-    rows = (
-        db.query(StockDaily.code, StockDaily.trade_date,
-                 StockDaily.open, StockDaily.close, StockDaily.market_cap)
-        .filter(StockDaily.trade_date.in_([d for d in (td, prev_td) if d is not None]))
-        .all()
-    )
-
-    # 按 code 拼最新与前一日数据
-    by_code: dict[str, dict] = {}
-    for code, t, open_p, close_p, mc in rows:
-        rec = by_code.setdefault(code, {})
-        if t == td:
-            rec["open"] = open_p
-            rec["close"] = close_p
-            rec["mc"] = mc
-        elif prev_td is not None and t == prev_td:
-            rec["prev_close"] = close_p
-
-    pool = []  # (code, mc, change_pct)
-    for code, d in by_code.items():
-        close_p = d.get("close")
-        mc = d.get("mc")
-        if close_p is None or not mc or mc <= 0:
-            continue
-        prev = d.get("prev_close")
-        if prev and prev > 0:
-            cp = (close_p - prev) / prev * 100
-        else:
-            cp = _change_pct(d.get("open"), close_p)
-            if cp is None:
-                continue
-        pool.append((code, mc, cp))
+    # constituents 数（基于内部 DB，按代码前缀粗略统计）
+    rows = db.query(StockDaily.code).filter(
+        StockDaily.trade_date == _latest_trade_date(db)
+    ).all() if real else []
+    codes = [r[0] for r in rows]
 
     out: list[IndexQuote] = []
     for d in INDEX_DEFS:
-        members = [(c, cap, cp) for c, cap, cp in pool if d["match"](c)]
-        if not members:
+        snap = real.get(d["code"])
+        if not snap:
             continue
-        cap_sum = sum(m[1] for m in members)
-        change_pct = sum(m[1] * m[2] for m in members) / cap_sum
-        value = d["anchor"] * (1 + change_pct / 100.0)
-        change = value - d["anchor"]
+        constituents = sum(1 for c in codes if d["constituents_match"](c.split(".")[0]))
         out.append(IndexQuote(
-            name=d["name"],
-            code=d["code"],
-            value=round(value, 2),
-            change=round(change, 2),
-            change_pct=round(change_pct, 2),
-            constituents=len(members),
-            spark=_spark(d["code"] + str(td), d["anchor"], change_pct),
+            name=d["name"], code=d["code"],
+            value=snap["value"], change=snap["change"], change_pct=snap["change_pct"],
+            constituents=constituents,
+            spark=snap["spark"],
         ))
     return out
 

@@ -179,8 +179,16 @@ const headerMetrics = computed(() => {
   const fmt = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
   // 振幅 = (high - low) / open
   const amp = l.open > 0 && l.high != null && l.low != null ? ((l.high - l.low) / l.open) * 100 : null
-  // 量比 = 当日量 / 5 日均量。无 5 日数据时退化为换手率粗估（mock 因子 0.8~1.2）
-  const volRatio = l.turnover != null ? (l.turnover / 1.2) : null
+  // 量比 = 当日量 / 过去 5 日均量；只在 K 线 ≥ 6 个交易日时计算，否则 null
+  let volRatio = null
+  if (klineData.value && klineData.value.length >= 6 && l.volume) {
+    const last5 = klineData.value.slice(-6, -1)  // 倒数第 2 到第 6 共 5 根（不含当日）
+    const vols = last5.map((k) => k.v ?? k.volume).filter((v) => v != null && v > 0)
+    if (vols.length >= 3) {
+      const avg5 = vols.reduce((a, b) => a + b, 0) / vols.length
+      if (avg5 > 0) volRatio = l.volume / avg5
+    }
+  }
   // 52 周高/低：从 K 线序列里提取（如果加载完成）
   let high52 = null, low52 = null
   if (klineData.value && klineData.value.length) {

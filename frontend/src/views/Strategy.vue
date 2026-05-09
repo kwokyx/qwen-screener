@@ -433,6 +433,17 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
             </div>
           </div>
 
+          <!-- 数据源警示：回测用了合成价格序列 -->
+          <div v-if="result && result.data_source !== 'real'"
+               :style="{ marginBottom: '10px', padding: '9px 12px', background: A2.amberSoft, color: '#8C5A0F', border: `1px solid ${A2.amber}33`, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }">
+            <Icon name="alert" :size="13" />
+            <span style="flex:1">
+              <strong>{{ result.data_source === 'synthesized' ? '完全模拟价格' : '部分模拟价格' }}</strong>：
+              本系统当前历史日 K 线不足，回测使用了确定性高斯游走合成价格。结果仅展示算法逻辑，<strong>不代表真实收益</strong>。
+              真实数据积累后将自动切换。
+            </span>
+          </div>
+
           <!-- Equity curve -->
           <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', padding: '16px', boxShadow: A2.shadow }">
             <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }">
