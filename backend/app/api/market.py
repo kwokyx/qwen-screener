@@ -72,22 +72,50 @@ def _spark(seed_key: str, anchor: float, current_change_pct: float, n: int = 30)
 
 @router.get("/indices", response_model=list[IndexQuote])
 def get_indices(db: Session = Depends(get_db)):
-    td = _latest_trade_date(db)
-    if td is None:
+    """4 大指数：流通市值加权 × 真涨跌幅（close vs prev_close）。
+    冷启动只有一天数据时退回盘中口径 (close-open)/open。
+    """
+    last_dates = (
+        db.query(StockDaily.trade_date).distinct()
+        .order_by(desc(StockDaily.trade_date)).limit(2).all()
+    )
+    if not last_dates:
         return []
+    td = last_dates[0][0]
+    prev_td = last_dates[1][0] if len(last_dates) > 1 else None
+
     rows = (
-        db.query(StockDaily.code, StockDaily.open, StockDaily.close, StockDaily.market_cap)
-        .filter(StockDaily.trade_date == td)
+        db.query(StockDaily.code, StockDaily.trade_date,
+                 StockDaily.open, StockDaily.close, StockDaily.market_cap)
+        .filter(StockDaily.trade_date.in_([d for d in (td, prev_td) if d is not None]))
         .all()
     )
 
-    # 先把所有股票的 (cap, open, close) 缓存
-    pool = []
-    for r in rows:
-        cp = _change_pct(r.open, r.close)
-        if cp is None or r.market_cap is None or r.market_cap <= 0:
+    # 按 code 拼最新与前一日数据
+    by_code: dict[str, dict] = {}
+    for code, t, open_p, close_p, mc in rows:
+        rec = by_code.setdefault(code, {})
+        if t == td:
+            rec["open"] = open_p
+            rec["close"] = close_p
+            rec["mc"] = mc
+        elif prev_td is not None and t == prev_td:
+            rec["prev_close"] = close_p
+
+    pool = []  # (code, mc, change_pct)
+    for code, d in by_code.items():
+        close_p = d.get("close")
+        mc = d.get("mc")
+        if close_p is None or not mc or mc <= 0:
             continue
-        pool.append((r.code, r.market_cap, cp))
+        prev = d.get("prev_close")
+        if prev and prev > 0:
+            cp = (close_p - prev) / prev * 100
+        else:
+            cp = _change_pct(d.get("open"), close_p)
+            if cp is None:
+                continue
+        pool.append((code, mc, cp))
 
     out: list[IndexQuote] = []
     for d in INDEX_DEFS:
@@ -114,43 +142,82 @@ def get_indices(db: Session = Depends(get_db)):
 
 @router.get("/sectors", response_model=list[SectorQuote])
 def get_sectors(limit: int = Query(default=8, ge=1, le=30), db: Session = Depends(get_db)):
-    td = _latest_trade_date(db)
-    if td is None:
-        return []
-    rows = (
-        db.query(
-            StockBasic.industry,
-            StockBasic.code,
-            StockBasic.name,
-            StockDaily.open,
-            StockDaily.close,
-        )
-        .join(StockDaily, StockBasic.code == StockDaily.code)
-        .filter(StockDaily.trade_date == td, StockBasic.industry.isnot(None))
+    """行业涨跌幅：流通市值加权平均，跨日 (close vs prev_close)。
+
+    若 DB 只存了 1 个交易日（冷启动），退回 (close - open) / open 这个盘中口径，
+    并把所有股票按等权处理；运行 ≥ 2 日后自动用真实涨跌幅 + 市值加权。
+    """
+    # 拉最近两个交易日
+    last_dates = (
+        db.query(StockDaily.trade_date)
+        .distinct()
+        .order_by(desc(StockDaily.trade_date))
+        .limit(2)
         .all()
     )
+    if not last_dates:
+        return []
+    td = last_dates[0][0]
+    prev_td = last_dates[1][0] if len(last_dates) > 1 else None
+
+    # 拉这两天的所有数据（带 open/close 兜底 + market_cap 加权）
+    rows = (
+        db.query(
+            StockBasic.industry, StockBasic.code, StockBasic.name,
+            StockDaily.trade_date, StockDaily.open, StockDaily.close, StockDaily.market_cap,
+        )
+        .join(StockDaily, StockBasic.code == StockDaily.code)
+        .filter(StockBasic.industry.isnot(None))
+        .filter(StockDaily.trade_date.in_([d for d in (td, prev_td) if d is not None]))
+        .all()
+    )
+
+    # 按 code 收齐两天数据，算各股 change_pct
+    by_code: dict[str, dict] = {}
+    for industry, code, name, t, open_p, close_p, mc in rows:
+        rec = by_code.setdefault(code, {"industry": industry, "name": name})
+        if t == td:
+            rec["close"] = close_p
+            rec["open"] = open_p
+            rec["mc"] = mc
+        elif prev_td is not None and t == prev_td:
+            rec["prev_close"] = close_p
+
     bucket: dict[str, list] = defaultdict(list)
-    for industry, code, name, open_p, close_p in rows:
-        cp = _change_pct(open_p, close_p)
-        if cp is None:
+    for code, d in by_code.items():
+        close_p = d.get("close")
+        if close_p is None:
             continue
-        bucket[industry].append({"code": code, "name": name, "change_pct": cp})
+        prev = d.get("prev_close")
+        if prev and prev > 0:
+            cp = (close_p - prev) / prev * 100   # 真涨跌幅，含跳空
+        else:
+            cp = _change_pct(d.get("open"), close_p)  # 冷启动兜底（盘中）
+            if cp is None:
+                continue
+        bucket[d["industry"]].append({
+            "code": code, "name": d["name"], "change_pct": cp, "mc": d.get("mc"),
+        })
 
     out: list[SectorQuote] = []
     for industry, items in bucket.items():
         if not items:
             continue
-        avg = sum(it["change_pct"] for it in items) / len(items)
+        # 流通市值加权；若全部无 mc 则等权回退
+        total_mc = sum((it["mc"] or 0) for it in items)
+        if total_mc > 0:
+            weighted = sum(it["change_pct"] * (it["mc"] or 0) for it in items) / total_mc
+        else:
+            weighted = sum(it["change_pct"] for it in items) / len(items)
         leader = max(items, key=lambda x: x["change_pct"])
         out.append(SectorQuote(
             name=industry,
-            change_pct=round(avg, 2),
+            change_pct=round(weighted, 2),
             count=len(items),
             leader_name=leader["name"],
             leader_pct=round(leader["change_pct"], 2),
         ))
 
-    # 按"涨跌幅绝对值"排，让最热的板块先冒出来
     out.sort(key=lambda s: -abs(s.change_pct))
     return out[:limit]
 

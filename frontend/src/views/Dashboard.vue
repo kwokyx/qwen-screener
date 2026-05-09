@@ -39,21 +39,13 @@ const { load: loadMoverKlines, get: moverSpark } = useKlineCache(30)
 const sectorsUp = computed(() => [...sectors.value].filter((s) => s.change_pct >= 0).sort((a, b) => b.change_pct - a.change_pct))
 const sectorsDown = computed(() => [...sectors.value].filter((s) => s.change_pct < 0).sort((a, b) => a.change_pct - b.change_pct))
 
-// 涨跌停 / 平 数据：从 ticker 推
+// 市场概况：上涨 / 下跌 / 总成交（涨停跌停 akshare 没接口，不编了）
 const marketStats = computed(() => {
   const t = tickerInfo.value
   if (!t) return null
-  const total = (t.advancers || 0) + (t.decliners || 0)
-  // 涨停跌停的真实数据后端没有，先按经验分布近似
-  const limitUp = Math.round((t.advancers || 0) * 0.018)
-  const limitDown = Math.round((t.decliners || 0) * 0.012)
-  const flat = Math.max(0, total - (t.advancers || 0) - (t.decliners || 0))
   return {
     advancers: t.advancers || 0,
     decliners: t.decliners || 0,
-    flat,
-    limitUp,
-    limitDown,
     amount: t.total_amount_yi || 0,
     tradeDate: t.trade_date,
   }
@@ -145,7 +137,7 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
           <div v-if="!marketStats" :style="{ display: 'flex', flexDirection: 'column', gap: '5px' }">
             <Skeleton :height="13" :width="'80%'" /><Skeleton :height="13" :width="'70%'" />
           </div>
-          <div v-else :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', fontSize: '11px' }">
+          <div v-else :style="{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }">
             <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">
               <span :style="{ color: A2.textMuted }">上涨</span>
               <span :style="{ color: A2.up, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ marketStats.advancers.toLocaleString() }}</span>
@@ -154,15 +146,7 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
               <span :style="{ color: A2.textMuted }">下跌</span>
               <span :style="{ color: A2.down, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ marketStats.decliners.toLocaleString() }}</span>
             </div>
-            <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">
-              <span :style="{ color: A2.textMuted }">涨停</span>
-              <span :style="{ color: A2.up, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ marketStats.limitUp }}</span>
-            </div>
-            <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">
-              <span :style="{ color: A2.textMuted }">跌停</span>
-              <span :style="{ color: A2.down, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ marketStats.limitDown }}</span>
-            </div>
-            <div :style="{ gridColumn: '1 / -1', borderTop: `1px solid ${A2.borderHair}`, paddingTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">
+            <div :style="{ borderTop: `1px solid ${A2.borderHair}`, paddingTop: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }">
               <span :style="{ color: A2.textMuted }">总成交</span>
               <span :style="{ color: A2.text, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ marketStats.amount.toLocaleString() }} 亿</span>
             </div>
