@@ -41,8 +41,6 @@ function onKey(e) {
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
-// 缓存模拟"实时价格"——以加入价为基准做随机游走，避免 dock 看起来死气
-// 这里只用 ref 价格 + 最近一次随机偏移；alertEngine 的演示价格其实跟它不重叠
 const items = computed(() => wl.items)
 </script>
 

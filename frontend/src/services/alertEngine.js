@@ -1,10 +1,11 @@
 // 预警轮询引擎
 //
-// 思路：每 N 秒拉一次每只自选股的最新价（先 GET /api/v1/stock/{code}），
+// 思路：每 N 秒拉一次每只自选股的最新价（GET /api/v1/stock/{code}），
 // 把 {code, close, open, prevClose} 喂给 watchlist.evaluateAlerts，触发的写入 notifications。
 //
-// 没接后端 / 接口 404 时降级为"模拟行情"——基于自加入价做 ±1.5% 高斯抖动，
-// 这样原型展示也能看到通知功能跑起来（demo 模式）。
+// 默认严格模式：真实行情拉不到就跳过，不假报价、不触发假告警。
+// 仅在 URL 带 ?demo=1 时进入"模拟行情"——以加入价为基准 ±1.5% 高斯抖动，
+// 用于不开服务时的原型演示。
 
 import { useWatchlistStore } from '../stores/watchlist'
 import { useNotificationsStore } from '../stores/notifications'
@@ -67,10 +68,7 @@ async function tick() {
       quote = demoQuote(item)
     } else {
       quote = await fetchQuote(item.code)
-      if (!quote) {
-        // 第一次失败就整个切 demo
-        quote = demoQuote(item)
-      }
+      if (!quote) continue   // 没真实行情就跳过这只，不再合成假报价触发告警
     }
 
     const fired = wl.evaluateAlerts(item.code, quote)

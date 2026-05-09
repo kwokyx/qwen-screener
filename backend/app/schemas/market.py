@@ -5,11 +5,11 @@ from pydantic import BaseModel
 class IndexQuote(BaseModel):
     name: str           # 上证指数
     code: str           # SH000001
-    value: float        # 指数点位（基于成分股加权计算）
+    value: float        # 指数点位（直连交易所真实点位）
     change: float       # 涨跌点数
     change_pct: float   # 涨跌幅（%）
-    constituents: int   # 成分股数量
-    spark: list[float]  # 30 个点的简化走势（确定性合成）
+    constituents: int   # 成分股数量（DB 中前缀匹配的真实股票数）
+    spark: list[float]  # 30 个交易日真实收盘价
 
 
 class SectorQuote(BaseModel):
