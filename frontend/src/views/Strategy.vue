@@ -23,7 +23,7 @@ const monthLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8�
 // ---- 4 个预设策略：每条都对应真实的 conditions 数组 ----
 const strategies = [
   {
-    id: 0, name: '高股息防御', tag: '稳健', author: '千问出品',
+    id: 0, name: '高股息防御', tag: '稳健', subtitle: '股息率 > 3% · PE < 15 · 市值 > 500 亿',
     conditions: [
       { field: 'dividend_yield', op: 'gt', value: 3 },
       { field: 'pe', op: 'lt', value: 15 },
@@ -34,7 +34,7 @@ const strategies = [
     stop_loss: -0.15,
   },
   {
-    id: 1, name: '低估值蓝筹', tag: '平衡', author: '千问出品',
+    id: 1, name: '低估值蓝筹', tag: '平衡', subtitle: 'PE < 12 · PB < 1.5 · ROE > 10% · 市值 > 1000 亿',
     conditions: [
       { field: 'pe', op: 'lt', value: 12 },
       { field: 'pb', op: 'lt', value: 1.5 },
@@ -46,7 +46,7 @@ const strategies = [
     stop_loss: -0.15,
   },
   {
-    id: 2, name: '高 ROE 成长', tag: '成长', author: '我的策略',
+    id: 2, name: '高 ROE 成长', tag: '成长', subtitle: 'ROE > 15% · 净利同比 > 20% · PE < 50',
     conditions: [
       { field: 'roe', op: 'gt', value: 15 },
       { field: 'profit_yoy', op: 'gt', value: 20 },
@@ -57,7 +57,7 @@ const strategies = [
     stop_loss: -0.20,
   },
   {
-    id: 3, name: '高毛利消费', tag: '主题', author: '我的策略',
+    id: 3, name: '高毛利消费', tag: '主题', subtitle: '毛利率 > 40% · ROE > 12% · PE < 35',
     conditions: [
       { field: 'gross_margin', op: 'gt', value: 40 },
       { field: 'roe', op: 'gt', value: 12 },
@@ -328,7 +328,7 @@ const ddRect = computed(() => !chart.value.empty && chart.value.peakIdx >= 0 && 
                 <span v-if="activeStrategy === i && result" :style="{ color: A2.textMuted }">夏普 <span :style="{ color: A2.text, fontWeight: 700 }">{{ result.metrics.sharpe.toFixed(2) }}</span></span>
                 <span v-else :style="{ color: A2.textDim }">{{ s.conditions.length }} 个条件 · 持仓 {{ s.holdings_count }} 只</span>
               </div>
-              <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '3px' }">{{ s.author }}</div>
+              <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }" :title="s.subtitle">{{ s.subtitle }}</div>
             </div>
           </div>
 

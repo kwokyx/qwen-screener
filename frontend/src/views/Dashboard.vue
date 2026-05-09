@@ -272,75 +272,30 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
         </div>
       </div>
 
-      <!-- =============== Bottom: 板块涨跌强度条 + 千问观察 =============== -->
-      <div :style="{ display: 'grid', gridTemplateColumns: '1.7fr 1fr', gap: '10px' }">
-        <!-- 板块涨跌强度条（只用真实数据） -->
-        <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '8px', overflow: 'hidden', boxShadow: A2.shadow }">
-          <div :style="{ padding: '11px 14px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }">
-            <div>
-              <div :style="{ fontSize: '13px', fontWeight: 700 }">板块涨跌幅强度</div>
-              <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '1px' }">条形长度 ∝ 涨跌幅绝对值</div>
-            </div>
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">{{ sectors.length }} 个行业</span>
+      <!-- =============== Bottom: 板块涨跌强度（全宽） =============== -->
+      <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '8px', overflow: 'hidden', boxShadow: A2.shadow }">
+        <div :style="{ padding: '11px 14px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }">
+          <div>
+            <div :style="{ fontSize: '13px', fontWeight: 700 }">板块涨跌幅强度</div>
+            <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '1px' }">条形长度 ∝ 涨跌幅绝对值，流通市值加权</div>
           </div>
-          <div :style="{ padding: '10px 14px', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', columnGap: '24px', rowGap: '5px', maxHeight: '260px', overflow: 'auto' }">
-            <template v-if="!sectors.length">
-              <Skeleton v-for="n in 12" :key="n" :height="14" />
-            </template>
-            <template v-else>
-              <div v-for="s in sectors" :key="s.name"
-                   :style="{ display: 'grid', gridTemplateColumns: '70px 1fr 50px', alignItems: 'center', gap: '8px', fontSize: '11px' }">
-                <span :style="{ color: A2.textSub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ s.name }}</span>
-                <div :style="{ position: 'relative', height: '6px', background: A2.bgDeep, borderRadius: '3px', overflow: 'hidden' }">
-                  <div :style="{ position: 'absolute', left: s.change_pct >= 0 ? '50%' : 'auto', right: s.change_pct >= 0 ? 'auto' : '50%', top: 0, height: '100%', width: `${Math.min(50, Math.abs(s.change_pct) * 8)}%`, background: s.change_pct >= 0 ? A2.up : A2.down }" />
-                  <div :style="{ position: 'absolute', left: '50%', top: 0, height: '100%', width: '1px', background: A2.borderStrong }" />
-                </div>
-                <span :style="{ color: s.change_pct >= 0 ? A2.up : A2.down, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', textAlign: 'right' }">{{ s.change_pct >= 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</span>
-              </div>
-            </template>
-          </div>
+          <span :style="{ fontSize: '11px', color: A2.textMuted }">{{ sectors.length }} 个行业</span>
         </div>
-
-        <!-- 千问观察 -->
-        <div :style="{ background: A2.qwenGradSoft, border: `1px solid ${A2.borderHair}`, borderRadius: '8px', padding: '14px', boxShadow: A2.shadow, display: 'flex', flexDirection: 'column' }">
-          <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }">
-            <div :style="{ width: '22px', height: '22px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 800, borderRadius: '5px', boxShadow: '0 1px 4px rgba(36,86,216,0.30)' }">千</div>
-            <div :style="{ fontSize: '12px', fontWeight: 700 }">千问每日观察</div>
-            <span :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ marketStats?.tradeDate || '—' }}</span>
-          </div>
-          <div v-if="!sectors.length || !movers" :style="{ flex: 1 }">
-            <Skeleton :height="11" :width="'94%'" :style="{ marginBottom: '6px' }" />
-            <Skeleton :height="11" :width="'88%'" :style="{ marginBottom: '6px' }" />
-            <Skeleton :height="11" :width="'72%'" />
-          </div>
-          <div v-else :style="{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }">
-            <div :style="{ fontSize: '12px', color: A2.textSub, lineHeight: 1.7 }">
-              市场延续<strong>结构性行情</strong>，
-              <span :style="{ color: A2.up, fontWeight: 700 }">{{ sectorsUp[0]?.name }} {{ sectorsUp[0] ? '+' + sectorsUp[0].change_pct.toFixed(2) : '—' }}%</span> 领涨，
-              <span :style="{ color: A2.down, fontWeight: 700 }">{{ sectorsDown[0]?.name }} {{ sectorsDown[0]?.change_pct?.toFixed(2) || '—' }}%</span> 调整。
+        <div :style="{ padding: '10px 14px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', columnGap: '24px', rowGap: '5px', maxHeight: '260px', overflow: 'auto' }">
+          <template v-if="!sectors.length">
+            <Skeleton v-for="n in 18" :key="n" :height="14" />
+          </template>
+          <template v-else>
+            <div v-for="s in sectors" :key="s.name"
+                 :style="{ display: 'grid', gridTemplateColumns: '70px 1fr 50px', alignItems: 'center', gap: '8px', fontSize: '11px' }">
+              <span :style="{ color: A2.textSub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ s.name }}</span>
+              <div :style="{ position: 'relative', height: '6px', background: A2.bgDeep, borderRadius: '3px', overflow: 'hidden' }">
+                <div :style="{ position: 'absolute', left: s.change_pct >= 0 ? '50%' : 'auto', right: s.change_pct >= 0 ? 'auto' : '50%', top: 0, height: '100%', width: `${Math.min(50, Math.abs(s.change_pct) * 8)}%`, background: s.change_pct >= 0 ? A2.up : A2.down }" />
+                <div :style="{ position: 'absolute', left: '50%', top: 0, height: '100%', width: '1px', background: A2.borderStrong }" />
+              </div>
+              <span :style="{ color: s.change_pct >= 0 ? A2.up : A2.down, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', textAlign: 'right' }">{{ s.change_pct >= 0 ? '+' : '' }}{{ s.change_pct.toFixed(2) }}%</span>
             </div>
-            <div :style="{ paddingTop: '8px', borderTop: `1px dashed ${A2.borderHair}`, display: 'flex', flexDirection: 'column', gap: '5px' }">
-              <div v-if="movers.gainers[0]" :style="{ display: 'flex', gap: '6px', fontSize: '11px', alignItems: 'baseline', cursor: 'pointer' }" @click="gotoDetail(movers.gainers[0].code)">
-                <span :style="{ color: A2.qwen, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }">01</span>
-                <span :style="{ color: A2.text, fontWeight: 600, flexShrink: 0 }">领涨</span>
-                <span :style="{ color: A2.textSub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ movers.gainers[0].name }} <span :style="{ color: A2.up, fontWeight: 600 }">+{{ movers.gainers[0].change_pct.toFixed(2) }}%</span></span>
-              </div>
-              <div v-if="movers.losers[0]" :style="{ display: 'flex', gap: '6px', fontSize: '11px', alignItems: 'baseline', cursor: 'pointer' }" @click="gotoDetail(movers.losers[0].code)">
-                <span :style="{ color: A2.qwen, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }">02</span>
-                <span :style="{ color: A2.text, fontWeight: 600, flexShrink: 0 }">领跌</span>
-                <span :style="{ color: A2.textSub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ movers.losers[0].name }} <span :style="{ color: A2.down, fontWeight: 600 }">{{ movers.losers[0].change_pct.toFixed(2) }}%</span></span>
-              </div>
-              <div v-if="movers.by_amount[0]" :style="{ display: 'flex', gap: '6px', fontSize: '11px', alignItems: 'baseline', cursor: 'pointer' }" @click="gotoDetail(movers.by_amount[0].code)">
-                <span :style="{ color: A2.qwen, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }">03</span>
-                <span :style="{ color: A2.text, fontWeight: 600, flexShrink: 0 }">量能</span>
-                <span :style="{ color: A2.textSub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ movers.by_amount[0].name }} <span :style="{ color: A2.qwenDeep, fontWeight: 600 }">{{ movers.by_amount[0].amount.toFixed(1) }} 亿</span></span>
-              </div>
-            </div>
-            <button @click="router.push('/chat')"
-                    :style="{ width: '100%', marginTop: 'auto', padding: '8px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 6px rgba(36,86,216,0.25)' }">
-              <Icon name="sparkle" :size="11" /> 让千问帮我选股
-            </button>
-          </div>
+          </template>
         </div>
       </div>
     </div>

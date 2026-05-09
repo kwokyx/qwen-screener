@@ -54,7 +54,8 @@ const stats = computed(() => {
   ]
 })
 
-// 千问推荐度——简易合成分（PE 越低、股息率越高、ROE 越高分越高）
+// 价值分（heuristic）：60 + PE 折算（最多 +20）+ 股息率 ×2（最多 +15）+ ROE（最多 +15）；
+// 不是 AI 评分，是固定加权公式，便于在筛选结果里横向比较。
 function bullScore(it) {
   let s = 60
   if (it.pe && it.pe > 0) s += Math.max(0, Math.min(20, 25 - it.pe * 0.5))
@@ -63,7 +64,7 @@ function bullScore(it) {
   return Math.round(Math.max(0, Math.min(99, s)))
 }
 
-const headers = ['#', '代码', '名称', '行业', '现价', 'PE', 'PB', 'ROE', '股息率', '总市值', '千问', '30日走势', '操作']
+const headers = ['#', '代码', '名称', '行业', '现价', 'PE', 'PB', 'ROE', '股息率', '总市值', '价值分', '30日走势', '操作']
 
 async function load() {
   loading.value = true
@@ -118,7 +119,7 @@ onMounted(load)
             <div :style="{ fontSize: '16px', fontWeight: 700, letterSpacing: '-0.2px' }">筛选结果</div>
             <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '1px' }">
               共 <span :style="{ color: A2.qwenDeep, fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace' }">{{ total }}</span> 只
-              · 沪深300 · 千问推荐排序
+              · 沪深300 · 按价值分排序
             </div>
           </div>
           <div style="flex:1" />
@@ -185,12 +186,13 @@ onMounted(load)
                 <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.roe > 10 ? A2.up : A2.textSub, fontWeight: s.roe > 10 ? 600 : 500 }">{{ s.roe != null ? s.roe.toFixed(2) + '%' : '—' }}</td>
                 <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.dividend_yield > 4 ? A2.up : A2.textSub, fontWeight: s.dividend_yield > 4 ? 600 : 500 }">{{ s.dividend_yield != null ? s.dividend_yield.toFixed(2) + '%' : '—' }}</td>
                 <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ s.market_cap != null ? Math.round(s.market_cap).toLocaleString() : '—' }}<span :style="{ color: A2.textDim, fontSize: '9px' }">亿</span></td>
-                <td :style="{ padding: '9px 8px', textAlign: 'right' }">
+                <td :style="{ padding: '9px 8px', textAlign: 'right' }"
+                    title="价值分 = 60 + 低 PE 加分(≤20) + 股息率×2(≤15) + ROE(≤15)，固定公式，非 AI 评分">
                   <div :style="{ display: 'inline-flex', alignItems: 'center', gap: '4px' }">
                     <div :style="{ width: '36px', height: '4px', background: A2.bgDeep, borderRadius: '2px', overflow: 'hidden' }">
-                      <div :style="{ width: `${bullScore(s)}%`, height: '100%', background: A2.qwenGrad }" />
+                      <div :style="{ width: `${bullScore(s)}%`, height: '100%', background: A2.textSub }" />
                     </div>
-                    <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '10.5px' }">{{ bullScore(s) }}</span>
+                    <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.text, fontSize: '10.5px' }">{{ bullScore(s) }}</span>
                   </div>
                 </td>
                 <td :style="{ padding: '7px 8px' }"><Sparkline :data="resultSpark(s.code)" :width="64" :height="20" /></td>
