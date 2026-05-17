@@ -347,7 +347,7 @@ const valuationCells = computed(() => {
       </div>
     </div>
 
-    <template v-else-if="detail">
+    <div v-else-if="detail" class="mobile-stack" :style="{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }">
       <!-- 2-row header so metrics never get squeezed under the title row -->
       <div :style="{ background: A2.surface, borderBottom: `1px solid ${A2.borderHair}`, padding: '12px 22px', display: 'flex', flexDirection: 'column', gap: '12px', flexShrink: 0 }">
         <div :style="{ display: 'flex', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }">
@@ -570,7 +570,7 @@ const valuationCells = computed(() => {
           </div>
         </div>
       </div>
-    </template>
+    </div>
   </Shell>
 </template>
 

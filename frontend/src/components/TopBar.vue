@@ -109,7 +109,7 @@ watch(() => route.name, async () => {
           <span :style="{ color: A2.textMuted, fontWeight: 500, fontSize: '10px', letterSpacing: '1.2px', marginLeft: '2px' }">TERMINAL</span>
         </div>
       </div>
-      <div :style="{ position: 'relative', display: 'flex', gap: 0 }">
+      <div class="topbar-tabs" :style="{ position: 'relative', display: 'flex', gap: 0 }">
         <div v-for="(t, i) in tabs" :key="t.id"
              :ref="el => tabRefs[i] = el"
              class="tab-link"

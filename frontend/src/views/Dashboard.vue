@@ -97,7 +97,7 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
 
 <template>
   <Shell>
-    <div :style="{ flex: 1, overflow: 'auto', padding: '12px 16px 16px' }">
+    <div class="mobile-stack" :style="{ flex: 1, overflow: 'auto', padding: '12px 16px 16px' }">
 
       <!-- =============== Top: 4 indices · 紧凑布局 + 市场概况 =============== -->
       <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr) 280px', gap: '10px', marginBottom: '10px' }">

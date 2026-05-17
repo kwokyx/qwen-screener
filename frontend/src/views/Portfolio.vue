@@ -144,7 +144,7 @@ const fmtDays = (ts) => {
 
 <template>
   <Shell>
-    <div :style="{ flex: 1, overflow: 'auto', padding: '16px' }">
+    <div class="mobile-stack" :style="{ flex: 1, overflow: 'auto', padding: '16px' }">
       <!-- Hero summary -->
       <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }">
         <div class="card" :style="{ padding: '14px 16px' }">

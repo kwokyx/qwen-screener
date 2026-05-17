@@ -174,3 +174,43 @@ button:focus-visible {
 .text-muted { color: #7A776F; }
 .text-dim   { color: #B8B4A8; }
 .text-sub   { color: #3F3D38; }
+
+/* ---------- 移动端响应式（P1-5）----------
+   主视图三件套 Dashboard / Detail / Portfolio 在 ≤768px 不破版。
+
+   思路：这些 view 大量用内联 :style 设 grid-template-columns，没有 class
+   做 CSS hook。给视图根加上 .mobile-stack，下面用属性选择器把所有
+   带 grid-template-columns 的子节点强制堆成 1fr，避免多列在窄屏溢出。
+   inline style 会赢，必须 !important。
+*/
+@media (max-width: 768px) {
+  .mobile-stack {
+    padding: 10px !important;
+  }
+  .mobile-stack [style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+  .mobile-stack [style*="grid-template-columns"][style*="repeat(2"] ,
+  .mobile-stack [style*="grid-template-columns"][style*="1fr 1fr"] {
+    /* 2 列布局保留（4 个小卡变 2x2 更紧凑） */
+    grid-template-columns: 1fr 1fr !important;
+  }
+  /* 4 个 hero 卡片这种 1fr×4 强制 2x2，比单列更划算 */
+  .mobile-stack [style*="grid-template-columns"][style*="1fr 1fr 1fr 1fr"] ,
+  .mobile-stack [style*="grid-template-columns"][style*="repeat(4"] {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  /* TopBar 标签栏允许横向滚动而不溢出 */
+  .topbar-tabs {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .topbar-tabs::-webkit-scrollbar { display: none; }
+  /* 表格在窄屏允许横滚 */
+  .mobile-stack table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}
