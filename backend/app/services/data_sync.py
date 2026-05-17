@@ -452,6 +452,92 @@ def sync_full_valuation_em(db: Session, trade_date: date | None = None) -> int:
     return inserted + updated
 
 
+# ---------- K 线历史回填 ----------
+
+def backfill_kline_single(db: Session, code: str, days: int) -> int:
+    """从 akshare 拉单只股票最近 N 个交易日的日线写入 stock_daily。已有日期 skip。
+
+    被 api/stock.py 的 /kline 懒加载端点和 scheduler 的全量周任务共用。
+    timeout 由 _install_requests_timeout 在模块加载时打的猴子补丁兜底（15s/请求）。
+    """
+    from datetime import date as _date, timedelta
+    import akshare as ak
+
+    sym = code.split(".")[0]
+    end = _date.today()
+    # 多拉一倍天数缓冲（节假日 / 停牌）
+    start = end - timedelta(days=max(days * 2, 60))
+    try:
+        df = ak.stock_zh_a_hist(
+            symbol=sym, period="daily",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+            adjust="qfq",
+        )
+    except Exception:
+        return 0
+    if df is None or df.empty:
+        return 0
+
+    have_dates = {
+        r[0] for r in db.query(StockDaily.trade_date).filter(StockDaily.code == code).all()
+    }
+    inserted = 0
+    for _, r in df.iterrows():
+        raw = r.get("日期")
+        if isinstance(raw, _date):
+            td = raw
+        else:
+            try:
+                td = _date.fromisoformat(str(raw))
+            except Exception:
+                continue
+        if td in have_dates:
+            continue
+        try:
+            db.add(StockDaily(
+                code=code, trade_date=td,
+                open=float(r.get("开盘") or 0) or None,
+                high=float(r.get("最高") or 0) or None,
+                low=float(r.get("最低") or 0) or None,
+                close=float(r.get("收盘") or 0) or None,
+                volume=float(r.get("成交量") or 0) or None,
+                amount=float(r.get("成交额") or 0) or None,
+                turnover=float(r.get("换手率") or 0) or None,
+            ))
+            inserted += 1
+        except Exception:
+            db.rollback()
+            continue
+    if inserted:
+        db.commit()
+    return inserted
+
+
+def backfill_kline_all(db: Session, days: int = 60, sleep_sec: float = 0.05) -> int:
+    """全市场 K 线回填：给所有 stock_basic 里的代码补 N 个交易日历史。
+
+    5500+ 只 × 1 次 akshare 请求 ≈ 30-50 分钟。每只 timeout 15s 兜底（requests 补丁）。
+    单只失败跳过，整体不中断。建议在 scheduler 周任务里跑（周日 03:00）。
+    """
+    pool = [{"code": c} for (c,) in db.query(StockBasic.code).all()]
+    total_inserted = 0
+
+    def process(p):
+        nonlocal total_inserted
+        n = backfill_kline_single(db, p["code"], days)
+        total_inserted += n
+        return n  # 用作 process_pool 的成功标志
+
+    process_pool(
+        pool, process,
+        label=f"KLINE-BACKFILL {days}d",
+        sleep_sec=sleep_sec,
+        log_every=200,
+    )
+    return total_inserted
+
+
 def sync_pool_xq(
     db: Session,
     pool: str = "csi300",

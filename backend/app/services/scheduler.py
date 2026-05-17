@@ -5,11 +5,13 @@
     周一-周五 16:00   sync_pool_xq      csi300 + csi500 共 800 只价值面（PE/PB/股息率）
     周六     02:00   sync_pool_industry + sync_pool_financial  行业 + 财务
     周日     02:00   sync_basic        全 A 股代码列表（新股 / 退市更新）
+    周日     03:00   weekly_kline_backfill  全市场 60 天历史 K 线回填
     每 6h            db_backup         冷备份 stock.db → /app/data/backups/
 
 调度器随 FastAPI 启动起，停服时自动关。每次任务的执行时间会写到 sync_meta 表，
 供前端 /health/data 显示"最后更新于..."。
 """
+import threading
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -184,12 +186,23 @@ def job_db_backup():
     return f"{status}: {rv.get('reason', '')}"
 
 
+def job_weekly_kline_backfill():
+    """全市场 60 天历史 K 线回填。周日 03:00 跑，约 30-50 分钟。"""
+    logger.info("[SCHED] weekly_kline_backfill 开始")
+    db = SessionLocal()
+    try:
+        return data_sync.backfill_kline_all(db, days=60)
+    finally:
+        db.close()
+
+
 JOBS = {
-    "daily_market":        job_daily_market,
-    "daily_value":         job_daily_value,
-    "weekly_fundamentals": job_weekly_fundamentals,
-    "weekly_basic":        job_weekly_basic,
-    "db_backup":           job_db_backup,
+    "daily_market":           job_daily_market,
+    "daily_value":            job_daily_value,
+    "weekly_fundamentals":    job_weekly_fundamentals,
+    "weekly_basic":           job_weekly_basic,
+    "weekly_kline_backfill":  job_weekly_kline_backfill,
+    "db_backup":              job_db_backup,
 }
 
 
@@ -200,6 +213,25 @@ def run_now(job_name: str) -> dict:
         raise ValueError(f"未知任务: {job_name}，支持 {list(JOBS)}")
     _run_with_meta(job_name, fn)
     return get_meta().get(job_name, {})
+
+
+def run_async(job_name: str) -> dict:
+    """非阻塞触发：开个守护线程跑，HTTP 立即返回。
+
+    全市场 K 线回填 ≈ 45 分钟，比 HTTP 默认 timeout（10 分钟）长得多，必须 async。
+    前端可以隔几秒拉 /health/data 看 sync_meta 里这个任务的最新状态。
+    """
+    fn = JOBS.get(job_name)
+    if not fn:
+        raise ValueError(f"未知任务: {job_name}，支持 {list(JOBS)}")
+    t = threading.Thread(
+        target=_run_with_meta,
+        args=(job_name, fn),
+        name=f"sync-{job_name}",
+        daemon=True,
+    )
+    t.start()
+    return {"queued": True, "job": job_name}
 
 
 def start():
@@ -232,6 +264,11 @@ def start():
         lambda: _run_with_meta("db_backup", job_db_backup),
         CronTrigger(hour="*/6", minute=0),
         id="db_backup",
+    )
+    _scheduler.add_job(
+        lambda: _run_with_meta("weekly_kline_backfill", job_weekly_kline_backfill),
+        CronTrigger(day_of_week="sun", hour=3, minute=0),
+        id="weekly_kline_backfill",
     )
     _scheduler.start()
     logger.info("[SCHED] 已启动，{} 个任务", len(_scheduler.get_jobs()))

@@ -54,15 +54,24 @@ def cache_health():
 
 
 @router.post("/sync/{job_name}")
-def trigger_sync(job_name: str):
+def trigger_sync(job_name: str, wait: bool = False):
     """手动触发一个 sync 任务（前端"立即更新"按钮用）。
-    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_basic / db_backup
+
+    默认 async（守护线程后台跑，立即返回）。对全市场 60d K 线回填这种 45 分钟级别
+    的任务必须 async，否则 HTTP 会超时。前端可隔几秒查 /health/data 看 sync_meta
+    里该任务的状态。
+    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_basic
+                / weekly_kline_backfill / db_backup
+    传 ?wait=true 退回同步模式（短任务用，比如 db_backup 几秒就完）。
     """
     try:
-        meta = scheduler.run_now(job_name)
+        if wait:
+            meta = scheduler.run_now(job_name)
+            return {"job": job_name, "meta": meta}
+        rv = scheduler.run_async(job_name)
+        return {"job": job_name, "queued": True, "meta": rv}
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"job": job_name, "meta": meta}
 
 
 @router.get("/backups")
