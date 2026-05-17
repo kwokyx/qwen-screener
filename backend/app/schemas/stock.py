@@ -45,6 +45,8 @@ class StockDetailOut(BaseModel):
 class WatchlistCreate(BaseModel):
     code: str
     note: str | None = None
+    alerts: list | None = None
+    ref_price: float | None = None
 
 
 class WatchlistOut(BaseModel):
@@ -52,3 +54,5 @@ class WatchlistOut(BaseModel):
     id: int
     code: str
     note: str | None = None
+    alerts: list | None = None
+    ref_price: float | None = None

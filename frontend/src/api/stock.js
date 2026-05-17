@@ -25,6 +25,20 @@ export async function addWatch(code, note = null) {
   return data
 }
 
+/**
+ * upsert：服务端把已有行的 alerts / note / ref_price 改成传入值；
+ * stores/watchlist.js 在登录态下每次本地变更后调用，把"该 code 的最新状态"推回去。
+ */
+export async function upsertWatch(code, { note = null, alerts = null, refPrice = null } = {}) {
+  const { data } = await client.post('/stock/me/watchlist', {
+    code,
+    note,
+    alerts,
+    ref_price: refPrice,
+  })
+  return data
+}
+
 export async function removeWatch(code) {
   await client.delete(`/stock/me/watchlist/${code}`)
 }

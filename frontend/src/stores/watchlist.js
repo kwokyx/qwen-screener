@@ -1,12 +1,16 @@
 // Watchlist + 价格预警 store。
-// 离线优先：始终读写 localStorage；只要登录了就镜像到后端 /stock/me/watchlist。
+// 双向同步策略：
+//   - localStorage 始终读写（offline 兜底）
+//   - 登录后调 syncFromServer()：服务端列表合并进本地 + 把本地独有的项推上去
+//   - 本地任一变更（add / remove / addAlert / removeAlert / setAlertEnabled）在
+//     登录态下都会 push 到后端，失败静默（保持离线可用）
 //
 // 数据结构：
 //   item = {
 //     code:        "600519.SH",
 //     name:        "贵州茅台",          // 加入时缓存的名字（避免无后端时显示"—"）
 //     sector:      "白酒",
-//     refPrice:    1742.50,             // 加入时的基准价（用于计算"自加入起 +X%" 类预警）
+//     refPrice:    1742.50,             // 加入时的基准价
 //     addedAt:     1714530000,          // unix 秒
 //     alerts: [
 //       { id, type, threshold, enabled, lastTriggered }
@@ -17,8 +21,6 @@
 //   pct_up     | pct_down       自加入起涨/跌 ≥ threshold (%)
 //   price_gt   | price_lt       现价突破 threshold（绝对价）
 //   day_pct    现价相对当日开盘 ±threshold% （需要后端实时数据）
-//
-// 触发的事件由 stores/notifications.js 接收并显示。
 
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -45,6 +47,21 @@ function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
 
+/** 把 store item 转成 upsert payload。后端用 ref_price，前端 refPrice。 */
+function toPayload(item) {
+  return {
+    note: item.note ?? null,
+    alerts: item.alerts ?? [],
+    refPrice: item.refPrice ?? null,
+  }
+}
+
+/** 静默推送当前 item。失败吞掉（offline 时不阻塞 UI）。 */
+function pushSilently(item) {
+  if (!isLoggedIn() || !item) return
+  stockApi.upsertWatch(item.code, toPayload(item)).catch(() => { /* offline 静默 */ })
+}
+
 export const useWatchlistStore = defineStore('watchlist', () => {
   const items = ref(loadFromLS())
 
@@ -62,18 +79,16 @@ export const useWatchlistStore = defineStore('watchlist', () => {
 
   function add({ code, name = '', sector = '', refPrice = null }) {
     if (has(code)) return
-    items.value.push({
+    const item = {
       code,
       name,
       sector,
       refPrice: refPrice == null ? null : Number(refPrice),
       addedAt: Math.floor(Date.now() / 1000),
       alerts: [],
-    })
-    // 已登录则镜像到后端，失败不阻塞 UI
-    if (isLoggedIn()) {
-      stockApi.addWatch(code).catch(() => { /* 离线/已存在都吞掉 */ })
     }
+    items.value.push(item)
+    pushSilently(item)
   }
 
   function remove(code) {
@@ -83,33 +98,61 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     }
   }
 
+  /** 登出时调，清掉内存 + localStorage（避免下个账号在同一浏览器登录时混入上个账号数据）。 */
+  function clear() {
+    items.value = []
+  }
+
   function toggle(stock) {
     if (has(stock.code)) remove(stock.code)
     else add(stock)
   }
 
-  /** 从后端拉自选并合并进本地（保留本地预警规则）。登录后/初始化时调用。 */
-  async function syncFromBackend() {
+  /** 与后端双向同步：服务端 → 本地（覆盖 alerts/refPrice），本地独有 → 推到服务端。 */
+  async function syncFromServer() {
     if (!isLoggedIn()) return
+    let remote
     try {
-      const remote = await stockApi.listWatchlist()
-      if (!Array.isArray(remote)) return
-      // 把后端有、本地没有的合并进来；本地已有的保留预警/refPrice
-      const localCodes = codes.value
-      for (const r of remote) {
-        if (localCodes.has(r.code)) continue
-        items.value.push({
-          code: r.code,
-          name: r.name || '',
-          sector: r.industry || r.sector || '',
-          refPrice: r.refPrice ?? null,
-          addedAt: r.addedAt || Math.floor(Date.now() / 1000),
-          alerts: [],
-        })
-      }
+      remote = await stockApi.listWatchlist()
     } catch {
-      /* 静默 */
+      return // 离线/未授权时静默
     }
+    if (!Array.isArray(remote)) return
+
+    const remoteByCode = new Map(remote.map((r) => [r.code, r]))
+    const localByCode = new Map(items.value.map((x) => [x.code, x]))
+
+    // 服务端有的：以服务端 alerts/refPrice 为准，本地的 name/sector 保留（前端展示需要）
+    const merged = []
+    for (const r of remote) {
+      const local = localByCode.get(r.code)
+      merged.push({
+        code: r.code,
+        name: local?.name || '',
+        sector: local?.sector || '',
+        refPrice: r.ref_price ?? local?.refPrice ?? null,
+        addedAt: local?.addedAt || Math.floor(Date.now() / 1000),
+        alerts: Array.isArray(r.alerts) ? r.alerts : [],
+      })
+    }
+
+    // 本地独有的：保留 + 推到服务端
+    const localOnly = items.value.filter((x) => !remoteByCode.has(x.code))
+    for (const it of localOnly) {
+      merged.push(it)
+      pushSilently(it)
+    }
+
+    items.value = merged
+  }
+
+  /** 旧接口名兼容（auth.js 已经调过）：直接转发 syncFromServer。 */
+  async function syncFromBackend() {
+    return syncFromServer()
+  }
+
+  function _pushByCode(code) {
+    pushSilently(get(code))
   }
 
   function addAlert(code, alert) {
@@ -121,26 +164,34 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       lastTriggered: null,
       ...alert,
     })
+    _pushByCode(code)
   }
 
   function removeAlert(code, alertId) {
     const it = get(code)
     if (!it) return
     it.alerts = it.alerts.filter((a) => a.id !== alertId)
+    _pushByCode(code)
   }
 
   function setAlertEnabled(code, alertId, enabled) {
     const it = get(code)
     if (!it) return
     const a = it.alerts.find((a) => a.id === alertId)
-    if (a) a.enabled = enabled
+    if (a) {
+      a.enabled = enabled
+      _pushByCode(code)
+    }
   }
 
   function markTriggered(code, alertId) {
     const it = get(code)
     if (!it) return
     const a = it.alerts.find((a) => a.id === alertId)
-    if (a) a.lastTriggered = Math.floor(Date.now() / 1000)
+    if (a) {
+      a.lastTriggered = Math.floor(Date.now() / 1000)
+      _pushByCode(code)
+    }
   }
 
   /**
@@ -220,11 +271,13 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     add,
     remove,
     toggle,
+    clear,
     addAlert,
     removeAlert,
     setAlertEnabled,
     markTriggered,
     evaluateAlerts,
+    syncFromServer,
     syncFromBackend,
   }
 })

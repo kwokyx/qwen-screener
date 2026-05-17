@@ -8,13 +8,14 @@ from app.api import auth, health, market, qwen, screener, stock, strategy
 from app.config import settings
 from app.database import Base, engine
 from app import models  # noqa: F401  触发 ORM 注册
-from app.services import scheduler
+from app.services import migrations, scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("初始化数据库表...")
     Base.metadata.create_all(bind=engine)
+    migrations.apply_sqlite_migrations(engine)
     scheduler.start()
     yield
     scheduler.stop()

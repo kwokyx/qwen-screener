@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as authApi from '../api/auth'
+import { useChatHistoryStore } from './chatHistory'
+import { useNotificationsStore } from './notifications'
 import { useWatchlistStore } from './watchlist'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -13,8 +15,8 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = data.user
     localStorage.setItem('token', data.access_token)
     localStorage.setItem('user', JSON.stringify(data.user))
-    // 登录成功后把后端自选合并到本地（保留本地预警规则）
-    try { await useWatchlistStore().syncFromBackend() } catch { /* 静默 */ }
+    // 登录成功后双向同步：拉服务端自选 + 把本地独有的项推上去
+    try { await useWatchlistStore().syncFromServer() } catch { /* 静默 */ }
     return data
   }
 
@@ -27,6 +29,10 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // 清掉内存 + localStorage 中的用户态数据，避免下个账号在同一浏览器登录时混入上个账号数据
+    try { useWatchlistStore().clear() } catch {}
+    try { useChatHistoryStore().clear() } catch {}
+    try { useNotificationsStore().clear() } catch {}
   }
 
   return { token, user, login, register, logout }

@@ -148,23 +148,31 @@ def list_watch(user: User = Depends(get_current_user), db: Session = Depends(get
     return db.query(Watchlist).filter(Watchlist.user_id == user.id).all()
 
 
-@router.post("/me/watchlist", response_model=WatchlistOut, status_code=201)
+@router.post("/me/watchlist", response_model=WatchlistOut)
 def add_watch(
     payload: WatchlistCreate,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """upsert：已存在则更新 alerts / note / ref_price，不存在则插入。
+    前端 store 在每次本地变更（加股 / 改预警）后都会 POST 上来。
+    """
     if not db.get(StockBasic, payload.code):
         raise HTTPException(404, "股票不存在")
-    exists = (
+    item = (
         db.query(Watchlist)
         .filter(Watchlist.user_id == user.id, Watchlist.code == payload.code)
         .first()
     )
-    if exists:
-        return exists
-    item = Watchlist(user_id=user.id, code=payload.code, note=payload.note)
-    db.add(item)
+    if item is None:
+        item = Watchlist(user_id=user.id, code=payload.code)
+        db.add(item)
+    if payload.note is not None:
+        item.note = payload.note
+    if payload.alerts is not None:
+        item.alerts = payload.alerts
+    if payload.ref_price is not None:
+        item.ref_price = payload.ref_price
     db.commit()
     db.refresh(item)
     return item
