@@ -5,6 +5,7 @@ import router from './router'
 import { startAlertEngine } from './services/alertEngine'
 import { useWatchlistStore } from './stores/watchlist'
 import { useChatHistoryStore } from './stores/chatHistory'
+import { useNotificationsStore } from './stores/notifications'
 import { useAiStatusStore } from './stores/aiStatus'
 import { toast } from './stores/toast'
 
@@ -23,9 +24,10 @@ app.config.errorHandler = (err, _vm, info) => {
 
 app.mount('#app')
 
-// 启动后：登录态下从后端拉自选 / 对话历史合并到本地
+// 启动后：登录态下从后端拉自选 / 对话历史 / 通知合并到本地
 useWatchlistStore().syncFromServer()
 useChatHistoryStore().syncFromServer()
+useNotificationsStore().syncFromServer()
 
 // 启动价格预警轮询
 startAlertEngine()

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from app.api import auth, chat, health, market, qwen, screener, stock, strategy
+from app.api import auth, chat, health, market, notification, qwen, screener, stock, strategy
 from app.config import settings
 from app.database import Base, engine
 from app import models  # noqa: F401  触发 ORM 注册
@@ -44,4 +44,5 @@ app.include_router(qwen.router, prefix=settings.api_prefix)
 app.include_router(strategy.router, prefix=settings.api_prefix)
 app.include_router(market.router, prefix=settings.api_prefix)
 app.include_router(chat.router, prefix=settings.api_prefix)
+app.include_router(notification.router, prefix=settings.api_prefix)
 app.include_router(health.router, prefix=settings.api_prefix)

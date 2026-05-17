@@ -18,6 +18,7 @@ export const useAuthStore = defineStore('auth', () => {
     // 登录成功后双向同步：拉服务端自选 + 把本地独有的项推上去
     try { await useWatchlistStore().syncFromServer() } catch { /* 静默 */ }
     try { await useChatHistoryStore().syncFromServer() } catch { /* 静默 */ }
+    try { await useNotificationsStore().syncFromServer() } catch { /* 静默 */ }
     return data
   }
 
