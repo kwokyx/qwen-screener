@@ -454,56 +454,114 @@ def sync_full_valuation_em(db: Session, trade_date: date | None = None) -> int:
 
 # ---------- K 线历史回填 ----------
 
+def _fetch_hist_em(sym: str, start, end):
+    """eastmoney 源（中文列名）。被 eastmoney 限流时拒绝；触发 None。"""
+    import akshare as ak
+    df = ak.stock_zh_a_hist(
+        symbol=sym, period="daily",
+        start_date=start.strftime("%Y%m%d"),
+        end_date=end.strftime("%Y%m%d"),
+        adjust="qfq",
+    )
+    if df is None or df.empty:
+        return None
+    return [
+        {
+            "date": str(r.get("日期")),
+            "open": r.get("开盘"),
+            "high": r.get("最高"),
+            "low": r.get("最低"),
+            "close": r.get("收盘"),
+            "volume": r.get("成交量"),
+            "amount": r.get("成交额"),
+            "turnover": r.get("换手率"),
+        }
+        for _, r in df.iterrows()
+    ]
+
+
+def _fetch_hist_sina(code: str, start, end):
+    """sina 源（英文列名 + sh/sz 前缀）。eastmoney 被封时兜底。"""
+    import akshare as ak
+    sym, mkt = code.split(".")
+    if mkt == "BJ":
+        # sina 不覆盖北交所，让调用方走 em
+        return None
+    sina_sym = mkt.lower() + sym  # sh600519 / sz000001
+    df = ak.stock_zh_a_daily(
+        symbol=sina_sym,
+        start_date=start.strftime("%Y%m%d"),
+        end_date=end.strftime("%Y%m%d"),
+        adjust="qfq",
+    )
+    if df is None or df.empty:
+        return None
+    return [
+        {
+            "date": str(r.get("date")),
+            "open": r.get("open"),
+            "high": r.get("high"),
+            "low": r.get("low"),
+            "close": r.get("close"),
+            "volume": r.get("volume"),
+            "amount": r.get("amount"),
+            "turnover": r.get("turnover"),
+        }
+        for _, r in df.iterrows()
+    ]
+
+
 def backfill_kline_single(db: Session, code: str, days: int) -> int:
     """从 akshare 拉单只股票最近 N 个交易日的日线写入 stock_daily。已有日期 skip。
 
+    源选择：sina 优先（eastmoney 经常被限流），失败回 eastmoney。
     被 api/stock.py 的 /kline 懒加载端点和 scheduler 的全量周任务共用。
     timeout 由 _install_requests_timeout 在模块加载时打的猴子补丁兜底（15s/请求）。
     """
     from datetime import date as _date, timedelta
-    import akshare as ak
 
     sym = code.split(".")[0]
     end = _date.today()
     # 多拉一倍天数缓冲（节假日 / 停牌）
     start = end - timedelta(days=max(days * 2, 60))
+
+    rows = None
+    # 优先 sina（在 eastmoney 限流期间能跑通全市场 60d）
     try:
-        df = ak.stock_zh_a_hist(
-            symbol=sym, period="daily",
-            start_date=start.strftime("%Y%m%d"),
-            end_date=end.strftime("%Y%m%d"),
-            adjust="qfq",
-        )
+        rows = _fetch_hist_sina(code, start, end)
     except Exception:
-        return 0
-    if df is None or df.empty:
+        rows = None
+    # sina 没数据（北交所 / sina 抖动）或失败则回 eastmoney
+    if not rows:
+        try:
+            rows = _fetch_hist_em(sym, start, end)
+        except Exception:
+            rows = None
+    if not rows:
         return 0
 
     have_dates = {
         r[0] for r in db.query(StockDaily.trade_date).filter(StockDaily.code == code).all()
     }
     inserted = 0
-    for _, r in df.iterrows():
-        raw = r.get("日期")
-        if isinstance(raw, _date):
-            td = raw
-        else:
-            try:
-                td = _date.fromisoformat(str(raw))
-            except Exception:
-                continue
+    for r in rows:
+        raw = r.get("date")
+        try:
+            td = _date.fromisoformat(raw[:10])
+        except Exception:
+            continue
         if td in have_dates:
             continue
         try:
             db.add(StockDaily(
                 code=code, trade_date=td,
-                open=float(r.get("开盘") or 0) or None,
-                high=float(r.get("最高") or 0) or None,
-                low=float(r.get("最低") or 0) or None,
-                close=float(r.get("收盘") or 0) or None,
-                volume=float(r.get("成交量") or 0) or None,
-                amount=float(r.get("成交额") or 0) or None,
-                turnover=float(r.get("换手率") or 0) or None,
+                open=_f(r.get("open")),
+                high=_f(r.get("high")),
+                low=_f(r.get("low")),
+                close=_f(r.get("close")),
+                volume=_f(r.get("volume")),
+                amount=_f(r.get("amount")),
+                turnover=_f(r.get("turnover")),
             ))
             inserted += 1
         except Exception:
