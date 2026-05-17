@@ -10,6 +10,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
 import { useWatchlistStore } from '../stores/watchlist'
 import { detail as fetchDetail } from '../api/stock.js'
+import { toast } from '../stores/toast'
 
 const router = useRouter()
 const gotoDetail = (code) => router.push(`/detail/${code}`)
@@ -35,6 +36,7 @@ async function loadAll() {
     details.value = map
   } catch (e) {
     errorMsg.value = e?.message || '加载失败'
+    toast.error(`自选数据加载失败：${errorMsg.value}`)
   } finally {
     loading.value = false
   }
