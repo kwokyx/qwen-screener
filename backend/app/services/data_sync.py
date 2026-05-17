@@ -572,27 +572,50 @@ def backfill_kline_single(db: Session, code: str, days: int) -> int:
     return inserted
 
 
-def backfill_kline_all(db: Session, days: int = 60, sleep_sec: float = 0.05) -> int:
+def backfill_kline_all(db: Session, days: int = 60, workers: int = 6) -> int:
     """全市场 K 线回填：给所有 stock_basic 里的代码补 N 个交易日历史。
 
-    5500+ 只 × 1 次 akshare 请求 ≈ 30-50 分钟。每只 timeout 15s 兜底（requests 补丁）。
-    单只失败跳过，整体不中断。建议在 scheduler 周任务里跑（周日 03:00）。
+    每个 akshare 调用本身 ~8s（sina）/ 5s（em），串行 5500 只要 12+ 小时太慢。
+    瓶颈是网络，所以用 ThreadPoolExecutor 并发 (workers=6 默认)：
+    - 6 个线程同时跑 akshare HTTP（彼此独立 db session）
+    - SQLite 单写锁会让 db.commit() 之间排队，但 commit 本身 ~ms 级，不构成瓶颈
+    - 5500 只 / 6 并发 ≈ 15-20 分钟（理想情况）
     """
-    pool = [{"code": c} for (c,) in db.query(StockBasic.code).all()]
+    import concurrent.futures
+    from app.database import SessionLocal
+
+    codes = [c for (c,) in db.query(StockBasic.code).all()]
+    n = len(codes)
+    logger.info("[KLINE-BACKFILL {}d] {} 只, workers={}", days, n, workers)
     total_inserted = 0
+    completed = 0
+    failed = 0
 
-    def process(p):
-        nonlocal total_inserted
-        n = backfill_kline_single(db, p["code"], days)
-        total_inserted += n
-        return n  # 用作 process_pool 的成功标志
+    def _one(code: str) -> int:
+        # 线程私有 session，避免跨线程复用同一个 Session 对象
+        s = SessionLocal()
+        try:
+            return backfill_kline_single(s, code, days)
+        except Exception as e:
+            if failed <= 5:
+                logger.warning("[KLINE-BACKFILL] {} 失败: {}", code, str(e)[:80])
+            return 0
+        finally:
+            s.close()
 
-    process_pool(
-        pool, process,
-        label=f"KLINE-BACKFILL {days}d",
-        sleep_sec=sleep_sec,
-        log_every=200,
-    )
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for n_ins in ex.map(_one, codes):
+            completed += 1
+            if n_ins:
+                total_inserted += n_ins
+            else:
+                failed += 1
+            if completed % 200 == 0:
+                logger.info("[KLINE-BACKFILL] 进度 {}/{}, 已写入 {} 行, 失败 {}",
+                            completed, n, total_inserted, failed)
+
+    logger.info("[KLINE-BACKFILL] 完成：{} 只处理，写入 {} 行，失败 {}",
+                completed, total_inserted, failed)
     return total_inserted
 
 
