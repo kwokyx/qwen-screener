@@ -104,14 +104,32 @@ def _f(v, scale: float = 1.0) -> float | None:
 
 # ---------- 基本信息 ----------
 
+SYNC_BASIC_WIPE_GUARD_RATIO = 0.8
+
+
 def sync_basic(db: Session) -> int:
-    """同步 A 股基本信息表（5500+ 只）。upsert：保留已写入的 industry / list_date 等字段。"""
+    """同步 A 股基本信息表（5500+ 只）。upsert：保留已写入的 industry / list_date 等字段。
+
+    防 wipe 保护：
+    1. akshare 返空（None / empty）→ 跳过
+    2. akshare 行数 < DB 当前行数 * 0.8 → 认为上游异常（部分接口偶尔只返子集），
+       跳过本次更新，log warning。等下次完整快照再写。
+    """
     import akshare as ak
 
     logger.info("拉取 A 股基本信息...")
     df = ak.stock_info_a_code_name()
     if df is None or df.empty:
         logger.warning("akshare 返回空，跳过 basic 同步避免清空已有数据")
+        return 0
+
+    db_cnt = db.query(StockBasic).count()
+    upstream_cnt = len(df)
+    if db_cnt > 0 and upstream_cnt < db_cnt * SYNC_BASIC_WIPE_GUARD_RATIO:
+        logger.warning(
+            "上游返回 {} 条 < DB {} 条 * {:.0%}，认为是部分/异常快照，跳过 basic 同步",
+            upstream_cnt, db_cnt, SYNC_BASIC_WIPE_GUARD_RATIO,
+        )
         return 0
 
     existing = {b.code: b for b in db.query(StockBasic).all()}
