@@ -5,6 +5,7 @@
     周一-周五 16:00   sync_pool_xq      csi300 + csi500 共 800 只价值面（PE/PB/股息率）
     周六     02:00   sync_pool_industry + sync_pool_financial  行业 + 财务
     周日     02:00   sync_basic        全 A 股代码列表（新股 / 退市更新）
+    每 6h            db_backup         冷备份 stock.db → /app/data/backups/
 
 调度器随 FastAPI 启动起，停服时自动关。每次任务的执行时间会写到 sync_meta 表，
 供前端 /health/data 显示"最后更新于..."。
@@ -17,7 +18,7 @@ from loguru import logger
 from sqlalchemy import text
 
 from app.database import SessionLocal, engine
-from app.services import data_sync
+from app.services import data_sync, db_backup
 
 
 _scheduler: BackgroundScheduler | None = None
@@ -172,11 +173,23 @@ def job_weekly_basic():
         db.close()
 
 
+def job_db_backup():
+    """冷备份 stock.db → /app/data/backups/。每 6h 触发一次。"""
+    logger.info("[SCHED] db_backup 开始")
+    rv = db_backup.backup_now()
+    # 把状态写回 sync_meta，前端 /health/data 能看到
+    status = rv.get("status", "?")
+    if status == "ok":
+        return f"{rv.get('file')} ({rv.get('size', 0)} bytes), removed {rv.get('removed', 0)}"
+    return f"{status}: {rv.get('reason', '')}"
+
+
 JOBS = {
     "daily_market":        job_daily_market,
     "daily_value":         job_daily_value,
     "weekly_fundamentals": job_weekly_fundamentals,
     "weekly_basic":        job_weekly_basic,
+    "db_backup":           job_db_backup,
 }
 
 
@@ -215,8 +228,20 @@ def start():
         CronTrigger(day_of_week="sun", hour=2, minute=0),
         id="weekly_basic",
     )
+    _scheduler.add_job(
+        lambda: _run_with_meta("db_backup", job_db_backup),
+        CronTrigger(hour="*/6", minute=0),
+        id="db_backup",
+    )
     _scheduler.start()
     logger.info("[SCHED] 已启动，{} 个任务", len(_scheduler.get_jobs()))
+
+    # 启动时立刻做一次冷备份。in-memory test DB 会被自动 skip。
+    # 写 sync_meta 共用 _run_with_meta，不再单独 try/except。
+    try:
+        _run_with_meta("db_backup", job_db_backup)
+    except Exception:
+        logger.exception("[SCHED] 启动备份失败（不影响启动）")
 
 
 def stop():

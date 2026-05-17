@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily, StockFinancial
-from app.services import cache, qwen_client, scheduler
+from app.services import cache, db_backup, qwen_client, scheduler
 
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -56,10 +56,16 @@ def cache_health():
 @router.post("/sync/{job_name}")
 def trigger_sync(job_name: str):
     """手动触发一个 sync 任务（前端"立即更新"按钮用）。
-    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_basic
+    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_basic / db_backup
     """
     try:
         meta = scheduler.run_now(job_name)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"job": job_name, "meta": meta}
+
+
+@router.get("/backups")
+def list_backups():
+    """列出 /app/data/backups/ 下的 SQLite 冷备份文件，时间倒序。"""
+    return {"items": db_backup.list_backups()}
