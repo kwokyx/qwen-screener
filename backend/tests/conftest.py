@@ -1,9 +1,14 @@
-"""pytest 公共 fixture：内存 SQLite + 一组种子股票，避免污染开发库。"""
+"""pytest 公共 fixture：内存 SQLite + 一组种子股票，避免污染开发库。
+
+⚠️ 关键：必须在 import app.* 之前强制覆盖 DATABASE_URL（不能用 setdefault）。
+docker exec 容器内跑 pytest 时，DATABASE_URL 已经被 docker-compose env 设成
+sqlite:////app/data/stock.db。如果 setdefault 不覆盖，conftest 的 db fixture
+就会 drop_all() 把生产数据全清掉。这条踩过坑，别改。
+"""
 import os
 import sys
 
-# 必须在 import app.* 之前设置，让 settings 读到内存 DB
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-32-chars-long-xxxx")
 os.environ.setdefault("REDIS_URL", "")  # 关闭缓存，避免连真 redis
 
