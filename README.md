@@ -1,13 +1,8 @@
 # 基于千问的股票筛选系统
 
-> **学年设计参考实现**（Reference Implementation）· FastAPI + Vue 3 + LLM 全栈样板
-> 集成自然语言筛选、SSE 流式分析、回测引擎、定时同步、Docker 一键部署
-> 适合作为同类课题的工程基线进行扩展研究 · 许可证：[MIT](LICENSE)
-
-> 📋 **想接手 / 二次开发？** 先看 [`docs/STATUS.md`](docs/STATUS.md)——
-> 详细列出了 ✅ 已完成 / ⚠️ 半实现 / 🟡 UI 占位 / ❌ 未完成 / 🔧 已知陷阱。
->
-> 📡 **接 API 开发？** 看 [`docs/API.md`](docs/API.md)——9 大类 33+ 端点的请求 / 响应样本 + curl 示例。
+- 哪些功能做完了、哪些没做：[docs/STATUS.md](docs/STATUS.md)
+- 接口怎么调：[docs/API.md](docs/API.md)
+- 许可证：[MIT](LICENSE)
 
 ---
 
