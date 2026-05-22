@@ -25,6 +25,8 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 | 自选监控 | `/portfolio` | 自选股 + 价格预警，登录后跨设备同步 |
 | 策略回测 | `/strategy` | 给定筛选条件 → 月度调仓 → 净值曲线 + 关键指标 |
 
+> 完整 API 接口文档见 [`docs/API.md`](docs/API.md)，含所有端点的 curl 示例与响应样本。
+
 ---
 
 ## 技术栈
@@ -244,6 +246,71 @@ qwen-stock-screener/
     ├── build_design_doc.py     # python-docx 论文生成器
     └── 基于千问的股票筛选系统设计与实现.docx
 ```
+
+---
+
+## 系统模块清单
+
+系统按「后端服务 + 前端视图 + 工程基础设施」三层组织，下表为每个模块的实现状态。
+
+### 后端模块（[backend/app/](backend/app/)）
+
+| 模块 | 关键能力 | 测试覆盖 |
+|---|---|---|
+| **认证** [`api/auth.py`](backend/app/api/auth.py) | JWT 注册 / 登录 / `me`；bcrypt 密码哈希；OAuth2 form 登录 | ✅ `test_auth_e2e.py` |
+| **股票数据** [`api/stock.py`](backend/app/api/stock.py) | 模糊搜索、个股详情（基本面 + 最新行情 + 财务）、K 线（任意 N 日，自动回填）、自选 CRUD | ✅ `test_stock_api.py` |
+| **筛选引擎** [`services/screener_engine.py`](backend/app/services/screener_engine.py) | 13 字段 × 7 操作符 × AND/OR 组合 + 排序 + 分页 | ✅ `test_screener.py` |
+| **千问 AI 客户端** [`services/qwen_client/`](backend/app/services/qwen_client/) | 三层降级（Function Calling → JSON 模式 → 容错 regex 抠 JSON）；OpenAI / DashScope 双后端切换；SSE 流式；指数退避重试；Redis 缓存 | — |
+| **NL 筛选** [`api/screener.py`](backend/app/api/screener.py) | 三个端点：结构化 / NL 一次性 / NL SSE 流式（thinking → parsed → result 三阶段） | ✅ `test_screener.py` |
+| **基本面分析** [`api/qwen.py`](backend/app/api/qwen.py) | 个股投资分析：一次性 + SSE 流式两个端点；1h Redis 缓存 | — |
+| **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
+| **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
+| **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
+| **策略回测** [`services/backtest_engine.py`](backend/app/services/backtest_engine.py) | 等权调仓 / 净值曲线 / 关键指标（夏普 / 回撤 / 胜率 / 盈亏比）/ 月度收益 / 交易日志 | — |
+| **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | 多通路（雪球 + 新浪 + 东方财富）；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
+| **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
+| **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |
+| **冷备份** [`services/db_backup.py`](backend/app/services/db_backup.py) | SQLite 每 6h 物理备份；启动时立即一份；备份列表查询 | — |
+| **健康检查** [`api/health.py`](backend/app/api/health.py) | AI 探活、数据新鲜度、缓存命中率、手动触发同步、备份列表 | — |
+
+### 前端视图（[frontend/src/views/](frontend/src/views/)）
+
+| 视图 | 接的后端 | 关键能力 |
+|---|---|---|
+| **Login** [`Login.vue`](frontend/src/views/Login.vue) | `/auth/*` | 登录 / 注册一体页，A2 主题 |
+| **行情 Dashboard** [`Dashboard.vue`](frontend/src/views/Dashboard.vue) | `/market/*` | 4 指数 + 30 日 sparkline + 板块涨跌 + 涨跌榜（4 个 tab） |
+| **千问对话筛选** [`Chat.vue`](frontend/src/views/Chat.vue) | `/screener/nl/stream` | SSE 流式三阶段；历史持久化 + 跨设备同步；0 命中智能建议；预设提示 |
+| **因子筛选器** [`Results.vue`](frontend/src/views/Results.vue) | `/screener` | 默认条件可视化 + 实时 sparkline + 价值分排序 |
+| **个股详情** [`Detail.vue`](frontend/src/views/Detail.vue) | `/stock/{code}` + `/qwen/analysis/{code}/stream` | K 线 6 个周期切换；16 个关键指标头部；千问流式分析（含 Markdown 渲染）；自动同行业对比 |
+| **自选监控** [`Portfolio.vue`](frontend/src/views/Portfolio.vue) | `/stock/me/watchlist` + alertEngine 轮询 | 5 种预警类型（涨跌 % / 价格突破 / 当日 %）；跨设备同步 |
+| **策略回测** [`Strategy.vue`](frontend/src/views/Strategy.vue) | `/strategy/backtest` | 4 个预设策略 + 自定义参数 + 月度收益热力图 |
+
+### 前端基础设施
+
+| 组件 / 模块 | 路径 | 用途 |
+|---|---|---|
+| **全局错误边界** | [`components/ErrorBoundary.vue`](frontend/src/components/ErrorBoundary.vue) | Vue `errorHandler` 兜底，组件抛错不白屏 |
+| **命令面板** | [`components/CommandPalette.vue`](frontend/src/components/CommandPalette.vue) | ⌘K 全局搜索股票 / 跳转视图 |
+| **自选浮窗** | [`components/WatchlistDock.vue`](frontend/src/components/WatchlistDock.vue) | 全局浮动自选股快捷面板 |
+| **预警引擎** | [`services/alertEngine.js`](frontend/src/services/alertEngine.js) | 30s 轮询每只自选股最新价，触发预警 → 写通知中心 |
+| **数据新鲜度** | [`components/DataFreshness.vue`](frontend/src/components/DataFreshness.vue) | 顶部条显示「最后更新于…」+ 一键刷新 |
+| **状态管理** | [`stores/`](frontend/src/stores/) | 6 个 Pinia store：auth / chatHistory / watchlist / notifications / toast / aiStatus，全部带 localStorage 离线兜底 |
+| **Composables** | [`composables/`](frontend/src/composables/) | `useNlStream`（SSE 状态机） + `useKlineCache`（按 code 缓存 sparkline） |
+| **SSE 客户端** | [`api/sse.js`](frontend/src/api/sse.js) | 通用 fetch + ReadableStream 流式解析，自动注入 JWT |
+| **错误翻译** | [`shared/errors.js`](frontend/src/shared/errors.js) | errno / 401 / 503 / network → 中文产品文案 |
+| **UI 基元** | Skeleton / EmptyState / Toaster / StarButton / AlertRuleEditor | 骨架屏 / 空态 / Toast / 一键加自选 / 预警规则编辑器 |
+
+### 工程基础设施
+
+| 设施 | 状态 | 文件 |
+|---|---|---|
+| Docker Compose 三服务编排 | ✅ | [`docker-compose.yml`](docker-compose.yml) |
+| 后端 Dockerfile 多阶段 + healthcheck | ✅ | [`backend/Dockerfile`](backend/Dockerfile) |
+| 前端 Dockerfile (node builder + nginx runtime) | ✅ | [`frontend/Dockerfile`](frontend/Dockerfile) |
+| nginx SSE 反代（buffering off + 30 分钟超时） | ✅ | [`frontend/nginx.conf`](frontend/nginx.conf) |
+| pytest 38 个用例全通过 | ✅ | [`backend/tests/`](backend/tests/) |
+| 接口文档 | ✅ | [`docs/API.md`](docs/API.md) |
+| 学年设计 docx | ✅ | [`docs/`](docs/) |
 
 ---
 
