@@ -1,6 +1,17 @@
 # 基于千问的股票筛选系统
 
-学年设计项目。FastAPI 后端 + Vue 3 前端，集成大模型实现「自然语言筛选 + 基本面投资分析」，支持沪深 300/500 行情、财务、行业数据的离线同步与定时刷新。
+> **学年设计参考实现**（Reference Implementation）· FastAPI + Vue 3 + LLM 全栈样板
+> 集成自然语言筛选、SSE 流式分析、回测引擎、定时同步、Docker 一键部署
+> 适合作为同类课题的工程基线进行扩展研究 · 许可证：[MIT](LICENSE)
+
+> 📋 **想接手 / 二次开发？** 先看 [`docs/STATUS.md`](docs/STATUS.md)——
+> 详细列出了 ✅ 已完成 / ⚠️ 半实现 / 🟡 UI 占位 / ❌ 未完成 / 🔧 已知陷阱。
+>
+> 📡 **接 API 开发？** 看 [`docs/API.md`](docs/API.md)——9 大类 33+ 端点的请求 / 响应样本 + curl 示例。
+
+---
+
+FastAPI 后端 + Vue 3 前端，集成大模型实现「自然语言筛选 + 基本面投资分析」，支持沪深 300/500 行情、财务、行业数据的离线同步与定时刷新。
 
 ```
 浏览器 (Vue 3 SPA)
@@ -356,6 +367,21 @@ pytest tests/ -v
 - 沪深 300 是默认池；其他股票（如北交所）调用 `pool csi500` / `sse50` 切换
 - K 线为日级粒度（无分时）；UI 上的「5 日 / 30 日 / 一年」对应 `?days=` 参数
 - 流通市值字段当前用总市值代替（雪球未直接提供）
+
+> 完整清单见 [`docs/STATUS.md`](docs/STATUS.md)，含「未完成 / 后续工作」的优先级分级。
+
+---
+
+## 文档导览
+
+| 文档 | 用途 |
+|---|---|
+| [README.md](README.md)（本文件） | 项目总览、快速开始、系统模块 |
+| [docs/STATUS.md](docs/STATUS.md) | **交接清单**：已完成 / 半实现 / UI 占位 / 已知陷阱 / 后续工作 |
+| [docs/API.md](docs/API.md) | 接口文档：33+ 端点的请求 / 响应 / curl 示例 |
+| [docs/基于千问的股票筛选系统设计与实现.docx](docs/) | 学年设计论文成稿 |
+| [docs/build_design_doc.py](docs/build_design_doc.py) | 论文生成脚本 |
+| [LICENSE](LICENSE) | MIT 许可证 |
 
 ---
 
