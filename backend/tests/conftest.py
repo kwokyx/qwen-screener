@@ -1,14 +1,20 @@
-"""pytest 公共 fixture：内存 SQLite + 一组种子股票，避免污染开发库。
+"""pytest 公共 fixture：独立测试 DB + 一组种子股票，避免污染开发库。
 
 ⚠️ 关键：必须在 import app.* 之前强制覆盖 DATABASE_URL（不能用 setdefault）。
 docker exec 容器内跑 pytest 时，DATABASE_URL 已经被 docker-compose env 设成
 sqlite:////app/data/stock.db。如果 setdefault 不覆盖，conftest 的 db fixture
 就会 drop_all() 把生产数据全清掉。这条踩过坑，别改。
+
+为什么不用 sqlite:///:memory:：
+内存 SQLite 是 per-connection 的——SQLAlchemy 每开新连接就是新库。db fixture
+建好表后，TestClient 的 lifespan / 路由处理用的是不同连接，看不到那些表。
+用一个独立的临时文件就稳了，drop_all + create_all 仍然每个测试一刷。
 """
 import os
 import sys
 
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# 用独立文件，跟 /app/data/stock.db 完全隔离
+os.environ["DATABASE_URL"] = "sqlite:////tmp/pytest_qwen.db"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-32-chars-long-xxxx")
 os.environ.setdefault("REDIS_URL", "")  # 关闭缓存，避免连真 redis
 
