@@ -89,6 +89,43 @@ def _weighted_mean(pairs: list[tuple[int, float]]) -> int:
     return _clamp(round(sum(s * w for s, w in valid) / total_w))
 
 
+def snapshot_from_row(
+    *,
+    code: str,
+    name: str = "",
+    industry: str | None = None,
+    pe=None,
+    pb=None,
+    market_cap=None,
+    roe=None,
+    revenue_yoy=None,
+    profit_yoy=None,
+    gross_margin=None,
+    debt_ratio=None,
+    dividend_yield=None,
+) -> dict:
+    """从行情/财务行组装评分快照（与 qwen._build_snapshot 字段一致）。"""
+    return {
+        "code": code,
+        "name": name,
+        "industry": industry,
+        "pe": pe,
+        "pb": pb,
+        "market_cap": market_cap,
+        "roe": roe,
+        "revenue_yoy": revenue_yoy,
+        "profit_yoy": profit_yoy,
+        "gross_margin": gross_margin,
+        "debt_ratio": debt_ratio,
+        "dividend_yield": dividend_yield,
+    }
+
+
+def compute_total(snapshot: dict) -> int:
+    """仅返回综合分（列表页用，不调千问）。"""
+    return int(compute(snapshot)["total"])
+
+
 def compute(snapshot: dict) -> dict:
     """计算算法评分，返回含 breakdown 的完整结果（不含 reason）。"""
     pe = snapshot.get("pe")

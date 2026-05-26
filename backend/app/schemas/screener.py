@@ -53,6 +53,8 @@ class ScreenResultItem(StockBasicOut):
     market_cap: float | None = None
     dividend_yield: float | None = None
     close: float | None = None
+    # 与详情页 GET /qwen/score/{code} 的 total 同一套 score_engine 规则
+    score_total: int | None = None
 
 
 class ScreenResponse(BaseModel):

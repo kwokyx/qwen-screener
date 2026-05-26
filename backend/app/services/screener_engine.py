@@ -17,6 +17,7 @@ from app.schemas.screener import (
     ScreenResponse,
     ScreenResultItem,
 )
+from app.services.score_engine import compute_total, snapshot_from_row
 
 
 # 字段 → ORM 列映射。前端/千问只能引用这里列出的字段。
@@ -195,19 +196,35 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     total = q.count()
     rows = q.limit(req.limit).all()
 
-    items = [
-        ScreenResultItem(
+    items = []
+    for basic, daily, fin in rows:
+        snap = snapshot_from_row(
             code=basic.code,
             name=basic.name,
             industry=basic.industry,
-            market=basic.market,
             pe=daily.pe if daily else None,
             pb=daily.pb if daily else None,
-            close=daily.close if daily else None,
             market_cap=daily.market_cap if daily else None,
             dividend_yield=daily.dividend_yield if daily else None,
             roe=fin.roe if fin else None,
+            revenue_yoy=fin.revenue_yoy if fin else None,
+            profit_yoy=fin.profit_yoy if fin else None,
+            gross_margin=fin.gross_margin if fin else None,
+            debt_ratio=fin.debt_ratio if fin else None,
         )
-        for basic, daily, fin in rows
-    ]
+        items.append(
+            ScreenResultItem(
+                code=basic.code,
+                name=basic.name,
+                industry=basic.industry,
+                market=basic.market,
+                pe=snap["pe"],
+                pb=snap["pb"],
+                close=daily.close if daily else None,
+                market_cap=snap["market_cap"],
+                dividend_yield=snap["dividend_yield"],
+                roe=snap["roe"],
+                score_total=compute_total(snap),
+            )
+        )
     return ScreenResponse(total=total, items=items)

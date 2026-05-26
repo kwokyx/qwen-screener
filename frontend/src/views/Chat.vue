@@ -37,12 +37,8 @@ const presetPrompts = [
   '股息率超过 5% 的大蓝筹',
 ]
 
-function bullScore(it) {
-  let s = 60
-  if (it.pe && it.pe > 0) s += Math.max(0, Math.min(20, 25 - it.pe * 0.5))
-  if (it.dividend_yield) s += Math.min(15, it.dividend_yield * 2)
-  if (it.roe) s += Math.min(15, it.roe)
-  return Math.round(Math.max(0, Math.min(99, s)))
+function displayScore(it) {
+  return it.score_total != null ? it.score_total : '—'
 }
 
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
@@ -344,9 +340,9 @@ const stageColor = (s) => ({
                     <td :style="{ padding: '11px 8px' }">
                       <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
                         <div :style="{ width: '50px', height: '5px', background: A2.bgDeep, borderRadius: '3px', overflow: 'hidden' }">
-                          <div :style="{ width: `${bullScore(s)}%`, height: '100%', background: A2.qwenGrad }" />
+                          <div :style="{ width: `${displayScore(s) === '—' ? 0 : displayScore(s)}%`, height: '100%', background: A2.qwenGrad }" />
                         </div>
-                        <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '11px' }">{{ bullScore(s) }}</span>
+                        <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '11px' }">{{ displayScore(s) }}</span>
                       </div>
                     </td>
                     <td :style="{ padding: '11px 8px' }"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></td>

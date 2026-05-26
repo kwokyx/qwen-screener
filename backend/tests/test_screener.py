@@ -95,3 +95,12 @@ def test_unknown_field_raises(db, seed_stocks):
     import pytest
     with pytest.raises(ValueError, match="不支持的筛选字段"):
         _screen(db, conditions=[FilterCondition(field="bogus", op="eq", value=1)])
+
+
+def test_screen_items_have_score_total(db, seed_stocks):
+    """筛选结果携带 score_total（与详情页同一 score_engine）。"""
+    res = _screen(db, conditions=[FilterCondition(field="pe", op="lt", value=100)], limit=5)
+    assert res.items
+    for it in res.items:
+        assert it.score_total is not None
+        assert 0 <= it.score_total <= 100

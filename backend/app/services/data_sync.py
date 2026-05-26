@@ -481,6 +481,7 @@ def sync_full_valuation_em(
         logger.error(
             "[EM-VAL] 东财全市场接口 {} 次均失败（多为限流/网络）。"
             "可稍后重试 daily-em，或执行 pool csi300 / pool csi500 仅补沪深800估值。",
+            retries,
         )
         if last_err is not None:
             raise last_err
