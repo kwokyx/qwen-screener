@@ -1,6 +1,14 @@
 import client from './client'
 import { streamSSE } from './sse'
 
+/** 千问基本面评分（后端缓存，同一快照 7 天内不重复调 API） */
+export async function fetchScore(code, refresh = false) {
+  const { data } = await client.get(`/qwen/score/${code}`, {
+    params: refresh ? { refresh: true } : {},
+  })
+  return data
+}
+
 export async function analyze(code) {
   const { data } = await client.get(`/qwen/analysis/${code}`)
   return data

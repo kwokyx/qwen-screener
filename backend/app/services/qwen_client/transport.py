@@ -47,6 +47,11 @@ def _user_friendly_error(exc: Exception) -> str:
 def probe_health(timeout: float = 4.0) -> dict:
     """轻量探测上游 AI 是否可用。前端启动时调一次。"""
     import time as _t
+    backend = (settings.ai_backend or "openai").lower()
+    if backend == "dashscope":
+        if not settings.dashscope_api_key:
+            return {"ok": False, "latency_ms": None, "reason": "未配置 DASHSCOPE_API_KEY"}
+        return {"ok": True, "latency_ms": None, "reason": None}
     if not settings.openai_api_key:
         return {"ok": False, "latency_ms": None, "reason": "未配置 OPENAI_API_KEY"}
     try:

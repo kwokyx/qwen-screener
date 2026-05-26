@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.schemas.qwen_score import StockScoreResponse
 from app.services import qwen_client
 
 
@@ -44,6 +45,21 @@ def _build_snapshot(db: Session, code: str) -> dict:
         "debt_ratio": fin.debt_ratio if fin else None,
         "dividend_yield": daily.dividend_yield if daily else None,
     }
+
+
+@router.get("/score/{code}", response_model=StockScoreResponse)
+def score_stock(
+    code: str,
+    refresh: bool = False,
+    db: Session = Depends(get_db),
+):
+    """千问基本面评分（JSON）。默认读缓存；refresh=true 强制重算。失败时回退本地公式分。"""
+    snapshot = _build_snapshot(db, code)
+    try:
+        data = qwen_client.score_stock(snapshot, force_refresh=refresh)
+    except RuntimeError:
+        data = qwen_client.formula_score(snapshot)
+    return StockScoreResponse(**data)
 
 
 @router.get("/analysis/{code}")

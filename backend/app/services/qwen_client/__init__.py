@@ -3,6 +3,8 @@
 公开能力：
 - parse_nl_query(query)         自然语言 → ScreenRequest（FC + 缓存 + JSON 模式兜底）
 - analyze_stock(snapshot)       基于基本面数据生成投资分析（缓存）
+- score_stock(snapshot)         千问 JSON 评分（长 TTL 缓存，省 API）
+- formula_score(snapshot)       本地规则评分（不调 API）
 - stream_analyze_stock(snapshot) 流式版本，yields 字符串 chunks
 - stream_call(prompt)           裸流式调用（不预设 prompt 模板）
 - probe_health()                探测上游 AI 是否可用
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +29,16 @@ from .transport import call as _call, openai_client, probe_health, stream_call
 __all__ = [
     "parse_nl_query",
     "analyze_stock",
+    "score_stock",
+    "formula_score",
     "stream_analyze_stock",
     "stream_call",
     "probe_health",
 ]
+
+_VERDICTS = ("强烈关注", "可关注", "中性", "谨慎")
+_MEM_SCORE_CACHE: dict[str, tuple[float, dict]] = {}
+_MEM_SCORE_MAX = 256
 
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
@@ -185,3 +194,151 @@ def stream_analyze_stock(snapshot: dict):
     for k, v in snapshot.items():
         template = template.replace("{" + k + "}", "" if v is None else str(v))
     yield from stream_call(template)
+
+
+# ---------------------- 个股评分（千问 + 缓存） ----------------------
+
+def _ai_configured() -> bool:
+    backend = (settings.ai_backend or "openai").lower()
+    if backend == "dashscope":
+        return bool(settings.dashscope_api_key)
+    return bool(settings.openai_api_key)
+
+
+def _clamp_score(v: Any, default: int = 50) -> int:
+    try:
+        if v is None or v == "":
+            return default
+        return max(0, min(100, int(round(float(v)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _verdict_from_total(total: int) -> str:
+    if total >= 80:
+        return "强烈关注"
+    if total >= 60:
+        return "可关注"
+    if total >= 40:
+        return "中性"
+    return "谨慎"
+
+
+def _normalize_verdict(raw: Any, total: int) -> str:
+    if isinstance(raw, str):
+        s = raw.strip()
+        for v in _VERDICTS:
+            if v in s:
+                return v
+    return _verdict_from_total(total)
+
+
+def formula_score(snapshot: dict) -> dict:
+    """本地规则评分（与前端 Detail 原公式一致），不消耗 API。"""
+    pe = snapshot.get("pe")
+    roe = snapshot.get("roe")
+    div = snapshot.get("dividend_yield")
+    pe_score = (
+        _clamp_score(110 - float(pe) * 4, 60)
+        if pe is not None and float(pe) > 0
+        else 60
+    )
+    roe_score = _clamp_score(40 + float(roe) * 4, 60) if roe is not None else 60
+    growth = ((float(snapshot.get("revenue_yoy") or 0)) + (float(snapshot.get("profit_yoy") or 0))) / 2
+    growth_score = _clamp_score(60 + growth * 1.5, 60)
+    div_score = _clamp_score(50 + float(div) * 8, 50) if div is not None else 50
+
+    total = 60
+    if pe is not None and float(pe) > 0:
+        total += max(0, min(20, 25 - float(pe) * 0.5))
+    if div is not None:
+        total += min(15, float(div) * 2)
+    if roe is not None:
+        total += min(15, float(roe))
+    total = _clamp_score(total, 60)
+
+    return {
+        "code": snapshot.get("code", ""),
+        "source": "formula",
+        "cached": False,
+        "total": total,
+        "valuation": pe_score,
+        "profit": roe_score,
+        "growth": growth_score,
+        "dividend": div_score,
+        "verdict": _verdict_from_total(total),
+        "reason": None,
+    }
+
+
+def _mem_cache_get(key: str) -> dict | None:
+    hit = _MEM_SCORE_CACHE.get(key)
+    if not hit:
+        return None
+    expires, payload = hit
+    if time.time() > expires:
+        _MEM_SCORE_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _mem_cache_set(key: str, payload: dict, ttl: int) -> None:
+    if len(_MEM_SCORE_CACHE) >= _MEM_SCORE_MAX:
+        oldest = min(_MEM_SCORE_CACHE.items(), key=lambda x: x[1][0])[0]
+        _MEM_SCORE_CACHE.pop(oldest, None)
+    _MEM_SCORE_CACHE[key] = (time.time() + ttl, payload)
+
+
+def _parse_score_json(data: dict, snapshot: dict) -> dict:
+    total = _clamp_score(data.get("total"), 60)
+    return {
+        "code": snapshot.get("code", ""),
+        "source": "qwen",
+        "cached": False,
+        "total": total,
+        "valuation": _clamp_score(data.get("valuation"), total),
+        "profit": _clamp_score(data.get("profit"), total),
+        "growth": _clamp_score(data.get("growth"), total),
+        "dividend": _clamp_score(data.get("dividend"), total),
+        "verdict": _normalize_verdict(data.get("verdict"), total),
+        "reason": (str(data.get("reason") or "")[:80] or None),
+    }
+
+
+def score_stock(snapshot: dict, *, force_refresh: bool = False) -> dict:
+    """千问 JSON 评分。Redis / 进程内缓存，默认 7 天 TTL；基本面快照变化会换 key。"""
+    if not _ai_configured():
+        raise RuntimeError("未配置 AI Key（DASHSCOPE_API_KEY 或 OPENAI_API_KEY）")
+
+    from app.services import cache as _cache
+
+    ttl = max(3600, int(settings.qwen_score_cache_ttl or 604800))
+    key = _cache.make_key("score", snapshot)
+
+    if not force_refresh:
+        cached = _cache.get_json(key)
+        if cached is not None:
+            try:
+                out = dict(cached)
+                out["cached"] = True
+                return out
+            except Exception:
+                pass
+        mem = _mem_cache_get(key)
+        if mem is not None:
+            out = dict(mem)
+            out["cached"] = True
+            return out
+
+    template = _load_prompt("stock_score.md")
+    for k, v in snapshot.items():
+        template = template.replace("{" + k + "}", "" if v is None else str(v))
+
+    text = _call(template, json_mode=True)
+    data = _extract_json(text)
+    out = _parse_score_json(data, snapshot)
+
+    _cache.set_json(key, out, ttl=ttl)
+    _mem_cache_set(key, out, ttl)
+    logger.info("[QWEN-SCORE] {} total={} (api call)", out.get("code"), out.get("total"))
+    return out
