@@ -53,12 +53,9 @@ def score_stock(
     refresh: bool = False,
     db: Session = Depends(get_db),
 ):
-    """千问基本面评分（JSON）。默认读缓存；refresh=true 强制重算。失败时回退本地公式分。"""
+    """基本面评分：数字由规则引擎计算；千问仅生成 ≤40 字解读（可缓存）。"""
     snapshot = _build_snapshot(db, code)
-    try:
-        data = qwen_client.score_stock(snapshot, force_refresh=refresh)
-    except RuntimeError:
-        data = qwen_client.formula_score(snapshot)
+    data = qwen_client.score_stock(snapshot, force_refresh=refresh)
     return StockScoreResponse(**data)
 
 

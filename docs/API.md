@@ -298,7 +298,7 @@ curl -N -X POST http://localhost:8000/api/v1/screener/nl/stream \
 ```json
 {
   "code": "600519.SH",
-  "analysis": "投资亮点：贵州茅台凭借在白酒行业的龙头地位...\n\n主要风险：...\n\n综合评级：推荐",
+  "analysis": "投资亮点：…\n\n主要风险：…\n\n综合评级：**可关注**（与系统算法结论一致）",
   "snapshot": {
     "code": "600519.SH", "name": "贵州茅台", "industry": "白酒",
     "pe": 20.96, "pb": 6.40, "market_cap": 17341.3,

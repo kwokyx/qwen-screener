@@ -3,8 +3,8 @@
 公开能力：
 - parse_nl_query(query)         自然语言 → ScreenRequest（FC + 缓存 + JSON 模式兜底）
 - analyze_stock(snapshot)       基于基本面数据生成投资分析（缓存）
-- score_stock(snapshot)         千问 JSON 评分（长 TTL 缓存，省 API）
-- formula_score(snapshot)       本地规则评分（不调 API）
+- score_stock(snapshot)         算法评分 + 千问解读 reason（方案 B）
+- formula_score(snapshot)       兼容别名，等同 score_engine.compute
 - stream_analyze_stock(snapshot) 流式版本，yields 字符串 chunks
 - stream_call(prompt)           裸流式调用（不预设 prompt 模板）
 - probe_health()                探测上游 AI 是否可用
@@ -170,18 +170,42 @@ def parse_nl_query(user_query: str) -> ScreenRequest:
     return req
 
 
+def _snapshot_with_algo_scores(snapshot: dict) -> dict:
+    """把规则引擎评分注入快照，供深度分析与评分卡结论一致。"""
+    from app.services.score_engine import compute
+
+    algo = compute(snapshot)
+    out = dict(snapshot)
+    out.update(
+        {
+            "score_total": algo["total"],
+            "score_verdict": algo["verdict"],
+            "score_valuation": algo["valuation"],
+            "score_profit": algo["profit"],
+            "score_growth": algo["growth"],
+            "score_dividend": algo["dividend"],
+        }
+    )
+    return out
+
+
+def _fill_prompt(template: str, data: dict) -> str:
+    for k, v in data.items():
+        template = template.replace("{" + k + "}", "" if v is None else str(v))
+    return template
+
+
 def analyze_stock(snapshot: dict) -> str:
     """生成投资分析文本，按 snapshot 哈希缓存（默认 1 小时 TTL）。"""
     from app.services import cache as _cache
 
-    key = _cache.make_key("analyze", snapshot)
+    enriched = _snapshot_with_algo_scores(snapshot)
+    key = _cache.make_key("analyze", enriched)
     cached = _cache.get_text(key)
     if cached:
         return cached
 
-    template = _load_prompt("stock_analysis.md")
-    for k, v in snapshot.items():
-        template = template.replace("{" + k + "}", "" if v is None else str(v))
+    template = _fill_prompt(_load_prompt("stock_analysis.md"), enriched)
     text = _call(template, json_mode=False).strip()
     if text:
         _cache.set_text(key, text, ttl=3600)
@@ -190,13 +214,12 @@ def analyze_stock(snapshot: dict) -> str:
 
 def stream_analyze_stock(snapshot: dict):
     """流式生成投资分析。yields 每个 token chunk（字符串）。"""
-    template = _load_prompt("stock_analysis.md")
-    for k, v in snapshot.items():
-        template = template.replace("{" + k + "}", "" if v is None else str(v))
+    enriched = _snapshot_with_algo_scores(snapshot)
+    template = _fill_prompt(_load_prompt("stock_analysis.md"), enriched)
     yield from stream_call(template)
 
 
-# ---------------------- 个股评分（千问 + 缓存） ----------------------
+# ---------------------- 个股评分（算法 + 千问解读，方案 B） ----------------------
 
 def _ai_configured() -> bool:
     backend = (settings.ai_backend or "openai").lower()
@@ -234,41 +257,77 @@ def _normalize_verdict(raw: Any, total: int) -> str:
 
 
 def formula_score(snapshot: dict) -> dict:
-    """本地规则评分（与前端 Detail 原公式一致），不消耗 API。"""
-    pe = snapshot.get("pe")
-    roe = snapshot.get("roe")
-    div = snapshot.get("dividend_yield")
-    pe_score = (
-        _clamp_score(110 - float(pe) * 4, 60)
-        if pe is not None and float(pe) > 0
-        else 60
-    )
-    roe_score = _clamp_score(40 + float(roe) * 4, 60) if roe is not None else 60
-    growth = ((float(snapshot.get("revenue_yoy") or 0)) + (float(snapshot.get("profit_yoy") or 0))) / 2
-    growth_score = _clamp_score(60 + growth * 1.5, 60)
-    div_score = _clamp_score(50 + float(div) * 8, 50) if div is not None else 50
+    """兼容旧调用：仅返回算法分（无千问 reason）。"""
+    from app.services.score_engine import compute
 
-    total = 60
-    if pe is not None and float(pe) > 0:
-        total += max(0, min(20, 25 - float(pe) * 0.5))
-    if div is not None:
-        total += min(15, float(div) * 2)
-    if roe is not None:
-        total += min(15, float(roe))
-    total = _clamp_score(total, 60)
-
+    algo = compute(snapshot)
     return {
-        "code": snapshot.get("code", ""),
-        "source": "formula",
+        "code": algo["code"],
+        "source": "algorithm",
+        "reason_source": "none",
+        "method": algo["method"],
         "cached": False,
-        "total": total,
-        "valuation": pe_score,
-        "profit": roe_score,
-        "growth": growth_score,
-        "dividend": div_score,
-        "verdict": _verdict_from_total(total),
+        "total": algo["total"],
+        "valuation": algo["valuation"],
+        "profit": algo["profit"],
+        "growth": algo["growth"],
+        "dividend": algo["dividend"],
+        "verdict": algo["verdict"],
         "reason": None,
+        "breakdown": algo["breakdown"],
     }
+
+
+def _format_breakdown_text(breakdown: list[dict]) -> str:
+    lines = []
+    for item in breakdown:
+        label = item.get("label") or item.get("metric", "")
+        val = item.get("value")
+        sc = item.get("score")
+        lines.append(f"- {label}={val} → {sc}分")
+    return "\n".join(lines) if lines else "- 无可用指标明细"
+
+
+def _generate_reason(snapshot: dict, algo: dict, *, force_refresh: bool = False) -> tuple[str, bool]:
+    """调用千问生成 ≤40 字解读；返回 (reason, cached)。"""
+    from app.services import cache as _cache
+
+    ttl = max(3600, int(settings.qwen_score_cache_ttl or 604800))
+    cache_payload = {**algo, "code": snapshot.get("code")}
+    key = _cache.make_key("score_reason", cache_payload)
+
+    if not force_refresh:
+        cached = _cache.get_text(key)
+        if cached:
+            return cached[:40], True
+        mem = _mem_cache_get(key)
+        if isinstance(mem, dict) and mem.get("reason"):
+            return str(mem["reason"])[:40], True
+
+    template = _load_prompt("stock_score_reason.md")
+    replacements = {
+        **snapshot,
+        "total": algo["total"],
+        "verdict": algo["verdict"],
+        "valuation": algo["valuation"],
+        "profit": algo["profit"],
+        "growth": algo["growth"],
+        "dividend": algo["dividend"],
+        "breakdown_text": _format_breakdown_text(algo.get("breakdown") or []),
+    }
+    for k, v in replacements.items():
+        template = template.replace("{" + k + "}", "" if v is None else str(v))
+
+    text = _call(template, json_mode=False).strip()
+    # 去掉引号、换行
+    text = text.replace("\n", "").strip("\"'“”")
+    reason = text[:40] if text else ""
+
+    if reason:
+        _cache.set_text(key, reason, ttl=ttl)
+        _mem_cache_set(key, {"reason": reason}, ttl)
+        logger.info("[QWEN-REASON] {} (api call)", snapshot.get("code"))
+    return reason, False
 
 
 def _mem_cache_get(key: str) -> dict | None:
@@ -289,56 +348,43 @@ def _mem_cache_set(key: str, payload: dict, ttl: int) -> None:
     _MEM_SCORE_CACHE[key] = (time.time() + ttl, payload)
 
 
-def _parse_score_json(data: dict, snapshot: dict) -> dict:
-    total = _clamp_score(data.get("total"), 60)
-    return {
-        "code": snapshot.get("code", ""),
-        "source": "qwen",
+def score_stock(snapshot: dict, *, force_refresh: bool = False) -> dict:
+    """方案 B：算法计算分数；千问仅生成 reason（可缓存）。"""
+    from app.services.score_engine import compute, template_reason
+
+    algo = compute(snapshot)
+    out = {
+        "code": algo["code"],
+        "source": "algorithm",
+        "reason_source": "none",
+        "method": algo["method"],
         "cached": False,
-        "total": total,
-        "valuation": _clamp_score(data.get("valuation"), total),
-        "profit": _clamp_score(data.get("profit"), total),
-        "growth": _clamp_score(data.get("growth"), total),
-        "dividend": _clamp_score(data.get("dividend"), total),
-        "verdict": _normalize_verdict(data.get("verdict"), total),
-        "reason": (str(data.get("reason") or "")[:80] or None),
+        "total": algo["total"],
+        "valuation": algo["valuation"],
+        "profit": algo["profit"],
+        "growth": algo["growth"],
+        "dividend": algo["dividend"],
+        "verdict": algo["verdict"],
+        "reason": None,
+        "breakdown": algo["breakdown"],
     }
 
+    if _ai_configured():
+        try:
+            reason, cached = _generate_reason(snapshot, algo, force_refresh=force_refresh)
+            if reason:
+                out["reason"] = reason
+                out["reason_source"] = "qwen"
+                out["cached"] = cached
+            else:
+                out["reason"] = template_reason(algo)
+                out["reason_source"] = "template"
+        except Exception as e:
+            logger.warning("千问解读失败，使用模板: {}", str(e)[:120])
+            out["reason"] = template_reason(algo)
+            out["reason_source"] = "template"
+    else:
+        out["reason"] = template_reason(algo)
+        out["reason_source"] = "template"
 
-def score_stock(snapshot: dict, *, force_refresh: bool = False) -> dict:
-    """千问 JSON 评分。Redis / 进程内缓存，默认 7 天 TTL；基本面快照变化会换 key。"""
-    if not _ai_configured():
-        raise RuntimeError("未配置 AI Key（DASHSCOPE_API_KEY 或 OPENAI_API_KEY）")
-
-    from app.services import cache as _cache
-
-    ttl = max(3600, int(settings.qwen_score_cache_ttl or 604800))
-    key = _cache.make_key("score", snapshot)
-
-    if not force_refresh:
-        cached = _cache.get_json(key)
-        if cached is not None:
-            try:
-                out = dict(cached)
-                out["cached"] = True
-                return out
-            except Exception:
-                pass
-        mem = _mem_cache_get(key)
-        if mem is not None:
-            out = dict(mem)
-            out["cached"] = True
-            return out
-
-    template = _load_prompt("stock_score.md")
-    for k, v in snapshot.items():
-        template = template.replace("{" + k + "}", "" if v is None else str(v))
-
-    text = _call(template, json_mode=True)
-    data = _extract_json(text)
-    out = _parse_score_json(data, snapshot)
-
-    _cache.set_json(key, out, ttl=ttl)
-    _mem_cache_set(key, out, ttl)
-    logger.info("[QWEN-SCORE] {} total={} (api call)", out.get("code"), out.get("total"))
     return out

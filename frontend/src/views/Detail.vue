@@ -43,8 +43,8 @@ const aiStreaming = ref(false)
 const aiError = ref('')
 let aiAbort = null
 
-// 千问评分（进入详情页时最多 1 次 API；后端 7 天缓存）
-const qwenScore = ref(null)
+// 算法评分 + 千问解读（进入详情页拉取；reason 后端可缓存 7 天）
+const stockScore = ref(null)
 const scoreLoading = ref(false)
 
 // K 线采样周期：用 days 参数控制后端取多少个交易日
@@ -126,44 +126,17 @@ async function load() {
   } finally {
     loading.value = false
   }
-  loadQwenScore()
+  loadStockScore()
 }
 
-function buildFormulaScore() {
-  const d = detail.value
-  if (!d) {
-    return { total: 0, valuation: 0, profit: 0, growth: 0, dividend: 0, verdict: '—', reason: null }
-  }
-  const l = d.latest || {}
-  const peScore = l.pe && l.pe > 0
-    ? Math.round(Math.max(20, Math.min(100, 110 - l.pe * 4)))
-    : 60
-  const roeScore = d.roe != null
-    ? Math.round(Math.max(20, Math.min(100, 40 + d.roe * 4)))
-    : 60
-  const growth = ((d.revenue_yoy || 0) + (d.profit_yoy || 0)) / 2
-  const growthScore = Math.round(Math.max(20, Math.min(100, 60 + growth * 1.5)))
-  const divScore = l.dividend_yield != null
-    ? Math.round(Math.max(20, Math.min(100, 50 + l.dividend_yield * 8)))
-    : 50
-  let total = 60
-  if (l.pe && l.pe > 0) total += Math.max(0, Math.min(20, 25 - l.pe * 0.5))
-  if (l.dividend_yield) total += Math.min(15, l.dividend_yield * 2)
-  if (d.roe) total += Math.min(15, d.roe)
-  total = Math.round(Math.max(0, Math.min(99, total)))
-  const verdict = total >= 80 ? '强烈关注' : total >= 60 ? '可关注' : total >= 40 ? '中性' : '谨慎'
-  return { total, valuation: peScore, profit: roeScore, growth: growthScore, dividend: divScore, verdict, reason: null }
-}
-
-async function loadQwenScore() {
-  qwenScore.value = null
-  if (!detail.value || !aiStatus.isUp) return
+async function loadStockScore() {
+  stockScore.value = null
+  if (!detail.value) return
   scoreLoading.value = true
   try {
-    const data = await qwenApi.fetchScore(code.value)
-    if (data.source === 'qwen') qwenScore.value = data
+    stockScore.value = await qwenApi.fetchScore(code.value)
   } catch {
-    qwenScore.value = null
+    stockScore.value = null
   } finally {
     scoreLoading.value = false
   }
@@ -281,9 +254,8 @@ const finRows = computed(() => {
   ]
 })
 
-const activeScore = computed(() => {
-  if (qwenScore.value?.source === 'qwen') return qwenScore.value
-  return buildFormulaScore()
+const activeScore = computed(() => stockScore.value || {
+  total: 0, valuation: 0, profit: 0, growth: 0, dividend: 0, verdict: '—', reason: null,
 })
 
 const scoreBreakdown = computed(() => {
@@ -302,12 +274,16 @@ const bullScore = computed(() => activeScore.value?.total ?? 0)
 const scoreVerdict = computed(() => activeScore.value?.verdict ?? '—')
 
 const scoreSubtitle = computed(() => {
-  if (scoreLoading.value) return '千问评分生成中…'
-  if (qwenScore.value?.source === 'qwen') {
-    return qwenScore.value.cached ? '千问综合评分 · 已缓存' : '千问综合评分'
+  if (scoreLoading.value) return '算法评分计算中…'
+  const s = stockScore.value
+  if (!s) return '评分暂不可用'
+  if (s.reason_source === 'qwen') {
+    return s.cached ? '算法评分 · 千问解读（已缓存）' : '算法评分 · 千问解读'
   }
-  if (!aiStatus.isUp) return '千问不可用 · 本地估算分'
-  return '本地估算分（千问评分暂不可用）'
+  if (s.reason_source === 'template') {
+    return aiStatus.isUp ? '算法评分 · 模板解读' : '算法评分 · 千问未配置'
+  }
+  return '算法评分（规则加权）'
 })
 
 const market = computed(() => {
@@ -568,7 +544,7 @@ const valuationCells = computed(() => {
                   {{ scoreVerdict }}
                 </div>
                 <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">{{ scoreSubtitle }}</div>
-                <div v-if="qwenScore?.reason" :style="{ fontSize: '10px', color: A2.textSub, marginTop: '4px', lineHeight: 1.45 }">{{ qwenScore.reason }}</div>
+                <div v-if="activeScore?.reason" :style="{ fontSize: '10px', color: A2.textSub, marginTop: '4px', lineHeight: 1.45 }">{{ activeScore.reason }}</div>
               </div>
             </div>
             <!-- 4 个子维度 -->
