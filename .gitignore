@@ -1,0 +1,48 @@
+# ---- secrets / env ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- python (backend) ----
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ---- node (frontend) ----
+node_modules/
+dist/
+.vite/
+*.local
+
+# ---- databases ----
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- logs ----
+*.log
+logs/
+
+# ---- editor / OS ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ---- 构建产物 / 临时 ----
+.cache/
+tmp/

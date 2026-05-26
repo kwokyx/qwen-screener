@@ -1,0 +1,20 @@
+import client from './client'
+
+export async function listSessions(limit = 50) {
+  const { data } = await client.get('/chat/sessions', { params: { limit } })
+  return data
+}
+
+export async function createSession(payload) {
+  // payload = { query, parsed_conditions, items, total, screen_meta }
+  const { data } = await client.post('/chat/sessions', payload)
+  return data
+}
+
+export async function deleteSession(id) {
+  await client.delete(`/chat/sessions/${id}`)
+}
+
+export async function clearSessions() {
+  await client.delete('/chat/sessions')
+}
