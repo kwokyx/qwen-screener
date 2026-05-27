@@ -2,8 +2,9 @@
 // 数据新鲜度指示 + 手动同步面板
 // - 收起态：一个小标签显示 "数据：今日 / 1天前 / N天前"
 // - 展开态：4 个任务的卡片，每张有"上次更新"+"立即同步"按钮
+// - 长任务走 async + 轮询 sync_meta，避免把 queued 误判为失败
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { A2 } from '../shared/theme.js'
 import { dataHealth, triggerSync } from '../api/health'
 import { toast } from '../stores/toast'
@@ -16,13 +17,24 @@ const counts = ref(null)        // {basic, daily, financial, with_industry}
 const latestDate = ref(null)
 const loading = ref(false)
 const running = ref({})         // {jobName: boolean}
+let panelPollTimer = null
+
+const POLL_MS = 4000
+const POLL_MAX_MS = 45 * 60 * 1000
+
+/** 秒级任务可同步等待；其余后台跑并轮询 */
+const SYNC_WAIT_JOBS = new Set(['weekly_basic'])
 
 const JOBS = [
   { name: 'daily_market',        label: '全市场行情',  desc: '5500+ 只 OHLC + 成交量', eta: '约 1 分钟' },
-  { name: 'daily_value',         label: '估值快照',    desc: '沪深 300 + 中证 500 PE/PB/股息率', eta: '约 5 分钟' },
-  { name: 'weekly_fundamentals', label: '行业 + 财务', desc: '行业标签 + ROE / 营收 / 净利', eta: '约 10 分钟' },
+  { name: 'daily_value',         label: '估值快照',    desc: '东财全市场 + 沪深800雪球补全', eta: '约 5–15 分钟' },
+  { name: 'weekly_fundamentals', label: '行业 + 财务', desc: '行业标签 + ROE / 营收 / 净利', eta: '约 10–30 分钟' },
   { name: 'weekly_basic',        label: '股票池',      desc: '全 A 股代码列表更新', eta: '约 10 秒' },
 ]
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 async function refresh() {
   loading.value = true
@@ -31,25 +43,77 @@ async function refresh() {
     meta.value = r.sync_meta || {}
     counts.value = r.counts
     latestDate.value = r.latest_trade_date
-  } catch (e) {
+  } catch {
     /* 静默 */
   } finally {
     loading.value = false
   }
 }
 
+/** 轮询直到该任务有一次 last_run_at 不早于触发时刻的终态 */
+async function pollJobUntilDone(name, sinceMs) {
+  while (Date.now() - sinceMs < POLL_MAX_MS) {
+    await sleep(POLL_MS)
+    await refresh()
+    const m = meta.value[name]
+    if (!m?.last_run_at) continue
+    const runMs = new Date(m.last_run_at).getTime()
+    if (Number.isNaN(runMs) || runMs < sinceMs - 3000) continue
+    if (m.status === 'running') continue
+    if (m.status === 'success') {
+      return { ok: true, detail: m.detail || '' }
+    }
+    if (m.status === 'failed') {
+      return { ok: false, detail: m.detail || '' }
+    }
+  }
+  return { ok: false, timeout: true, detail: '' }
+}
+
+function jobStatus(name) {
+  if (running.value[name] || meta.value[name]?.status === 'running') return 'running'
+  const st = meta.value[name]?.status
+  if (st === 'success' || st === 'failed') return st
+  return 'idle'
+}
+
+function fmtRunning(iso) {
+  if (!iso) return '进行中…'
+  const sec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000)
+  if (sec < 60) return `进行中 · ${Math.floor(sec)} 秒`
+  return `进行中 · ${Math.floor(sec / 60)} 分钟`
+}
+
 async function runJob(name) {
   if (running.value[name]) return
   running.value[name] = true
-  toast.info(`${name} 已开始同步…`)
+  const label = labelOf(name)
+  const sinceMs = Date.now()
   try {
-    const r = await triggerSync(name)
-    if (r.meta?.status === 'success') {
-      toast.success(`${labelOf(name)} 完成（${r.meta.detail || ''}）`)
-    } else {
-      toast.error(`${labelOf(name)} 失败：${r.meta?.detail || ''}`)
+    const useWait = SYNC_WAIT_JOBS.has(name)
+    const r = await triggerSync(name, useWait)
+
+    if (r.queued) {
+      toast.info(`${label} 已开始同步，请稍候…`)
+      const outcome = await pollJobUntilDone(name, sinceMs)
+      await refresh()
+      if (outcome.ok) {
+        toast.success(`${label} 已完成`)
+      } else if (outcome.timeout) {
+        toast.error(`${label} 耗时较长，请点面板右上角刷新查看是否已完成`)
+      } else {
+        toast.error(`${label} 未成功，请稍后重试或联系管理员`)
+      }
+      return
     }
+
     await refresh()
+    const st = r.meta?.status ?? meta.value[name]?.status
+    if (st === 'success') {
+      toast.success(`${label} 已完成`)
+    } else {
+      toast.error(`${label} 未成功，请稍后重试`)
+    }
   } catch (e) {
     toast.error(friendlyError(e))
   } finally {
@@ -99,11 +163,34 @@ function onDoc(e) {
   if (!e.target.closest('[data-data-freshness]')) close()
 }
 
+function startPanelPoll() {
+  stopPanelPoll()
+  panelPollTimer = setInterval(() => refresh(), POLL_MS)
+}
+function stopPanelPoll() {
+  if (panelPollTimer) {
+    clearInterval(panelPollTimer)
+    panelPollTimer = null
+  }
+}
+
+watch(open, (isOpen) => {
+  if (isOpen) {
+    refresh()
+    startPanelPoll()
+  } else {
+    stopPanelPoll()
+  }
+})
+
 onMounted(() => {
   refresh()
   document.addEventListener('mousedown', onDoc)
 })
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDoc)
+  stopPanelPoll()
+})
 </script>
 
 <template>
@@ -149,12 +236,24 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
             <div :style="{ flex: 1, minWidth: 0 }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
                 <span :style="{ fontSize: '12px', fontWeight: 600, color: A2.text }">{{ j.label }}</span>
-                <span v-if="meta[j.name]?.status === 'failed'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.upSoft, color: A2.up, borderRadius: '3px', fontWeight: 700 }">失败</span>
-                <span v-else-if="meta[j.name]?.status === 'success'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.downSoft, color: A2.down, borderRadius: '3px', fontWeight: 700 }">已同步</span>
+                <span v-if="jobStatus(j.name) === 'running'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '3px', fontWeight: 700 }">同步中</span>
+                <span v-else-if="jobStatus(j.name) === 'failed'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.upSoft, color: A2.up, borderRadius: '3px', fontWeight: 700 }">失败</span>
+                <span v-else-if="jobStatus(j.name) === 'success'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.downSoft, color: A2.down, borderRadius: '3px', fontWeight: 700 }">已同步</span>
               </div>
               <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ j.desc }}</div>
-              <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">
-                上次：{{ fmtRel(meta[j.name]?.last_run_at) }}<span v-if="meta[j.name]?.duration_ms"> · {{ (meta[j.name].duration_ms / 1000).toFixed(0) }}s</span>
+              <div :style="{ fontSize: '10px', color: jobStatus(j.name) === 'running' ? A2.qwenDeep : A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">
+                <template v-if="jobStatus(j.name) === 'running'">
+                  {{ fmtRunning(meta[j.name]?.last_run_at) }} · 预计 {{ j.eta }}
+                </template>
+                <template v-else>
+                  上次：{{ fmtRel(meta[j.name]?.last_run_at) }}<span v-if="meta[j.name]?.duration_ms"> · {{ (meta[j.name].duration_ms / 1000).toFixed(0) }}s</span>
+                </template>
+              </div>
+              <div v-if="jobStatus(j.name) === 'running'" :style="{ fontSize: '9.5px', color: A2.textMuted, marginTop: '4px', lineHeight: 1.4 }">
+                完成后将自动提示，也可点右上角刷新查看
+              </div>
+              <div v-else-if="meta[j.name]?.detail && jobStatus(j.name) === 'failed'" :style="{ fontSize: '9.5px', color: A2.up, marginTop: '4px', lineHeight: 1.4 }">
+                同步遇到问题，请稍后重试
               </div>
             </div>
             <button @click="runJob(j.name)" :disabled="running[j.name]"
@@ -167,7 +266,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
         </div>
 
         <div :style="{ padding: '8px 14px', fontSize: '10.5px', color: A2.textDim, lineHeight: 1.5, background: '#FBFBF9', borderTop: `1px solid ${A2.borderHair}` }">
-          系统每个交易日 15:30（行情）/ 16:00（估值）/ 周末（财务）自动更新，也可以在这里手动触发。
+          点击「立即同步」后请保持本页打开；耗时较长的任务完成后会自动提示，也可点右上角刷新查看状态。
         </div>
       </div>
     </Transition>

@@ -84,13 +84,18 @@ def get_meta() -> dict[str, dict]:
 
 
 def _run_with_meta(name: str, fn):
+    """执行任务并写入 sync_meta；开始时标记 running 供前端轮询。"""
+    try:
+        _record(name, "running", 0, "同步进行中")
+    except Exception:
+        logger.warning("[SCHED] {} 无法写入 running 状态", name)
     t0 = datetime.utcnow()
     detail = ""
     status = "success"
     try:
         rv = fn()
         if rv is not None:
-            detail = f"affected={rv}"
+            detail = rv[:256] if isinstance(rv, str) else f"affected={rv}"
     except Exception as e:
         status = "failed"
         detail = str(e)[:240]
@@ -118,21 +123,38 @@ def job_daily_market():
 def job_daily_value():
     """价值面：先东财一次性铺满 5500+（PE/PB/市值/换手率），再雪球 csi300+csi500
     用 TTM-PE 和股息率覆盖那 800 只，单条失败不影响整体。
+    返回 detail 字符串写入 sync_meta；东财与 pool 均失败时抛错标 failed。
     """
     logger.info("[SCHED] daily_value 开始")
     db = SessionLocal()
     try:
-        cnt = 0
+        em_n = 0
+        pool_n = 0
+        parts: list[str] = []
         try:
-            cnt += data_sync.sync_full_valuation_em(db) or 0
+            em_n = data_sync.sync_full_valuation_em(db) or 0
+            if em_n > 0:
+                parts.append(f"em={em_n}")
         except Exception as e:
+            parts.append(f"em_failed:{str(e)[:80]}")
             logger.warning("[SCHED] daily_value em-full 失败: {}", str(e)[:120])
         for pool in ("csi300", "csi500"):
             try:
-                cnt += data_sync.sync_pool_xq(db, pool=pool) or 0
+                n = data_sync.sync_pool_xq(db, pool=pool) or 0
+                pool_n += n
+                if n > 0:
+                    parts.append(f"{pool}={n}")
             except Exception as e:
+                parts.append(f"{pool}_failed")
                 logger.warning("[SCHED] daily_value pool={} 失败: {}", pool, str(e)[:120])
-        return cnt
+        detail = ";".join(parts) if parts else "no_op"
+        if em_n <= 0 and pool_n <= 0:
+            raise RuntimeError(
+                f"{detail};hint: EM spot failed, run pool csi300/csi500 in container"
+            )
+        if em_n <= 0:
+            detail += ";partial:em_skipped"
+        return detail
     finally:
         db.close()
 

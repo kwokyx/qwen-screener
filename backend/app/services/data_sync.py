@@ -273,9 +273,36 @@ def fetch_pool(pool: str = "csi300") -> list[dict]:
     ]
 
 
+def _xq_api_failed(exc: BaseException) -> bool:
+    """雪球接口常因 token/限流返回无 data 字段的 JSON，akshare 抛 KeyError('data')。"""
+    if isinstance(exc, KeyError) and str(exc) in ("data", "'data'"):
+        return True
+    msg = str(exc).lower()
+    return "keyerror" in msg and "data" in msg or "'data'" in str(exc)
+
+
+def _fetch_industry_em(code: str) -> str | None:
+    """东财个股资料兜底行业（雪球不可用时）。"""
+    import akshare as ak
+
+    sym = code.split(".")[0]
+    try:
+        df = ak.stock_individual_info_em(symbol=sym)
+        if df is None or df.empty:
+            return None
+        kv = dict(zip(df["item"], df["value"]))
+        for key in ("行业", "所属行业", "行业分类"):
+            v = kv.get(key)
+            if v and str(v).strip() and str(v) != "-":
+                return str(v).strip()
+    except Exception:
+        return None
+    return None
+
+
 def sync_pool_industry(db: Session, pool: str = "csi300", sleep_sec: float = 0.1) -> int:
     """补 stock_basic 的 industry / 上市时间 / 总股本。
-    - 指数池（csi300/csi500/sse50）：逐只调雪球 individual_basic_info
+    - 指数池（csi300/csi500/sse50）：优先雪球；失败则东财 stock_individual_info_em
     - bj 池：股票列表本身就带行业/上市日期/总股本，直接用，不需要逐只远程调用
     """
     pool_list = fetch_pool(pool)
@@ -302,22 +329,36 @@ def sync_pool_industry(db: Session, pool: str = "csi300", sleep_sec: float = 0.1
     import akshare as ak
 
     def process(p):
-        df = ak.stock_individual_basic_info_xq(symbol=_to_xq(p["code"]))
-        kv = dict(zip(df["item"], df["value"]))
         basic = db.get(StockBasic, p["code"])
         if basic is None:
             return False
-        ind = kv.get("affiliate_industry") or {}
-        ind_name = (ind.get("ind_name") if isinstance(ind, dict) else None) or None
-        if ind_name:  # 只在拉到值时覆盖，保留 bj 快路径写好的字段
+
+        ind_name = None
+        kv: dict = {}
+        try:
+            df = ak.stock_individual_basic_info_xq(symbol=_to_xq(p["code"]))
+            kv = dict(zip(df["item"], df["value"]))
+            ind = kv.get("affiliate_industry") or {}
+            ind_name = (ind.get("ind_name") if isinstance(ind, dict) else None) or None
+        except Exception as e:
+            if not _xq_api_failed(e):
+                raise
+            ind_name = _fetch_industry_em(p["code"])
+
+        if not ind_name:
+            ind_name = _fetch_industry_em(p["code"])
+
+        if ind_name:
             basic.industry = ind_name
         basic.market = _market_from_code(p["code"])
-        ts_share = _f(kv.get("reg_asset"), scale=1e8)
-        if ts_share is not None:
-            basic.total_share = ts_share
-        ts = kv.get("listed_date")
-        if isinstance(ts, (int, float)) and ts > 0:
-            basic.list_date = datetime.fromtimestamp(ts / 1000).date()
+        if kv:
+            ts_share = _f(kv.get("reg_asset"), scale=1e8)
+            if ts_share is not None:
+                basic.total_share = ts_share
+            ts = kv.get("listed_date")
+            if isinstance(ts, (int, float)) and ts > 0:
+                basic.list_date = datetime.fromtimestamp(ts / 1000).date()
+        return bool(ind_name)
 
     updated, _ = process_pool(
         pool_list, process,
@@ -402,16 +443,49 @@ def sync_pool_financial(db: Session, pool: str = "csi300", sleep_sec: float = 0.
     return updated
 
 
-def sync_full_valuation_em(db: Session, trade_date: date | None = None) -> int:
+def sync_full_valuation_em(
+    db: Session,
+    trade_date: date | None = None,
+    *,
+    retries: int = 3,
+    retry_sleep: float = 8.0,
+) -> int:
     """全市场估值（PE/PB/总市值/换手率）—— 一次东方财富 spot 调用覆盖 5500+ 只。
     雪球 spot 对小盘 / 北交所返回 None，所以这里改用东财作为主源。
     upsert 模式，不删现有行（保留 csi300/csi500 后续覆盖的 xq-TTM PE 和股息率）。
+
+    东财在 Docker / 校园网环境常被限流断开（RemoteDisconnected），默认重试 3 次。
+    仍失败时可改用：python -m scripts.sync_data pool csi300 && pool csi500
     """
     import akshare as ak
 
     today = trade_date or date.today()
     logger.info("[EM-VAL] 拉东方财富全市场快照（PE/PB/市值/换手率）...")
-    df = ak.stock_zh_a_spot_em()
+    df = None
+    last_err: Exception | None = None
+    wait = retry_sleep
+    for attempt in range(1, retries + 1):
+        try:
+            df = ak.stock_zh_a_spot_em()
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                logger.warning(
+                    "[EM-VAL] 东财请求失败 ({}/{}): {}；{}s 后重试",
+                    attempt, retries, str(e)[:120], wait,
+                )
+                time.sleep(wait)
+                wait = min(wait * 2, 60.0)
+    if df is None:
+        logger.error(
+            "[EM-VAL] 东财全市场接口 {} 次均失败（多为限流/网络）。"
+            "可稍后重试 daily-em，或执行 pool csi300 / pool csi500 仅补沪深800估值。",
+            retries,
+        )
+        if last_err is not None:
+            raise last_err
+        return 0
     if df is None or df.empty:
         logger.warning("[EM-VAL] 拉到 0 行，跳过")
         return 0
@@ -450,6 +524,10 @@ def sync_full_valuation_em(db: Session, trade_date: date | None = None) -> int:
     db.commit()
     logger.info("[EM-VAL] 完成：新增 {} / 更新 {}", inserted, updated)
     return inserted + updated
+
+
+# CLI 别名：scripts/sync_data.py daily-em
+sync_daily_em = sync_full_valuation_em
 
 
 # ---------- K 线历史回填 ----------
