@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     qwen_model: str = "qwen-plus"
 
+    # 千问个股评分缓存（秒）；同一快照默认 7 天内不重复调 API
+    qwen_score_cache_ttl: int = 604800
+
     cors_origins: str = "http://localhost:5173"
 
     @property

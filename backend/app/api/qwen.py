@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.schemas.qwen_score import StockScoreResponse
 from app.services import qwen_client
+from app.services.score_engine import snapshot_from_row
 
 
 router = APIRouter(prefix="/qwen", tags=["qwen"])
@@ -30,20 +32,32 @@ def _build_snapshot(db: Session, code: str) -> dict:
         .order_by(desc(StockFinancial.report_date))
         .first()
     )
-    return {
-        "code": basic.code,
-        "name": basic.name,
-        "industry": basic.industry,
-        "pe": daily.pe if daily else None,
-        "pb": daily.pb if daily else None,
-        "market_cap": daily.market_cap if daily else None,
-        "roe": fin.roe if fin else None,
-        "revenue_yoy": fin.revenue_yoy if fin else None,
-        "profit_yoy": fin.profit_yoy if fin else None,
-        "gross_margin": fin.gross_margin if fin else None,
-        "debt_ratio": fin.debt_ratio if fin else None,
-        "dividend_yield": daily.dividend_yield if daily else None,
-    }
+    return snapshot_from_row(
+        code=basic.code,
+        name=basic.name,
+        industry=basic.industry,
+        pe=daily.pe if daily else None,
+        pb=daily.pb if daily else None,
+        market_cap=daily.market_cap if daily else None,
+        roe=fin.roe if fin else None,
+        revenue_yoy=fin.revenue_yoy if fin else None,
+        profit_yoy=fin.profit_yoy if fin else None,
+        gross_margin=fin.gross_margin if fin else None,
+        debt_ratio=fin.debt_ratio if fin else None,
+        dividend_yield=daily.dividend_yield if daily else None,
+    )
+
+
+@router.get("/score/{code}", response_model=StockScoreResponse)
+def score_stock(
+    code: str,
+    refresh: bool = False,
+    db: Session = Depends(get_db),
+):
+    """基本面评分：数字由规则引擎计算；千问仅生成 ≤40 字解读（可缓存）。"""
+    snapshot = _build_snapshot(db, code)
+    data = qwen_client.score_stock(snapshot, force_refresh=refresh)
+    return StockScoreResponse(**data)
 
 
 @router.get("/analysis/{code}")

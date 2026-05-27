@@ -43,6 +43,10 @@ const aiStreaming = ref(false)
 const aiError = ref('')
 let aiAbort = null
 
+// 算法评分 + 千问解读（进入详情页拉取；reason 后端可缓存 7 天）
+const stockScore = ref(null)
+const scoreLoading = ref(false)
+
 // K 线采样周期：用 days 参数控制后端取多少个交易日
 // 因为现阶段 DB 是日级粒度（无分时），分时改成"近 5 天"，季 K 改成"两年"
 const klineTabs = [
@@ -121,6 +125,20 @@ async function load() {
     }
   } finally {
     loading.value = false
+  }
+  loadStockScore()
+}
+
+async function loadStockScore() {
+  stockScore.value = null
+  if (!detail.value) return
+  scoreLoading.value = true
+  try {
+    stockScore.value = await qwenApi.fetchScore(code.value)
+  } catch {
+    stockScore.value = null
+  } finally {
+    scoreLoading.value = false
   }
 }
 
@@ -236,43 +254,36 @@ const finRows = computed(() => {
   ]
 })
 
-// 子维度（每项 0-100）
+const activeScore = computed(() => stockScore.value || {
+  total: 0, valuation: 0, profit: 0, growth: 0, dividend: 0, verdict: '—', reason: null,
+})
+
 const scoreBreakdown = computed(() => {
-  const d = detail.value
-  if (!d) return []
-  const l = d.latest || {}
-  // 估值得分：PE 越低越好（参考 < 10 满分），PB 辅助
-  const peScore = l.pe && l.pe > 0
-    ? Math.round(Math.max(20, Math.min(100, 110 - l.pe * 4)))
-    : 60
-  // 盈利得分：ROE 主导
-  const roeScore = d.roe != null
-    ? Math.round(Math.max(20, Math.min(100, 40 + d.roe * 4)))
-    : 60
-  // 成长得分：营收+净利同比
-  const growth = ((d.revenue_yoy || 0) + (d.profit_yoy || 0)) / 2
-  const growthScore = Math.round(Math.max(20, Math.min(100, 60 + growth * 1.5)))
-  // 现金流 / 分红
-  const divScore = l.dividend_yield != null
-    ? Math.round(Math.max(20, Math.min(100, 50 + l.dividend_yield * 8)))
-    : 50
+  if (!detail.value) return []
+  const s = activeScore.value
   return [
-    { l: '估值', v: peScore },
-    { l: '盈利', v: roeScore },
-    { l: '成长', v: growthScore },
-    { l: '分红', v: divScore },
+    { l: '估值', v: s.valuation },
+    { l: '盈利', v: s.profit },
+    { l: '成长', v: s.growth },
+    { l: '分红', v: s.dividend },
   ]
 })
 
-// 综合评分（同 Results 的逻辑）
-const bullScore = computed(() => {
-  if (!detail.value) return 0
-  const { latest, roe } = detail.value
-  let s = 60
-  if (latest?.pe && latest.pe > 0) s += Math.max(0, Math.min(20, 25 - latest.pe * 0.5))
-  if (latest?.dividend_yield) s += Math.min(15, latest.dividend_yield * 2)
-  if (roe) s += Math.min(15, roe)
-  return Math.round(Math.max(0, Math.min(99, s)))
+const bullScore = computed(() => activeScore.value?.total ?? 0)
+
+const scoreVerdict = computed(() => activeScore.value?.verdict ?? '—')
+
+const scoreSubtitle = computed(() => {
+  if (scoreLoading.value) return '算法评分计算中…'
+  const s = stockScore.value
+  if (!s) return '评分暂不可用'
+  if (s.reason_source === 'qwen') {
+    return s.cached ? '算法评分 · 千问解读（已缓存）' : '算法评分 · 千问解读'
+  }
+  if (s.reason_source === 'template') {
+    return aiStatus.isUp ? '算法评分 · 模板解读' : '算法评分 · 千问未配置'
+  }
+  return '算法评分（规则加权）'
 })
 
 const market = computed(() => {
@@ -530,9 +541,10 @@ const valuationCells = computed(() => {
               <div style="flex:1">
                 <div :style="{ fontSize: '11px', color: A2.textMuted }">综合评分</div>
                 <div :style="{ fontSize: '18px', fontWeight: 800, color: A2.qwenDeep, letterSpacing: '-0.3px' }">
-                  {{ bullScore >= 80 ? '强烈关注' : bullScore >= 60 ? '可关注' : bullScore >= 40 ? '中性' : '谨慎' }}
+                  {{ scoreVerdict }}
                 </div>
-                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">基于估值 / 盈利 / 现金流综合</div>
+                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">{{ scoreSubtitle }}</div>
+                <div v-if="activeScore?.reason" :style="{ fontSize: '10px', color: A2.textSub, marginTop: '4px', lineHeight: 1.45 }">{{ activeScore.reason }}</div>
               </div>
             </div>
             <!-- 4 个子维度 -->
