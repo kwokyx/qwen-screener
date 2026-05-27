@@ -219,7 +219,7 @@ const fmtDays = (ts) => {
               <tr v-if="!rows.length">
                 <td colspan="10" :style="{ padding: 0 }">
                   <EmptyState icon="star" title="自选列表为空"
-                              subtitle="在 ⌘K 搜索 / 行情 / 因子 / 详情页点星标加入" />
+                              subtitle="在 ⌘K 搜索 / 行情 / 条件选股 / 详情页点星标加入" />
                 </td>
               </tr>
               <tr v-for="r in rows" :key="r.code" class="row-hover"

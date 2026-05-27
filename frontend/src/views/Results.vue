@@ -8,35 +8,16 @@ import StarButton from '../components/StarButton.vue'
 import Skeleton from '../components/Skeleton.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { A2 } from '../shared/theme.js'
+import {
+  EXTRA_FIELD_OPTIONS,
+  OP_OPTIONS,
+  POOL_OPTIONS,
+  SCREENER_INTRO,
+} from '../shared/screenerMeta.js'
 import { screen } from '../api/screener'
 import { useKlineCache } from '../composables/useKlineCache.js'
 
 const router = useRouter()
-
-const POOL_OPTIONS = [
-  { value: 'all', label: '全 A 股' },
-  { value: 'csi300', label: '沪深 300' },
-  { value: 'csi500', label: '中证 500' },
-  { value: 'sse50', label: '上证 50' },
-]
-
-const EXTRA_FIELD_OPTIONS = [
-  { field: 'pb', label: 'PB' },
-  { field: 'turnover', label: '换手率(%)' },
-  { field: 'close', label: '现价(元)' },
-  { field: 'gross_margin', label: '毛利率(%)' },
-  { field: 'debt_ratio', label: '负债率(%)' },
-  { field: 'revenue_yoy', label: '营收 YoY(%)' },
-  { field: 'profit_yoy', label: '净利 YoY(%)' },
-]
-
-const OP_OPTIONS = [
-  { value: 'gt', label: '>' },
-  { value: 'gte', label: '≥' },
-  { value: 'lt', label: '<' },
-  { value: 'lte', label: '≤' },
-  { value: 'between', label: '区间' },
-]
 
 /** 左侧可编辑筛选表单 */
 const form = ref({
@@ -143,7 +124,7 @@ const poolLabel = computed(() => POOL_OPTIONS.find((p) => p.value === form.value
 const filterSummary = computed(() => {
   const parts = [poolLabel.value]
   const f = form.value
-  if (f.peEnabled) parts.push(`PE ${f.peMin || '—'}~${f.peMax || '—'}`)
+  if (f.peEnabled) parts.push(`市盈率 ${f.peMin || '—'}~${f.peMax || '—'}`)
   if (f.marketCapEnabled && f.marketCapMin) parts.push(`市值>${f.marketCapMin}亿`)
   return parts.join(' · ')
 })
@@ -158,10 +139,10 @@ const stats = computed(() => {
   const fmt = (v, d = 1) => (v == null ? '—' : v.toFixed(d))
   return [
     { l: '命中数量', v: total.value, sub: `已展示 ${arr.length}`, col: A2.qwenDeep, unit: '只' },
-    { l: '平均 PE', v: fmt(avg('pe')), sub: '组内中位', unit: 'x' },
+    { l: '平均市盈率', v: fmt(avg('pe')), sub: '组内中位', unit: 'x' },
     { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '亿元', unit: '亿' },
     { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '组内中位', unit: '%' },
-    { l: '平均 ROE', v: fmt(avg('roe')), sub: '组内中位', unit: '%' },
+    { l: '平均 ROE', v: fmt(avg('roe')), sub: '净资产收益率', unit: '%' },
   ]
 })
 
@@ -170,7 +151,7 @@ function displayScore(it) {
   return it.score_total != null ? it.score_total : '—'
 }
 
-const headers = ['#', '代码', '名称', '行业', '现价', 'PE', 'PB', 'ROE', '股息率', '总市值', '综合分', '30日走势', '操作']
+const headers = ['#', '代码', '名称', '行业', '现价', 'PE', 'PB', 'ROE', '股息率', '总市值', '综合评分', '30日走势', '操作']
 
 async function load() {
   loading.value = true
@@ -195,7 +176,7 @@ async function load() {
   }
 }
 
-function addExtraFactor() {
+function addExtraCondition() {
   extraRules.value.push({
     id: ++extraId,
     field: 'pb',
@@ -244,17 +225,20 @@ onMounted(load)
       <!-- Left filter panel -->
       <div :style="{ background: A2.surface, padding: '16px', fontSize: '12px', overflow: 'auto', borderRight: `1px solid ${A2.borderHair}` }">
         <div :style="{ fontSize: '13px', fontWeight: 700, marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
-          <span>因子筛选器</span>
+          <span>选股条件</span>
           <span :style="{ fontSize: '11px', color: A2.textMuted, cursor: 'pointer' }" @click="resetForm">重置</span>
         </div>
+        <div :style="{ padding: '10px', background: A2.bgDeep, borderRadius: '8px', fontSize: '10.5px', color: A2.textSub, marginBottom: '10px', lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
+          {{ SCREENER_INTRO }}
+        </div>
         <div :style="{ padding: '10px', background: A2.qwenGradSoft, borderRadius: '8px', fontSize: '11px', color: A2.qwenDeep, marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px', border: `1px solid ${A2.borderHair}` }">
-          <Icon name="sparkle" :size="11" /> 想用自然语言筛选？
-          <span :style="{ textDecoration: 'underline', cursor: 'pointer', fontWeight: 600 }" @click="router.push('/chat')">去对话筛选</span>
+          <Icon name="sparkle" :size="11" /> 想用自然语言？
+          <span :style="{ textDecoration: 'underline', cursor: 'pointer', fontWeight: 600 }" @click="router.push('/chat')">去千问筛选</span>
         </div>
 
-        <!-- 基础 -->
+        <!-- 范围 -->
         <div :style="{ marginBottom: '14px' }">
-          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">基础</div>
+          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">范围</div>
           <label :style="{ display: 'block', fontSize: '10.5px', color: A2.textMuted, marginBottom: '4px' }">股票池</label>
           <select v-model="form.pool" :style="selectStyle">
             <option v-for="p in POOL_OPTIONS" :key="p.value" :value="p.value">{{ p.label }}</option>
@@ -268,7 +252,7 @@ onMounted(load)
           <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">估值</div>
           <label :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }">
             <input v-model="form.peEnabled" type="checkbox" />
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">PE(TTM) 区间</span>
+            <span :style="{ fontSize: '11px', color: A2.textMuted }">市盈率区间 <span :style="{ fontSize: '9px', color: A2.textDim }">(TTM)</span></span>
           </label>
           <div v-if="form.peEnabled" :style="{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '6px', alignItems: 'center' }">
             <input v-model="form.peMin" type="number" placeholder="最小" :style="inputStyle" />
@@ -279,20 +263,20 @@ onMounted(load)
 
         <!-- 规模 -->
         <div :style="{ marginBottom: '14px' }">
-          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">规模</div>
+          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">公司大小</div>
           <label :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }">
             <input v-model="form.marketCapEnabled" type="checkbox" />
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">总市值 &gt;（亿元）</span>
+            <span :style="{ fontSize: '11px', color: A2.textMuted }">市值大于（亿元）</span>
           </label>
           <input v-if="form.marketCapEnabled" v-model="form.marketCapMin" type="number" min="0" :style="inputStyle" />
         </div>
 
         <!-- 盈利 -->
         <div :style="{ marginBottom: '14px' }">
-          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">盈利</div>
+          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">赚钱与分红</div>
           <label :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }">
             <input v-model="form.roeEnabled" type="checkbox" />
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">ROE ≥（%）</span>
+            <span :style="{ fontSize: '11px', color: A2.textMuted }">ROE（净资产收益率）≥（%）</span>
           </label>
           <input v-if="form.roeEnabled" v-model="form.roeMin" type="number" :style="{ ...inputStyle, marginBottom: '8px' }" />
           <label :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }">
@@ -304,22 +288,22 @@ onMounted(load)
 
         <!-- 成长 -->
         <div :style="{ marginBottom: '14px' }">
-          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">成长</div>
+          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">业绩增长</div>
           <label :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }">
             <input v-model="form.revenueYoyEnabled" type="checkbox" />
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">营收 YoY ≥（%）</span>
+            <span :style="{ fontSize: '11px', color: A2.textMuted }">营收同比增长 ≥（%）</span>
           </label>
           <input v-if="form.revenueYoyEnabled" v-model="form.revenueYoyMin" type="number" :style="{ ...inputStyle, marginBottom: '8px' }" />
           <label :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }">
             <input v-model="form.profitYoyEnabled" type="checkbox" />
-            <span :style="{ fontSize: '11px', color: A2.textMuted }">净利 YoY ≥（%）</span>
+            <span :style="{ fontSize: '11px', color: A2.textMuted }">净利润同比增长 ≥（%）</span>
           </label>
           <input v-if="form.profitYoyEnabled" v-model="form.profitYoyMin" type="number" :style="inputStyle" />
         </div>
 
-        <!-- 额外因子 -->
+        <!-- 其他条件 -->
         <div v-if="extraRules.length" :style="{ marginBottom: '10px' }">
-          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">更多</div>
+          <div :style="{ fontSize: '10px', fontWeight: 700, color: A2.textDim, letterSpacing: '1.4px', marginBottom: '6px' }">其他条件</div>
           <div v-for="r in extraRules" :key="r.id" :style="{ padding: '8px', background: A2.bgDeep, borderRadius: '6px', marginBottom: '6px' }">
             <div :style="{ display: 'flex', gap: '4px', marginBottom: '4px' }">
               <select v-model="r.field" :style="{ ...selectStyle, flex: 1 }">
@@ -339,8 +323,8 @@ onMounted(load)
 
         <button type="button"
                 :style="{ width: '100%', padding: '10px 12px', background: A2.surface, color: A2.text, border: `1px dashed ${A2.borderHair}`, fontSize: '12px', fontWeight: 600, cursor: 'pointer', borderRadius: '8px', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }"
-                @click="addExtraFactor">
-          <Icon name="plus" :size="11" /> 添加因子
+                @click="addExtraCondition">
+          <Icon name="plus" :size="11" /> 添加条件
         </button>
 
         <button type="button"
@@ -402,7 +386,7 @@ onMounted(load)
               </template>
               <tr v-else-if="!items.length">
                 <td :colspan="headers.length" :style="{ padding: 0 }">
-                  <EmptyState icon="filter" title="没有命中任何股票" subtitle="试着放宽 PE / 市值 等条件，或换更大的股票池" />
+                  <EmptyState icon="filter" title="没有命中任何股票" subtitle="试着放宽市盈率、市值等条件，或换更大的股票池" />
                 </td>
               </tr>
               <tr v-for="(s, i) in items" :key="s.code" class="row-hover"
@@ -424,7 +408,7 @@ onMounted(load)
                 <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.dividend_yield > 4 ? A2.up : A2.textSub, fontWeight: s.dividend_yield > 4 ? 600 : 500 }">{{ s.dividend_yield != null ? s.dividend_yield.toFixed(2) + '%' : '—' }}</td>
                 <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ s.market_cap != null ? Math.round(s.market_cap).toLocaleString() : '—' }}<span :style="{ color: A2.textDim, fontSize: '9px' }">亿</span></td>
                 <td :style="{ padding: '9px 8px', textAlign: 'right' }"
-                    title="综合分 = 后端规则引擎 score_engine，与详情页「综合评分」一致（非千问打分）">
+                    title="综合评分由规则引擎计算，与详情页一致（非千问打分）">
                   <div :style="{ display: 'inline-flex', alignItems: 'center', gap: '4px' }">
                     <div :style="{ width: '36px', height: '4px', background: A2.bgDeep, borderRadius: '2px', overflow: 'hidden' }">
                       <div :style="{ width: `${displayScore(s) === '—' ? 0 : displayScore(s)}%`, height: '100%', background: A2.textSub }" />

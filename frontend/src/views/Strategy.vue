@@ -5,6 +5,7 @@ import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
 import Skeleton from '../components/Skeleton.vue'
 import { A2 } from '../shared/theme.js'
+import { fieldLabel, opLabel } from '../shared/screenerMeta.js'
 import { runBacktest } from '../api/strategy'
 
 const router = useRouter()
@@ -170,19 +171,13 @@ const monthlyStats = computed(() => {
   }
 })
 
-const entryRules = computed(() => {
-  const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
-  const fieldLabel = {
-    pe: 'PE (TTM)', pb: 'PB', roe: 'ROE', market_cap: '市值',
-    dividend_yield: '股息率', revenue_yoy: '营收 YoY', profit_yoy: '净利 YoY',
-    gross_margin: '毛利率', debt_ratio: '资产负债率', industry: '行业',
-  }
-  return strategies[activeStrategy.value].conditions.map((c) => ({
-    k: fieldLabel[c.field] || c.field,
-    op: opLabel[c.op] || c.op,
+const entryRules = computed(() =>
+  strategies[activeStrategy.value].conditions.map((c) => ({
+    k: fieldLabel(c.field),
+    op: opLabel(c.op),
     v: Array.isArray(c.value) ? c.value.join('-') : String(c.value),
-  }))
-})
+  })),
+)
 
 const sizingCells = computed(() => {
   const s = strategies[activeStrategy.value]

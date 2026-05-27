@@ -216,7 +216,7 @@ const stageColor = (s) => ({
             <Icon name="alert" :size="13" />
             <span style="flex:1">
               <strong>千问 AI 服务暂时不可达</strong>
-              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 你可以试试结构化筛选（左侧"因子"标签）</span>
+              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 你可以试试「条件选股」页的表单筛选</span>
             </span>
             <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">
               <Icon name="refresh" :size="11" /> 重新检测

@@ -40,7 +40,7 @@ function onDocClickAvatar(e) {
 const tabs = [
   { id: 'dashboard', label: '行情' },
   { id: 'chat', label: '千问筛选' },
-  { id: 'results', label: '因子' },
+  { id: 'results', label: '条件选股' },
   { id: 'detail', label: '详情' },
   { id: 'portfolio', label: '自选监控' },
   { id: 'strategy', label: '策略' },
