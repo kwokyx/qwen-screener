@@ -2,7 +2,21 @@
 
 - 哪些功能做完了、哪些没做：[docs/STATUS.md](docs/STATUS.md)
 - 接口怎么调：[docs/API.md](docs/API.md)
+- 综合分对齐说明：[docs/修改说明.md](docs/修改说明.md)
+- 方案 B 评分规则：[docs/股票评分实现方案.md](docs/股票评分实现方案.md)
 - 许可证：[MIT](LICENSE)
+
+---
+
+## 本分支变更摘要（`feat/algorithm-scoring-with-backtest`）
+
+相对 `main` 的主要改动：
+
+- **方案 B 算法评分**：后端 `score_engine` 计算综合分；千问仅生成 ≤40 字解读（`GET /api/v1/qwen/score/{code}`）
+- **综合分统一**：条件选股页、千问筛选结果、详情页同一股票 `score_total` 一致
+- **条件选股**：顶栏「因子」→「条件选股」；可配置股票池与筛选条件（见 `screenerMeta.js`）
+- **数据同步**：长任务 `queued` 后轮询 `/health/data`，避免误报失败
+- **保留策略回测**：`/strategy` 与 `backtest_engine` 未移除（与 `feature/algorithm-scoring-scheme-b` 分支差异）
 
 ---
 
@@ -26,8 +40,8 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 |---|---|---|
 | 行情 Dashboard | `/dashboard` | 大盘指数、行业涨跌、Top 涨/跌幅 |
 | 千问对话筛选 | `/chat` | 自然语言输入 → 千问解析为结构化条件 → SSE 流式返回 |
-| 因子筛选器 | `/results` | 13 字段 × 7 操作符的可组合筛选 |
-| 个股详情 | `/detail/:code` | K 线 + 关键指标 + 千问基本面分析（流式） |
+| 条件选股 | `/results` | 可配置股票池 + 13 字段筛选；列表展示后端 `score_total` |
+| 个股详情 | `/detail/:code` | K 线 + 算法综合分 + 千问解读（流式深度分析） |
 | 自选监控 | `/portfolio` | 自选股 + 价格预警，登录后跨设备同步 |
 | 策略回测 | `/strategy` | 给定筛选条件 → 月度调仓 → 净值曲线 + 关键指标 |
 
