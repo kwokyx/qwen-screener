@@ -3,6 +3,9 @@
 将 FilterCondition 列表翻译成 SQLAlchemy 查询。这一层不依赖千问，
 是系统的"基础筛选模块"，论文里独立成章。
 """
+import time
+from datetime import date, timedelta
+
 from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -14,6 +17,7 @@ from app.schemas.screener import (
     ScreenResponse,
     ScreenResultItem,
 )
+from app.services.score_engine import compute_total, snapshot_from_row
 
 
 # 字段 → ORM 列映射。前端/千问只能引用这里列出的字段。
@@ -117,6 +121,23 @@ def _basic_clause(col, op, v):
     raise ValueError(f"不支持的操作符: {op}")
 
 
+_POOL_CACHE: dict[str, tuple[float, list[str]]] = {}
+_POOL_CACHE_TTL = 3600.0
+
+
+def _resolve_pool_codes(pool: str) -> list[str]:
+    """拉取指数成分 code 列表（带 1h 内存缓存，避免每次筛选都打 akshare）。"""
+    now = time.time()
+    hit = _POOL_CACHE.get(pool)
+    if hit and now - hit[0] < _POOL_CACHE_TTL:
+        return hit[1]
+    from app.services.data_sync import fetch_pool
+
+    codes = [p["code"] for p in fetch_pool(pool)]
+    _POOL_CACHE[pool] = (now, codes)
+    return codes
+
+
 def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     # 兼容 SQLite/MySQL：用 group by + max 找最新日期，再 join
     latest_daily_dates = (
@@ -150,6 +171,20 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         )
     )
 
+    pool = req.pool
+    if pool and pool != "all":
+        try:
+            codes = _resolve_pool_codes(pool)
+            if codes:
+                q = q.filter(StockBasic.code.in_(codes))
+        except Exception:
+            # 网络/akshare 不可用时跳过池限制，避免整页筛选不可用
+            pass
+
+    if req.list_years_min is not None and req.list_years_min > 0:
+        cutoff = date.today() - timedelta(days=int(req.list_years_min * 365.25))
+        q = q.filter(StockBasic.list_date.isnot(None), StockBasic.list_date <= cutoff)
+
     if req.conditions:
         clauses = [_build_clause(c) for c in req.conditions]
         q = q.filter(and_(*clauses) if req.logic == "AND" else or_(*clauses))
@@ -161,19 +196,35 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     total = q.count()
     rows = q.limit(req.limit).all()
 
-    items = [
-        ScreenResultItem(
+    items = []
+    for basic, daily, fin in rows:
+        snap = snapshot_from_row(
             code=basic.code,
             name=basic.name,
             industry=basic.industry,
-            market=basic.market,
             pe=daily.pe if daily else None,
             pb=daily.pb if daily else None,
-            close=daily.close if daily else None,
             market_cap=daily.market_cap if daily else None,
             dividend_yield=daily.dividend_yield if daily else None,
             roe=fin.roe if fin else None,
+            revenue_yoy=fin.revenue_yoy if fin else None,
+            profit_yoy=fin.profit_yoy if fin else None,
+            gross_margin=fin.gross_margin if fin else None,
+            debt_ratio=fin.debt_ratio if fin else None,
         )
-        for basic, daily, fin in rows
-    ]
+        items.append(
+            ScreenResultItem(
+                code=basic.code,
+                name=basic.name,
+                industry=basic.industry,
+                market=basic.market,
+                pe=snap["pe"],
+                pb=snap["pb"],
+                close=daily.close if daily else None,
+                market_cap=snap["market_cap"],
+                dividend_yield=snap["dividend_yield"],
+                roe=snap["roe"],
+                score_total=compute_total(snap),
+            )
+        )
     return ScreenResponse(total=total, items=items)

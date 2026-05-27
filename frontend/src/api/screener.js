@@ -13,6 +13,8 @@ export async function screen(conditions, opts = {}) {
     sort_by: opts.sort_by,
     sort_desc: opts.sort_desc !== false,
     limit: opts.limit || 50,
+    pool: opts.pool || null,
+    list_years_min: opts.listYearsMin ?? null,
   })
   return data
 }

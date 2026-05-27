@@ -21,12 +21,24 @@ class FilterCondition(BaseModel):
     value: float | int | str | list = Field(description="阈值；between 传 [低, 高]，in 传列表")
 
 
+PoolPreset = Literal["all", "csi300", "csi500", "sse50"]
+
+
 class ScreenRequest(BaseModel):
     conditions: list[FilterCondition] = Field(default_factory=list)
     logic: Literal["AND", "OR"] = "AND"
     sort_by: str | None = None
     sort_desc: bool = True
     limit: int = Field(default=50, ge=1, le=500)
+    pool: PoolPreset | None = Field(
+        default=None,
+        description="股票池：csi300/csi500/sse50；all 或 None 表示全市场",
+    )
+    list_years_min: float | None = Field(
+        default=None,
+        ge=0,
+        description="上市满 N 年（按 list_date 过滤）",
+    )
 
 
 class NLScreenRequest(BaseModel):
@@ -41,6 +53,8 @@ class ScreenResultItem(StockBasicOut):
     market_cap: float | None = None
     dividend_yield: float | None = None
     close: float | None = None
+    # 与详情页 GET /qwen/score/{code} 的 total 同一套 score_engine 规则
+    score_total: int | None = None
 
 
 class ScreenResponse(BaseModel):
