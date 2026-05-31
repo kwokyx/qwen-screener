@@ -7,11 +7,8 @@ import {
   NCard,
   NDataTable,
   NEmpty,
-  NGrid,
-  NGridItem,
   NInput,
   NInputNumber,
-  NNumberAnimation,
   NRadioButton,
   NRadioGroup,
   NSelect,
@@ -48,6 +45,7 @@ const structuredConditions = ref([
 const structuredLogic = ref('AND')
 const structuredSortBy = ref('market_cap')
 const structuredSortDesc = ref(true)
+const workspaceMode = ref('agent')
 
 const activeTemplate = computed(() => templates.value.find((item) => item.id === activeId.value))
 const rows = computed(() => {
@@ -78,7 +76,6 @@ const activeTool = computed(() => {
   if (structuredResult.value) return stockScreenTool.value
   return strategyTool.value || tools.value[0]
 })
-const visibleFields = computed(() => stockScreenTool.value?.fields?.slice(0, 9) || [])
 const activeToolNotes = computed(() => activeTool.value?.data_notes || [])
 const fieldLabelMap = computed(() => Object.fromEntries((stockScreenTool.value?.fields || []).map((field) => [field.key, field.label])))
 const structuredFieldOptions = computed(() => (stockScreenTool.value?.fields || []).map((field) => ({
@@ -117,13 +114,6 @@ const agentSortText = computed(() => {
   const label = fieldLabelMap.value[plan.sort_by] || plan.sort_by
   return `${label}${plan.sort_desc ? '从高到低' : '从低到高'}`
 })
-const agentTopHits = computed(() => rows.value.slice(0, 5).map((item) => ({
-  code: item.code,
-  name: item.name || item.code,
-  industry: item.industry || '-',
-  close: item.close,
-  change_pct: item.change_pct,
-})))
 const agentRiskNotes = computed(() => {
   if (!agentResult.value) return []
   const notes = [
@@ -134,20 +124,6 @@ const agentRiskNotes = computed(() => {
   return [...new Set(notes)]
 })
 const agentToolTrace = computed(() => agentResult.value?.tool_trace || [])
-
-const summary = computed(() => {
-  const list = rows.value
-  const changeItems = list.filter((item) => typeof item.change_pct === 'number')
-  const up = changeItems.filter((item) => item.change_pct > 0).length
-  const scoreItems = list.filter((item) => typeof item.score === 'number')
-  const avgScore = scoreItems.length ? scoreItems.reduce((sum, item) => sum + item.score, 0) / scoreItems.length : null
-  return [
-    { label: '命中股票', value: displayTotal.value, suffix: '只' },
-    { label: '当前显示', value: list.length, suffix: '只' },
-    { label: '上涨占比', value: changeItems.length ? Math.round(up / changeItems.length * 100) : null, suffix: '%' },
-    { label: '平均得分', value: avgScore == null ? null : Number(avgScore.toFixed(1)), suffix: '' },
-  ]
-})
 
 const agentExamples = [
   '低估值高分红的银行股',
@@ -385,6 +361,11 @@ function useExample(text) {
   runAgent()
 }
 
+function chooseStrategy(id) {
+  workspaceMode.value = 'strategy'
+  runSelection(id)
+}
+
 async function bootstrap() {
   loading.value = true
   aiStatus.startAutoProbe()
@@ -410,250 +391,131 @@ onMounted(bootstrap)
 <template>
   <Shell>
     <div class="strategy-page">
-      <section class="hero">
+      <section class="page-head">
         <div>
-          <div class="eyebrow">Agent 驱动 · 策略选股</div>
-          <h1>策略选股</h1>
-          <p>用自然语言描述目标，Agent 先规划筛选工具，再调用本地策略或结构化筛选引擎返回真实股票池。</p>
+          <h1>智能选股</h1>
+          <span>交易日 {{ displayTradeDate }}</span>
         </div>
-        <n-button secondary strong @click="runSelection()" :loading="loading">刷新选股</n-button>
+        <n-button size="small" secondary @click="runSelection()" :loading="loading">刷新</n-button>
       </section>
 
-      <n-card size="small" :bordered="true" class="agent-card">
-        <div class="agent-shell">
-          <div class="agent-copy">
-            <strong>Agent 选股</strong>
-            <span>自然语言目标 → 工具规划 → 本地筛选/策略执行 → 可解释结果</span>
-            <span class="ai-health">
-              AI 服务：{{ aiStatus.isUp ? '可用' : (aiStatus.reason || '不可用') }}
-              <template v-if="aiStatus.latencyMs"> · {{ aiStatus.latencyMs }}ms</template>
-            </span>
-          </div>
+      <n-card size="small" :bordered="true" class="workspace-card">
+        <div class="workspace-bar">
+          <n-radio-group v-model:value="workspaceMode" size="small">
+            <n-radio-button value="agent">智能选股</n-radio-button>
+            <n-radio-button value="structured">条件筛选</n-radio-button>
+            <n-radio-button value="strategy">策略库</n-radio-button>
+          </n-radio-group>
+          <n-tag size="small" :bordered="false" :type="aiStatus.isUp ? 'success' : 'warning'">
+            AI {{ aiStatus.isUp ? '可用' : '降级运行' }}
+          </n-tag>
+        </div>
+
+        <div v-if="workspaceMode === 'agent'" class="mode-panel">
           <div class="agent-input">
             <n-input
               v-model:value="agentQuery"
-              type="textarea"
-              :autosize="{ minRows: 2, maxRows: 3 }"
-              placeholder="例如：低估值高分红的银行股 / 找最近强势突破的股票"
+              clearable
+              placeholder="例如：低估值高分红的银行股"
               @keydown.enter.exact.prevent="runAgent"
             />
-            <n-button type="primary" strong :loading="agentLoading" @click="runAgent">运行 Agent</n-button>
+            <n-button type="primary" strong :loading="agentLoading" @click="runAgent">筛选</n-button>
           </div>
-        </div>
-        <div class="agent-examples">
-          <n-button
-            v-for="item in agentExamples"
-            :key="item"
-            size="tiny"
-            secondary
-            @click="useExample(item)"
-          >
-            {{ item }}
-          </n-button>
-        </div>
-        <n-alert v-if="agentError" type="error" :bordered="false" class="notice compact">
-          {{ agentError }}
-        </n-alert>
-        <div v-if="agentResult" class="agent-result">
-          <div class="agent-meta">
-            <n-tag size="small" :bordered="false">{{ agentResult.plan.tool_label }}</n-tag>
-            <n-tag size="small" :bordered="false" :type="agentResult.plan.ai_used ? 'success' : 'warning'">
-              {{ agentResult.plan.ai_used ? 'AI 已参与规划' : '本地规则规划' }}
-            </n-tag>
-            <span>命中 {{ displayTotal }} 只，当前展示 {{ rows.length }} 只</span>
+          <div class="quick-examples">
+            <button v-for="item in agentExamples" :key="item" type="button" @click="useExample(item)">
+              {{ item }}
+            </button>
           </div>
-
-          <div class="agent-breakdown">
-            <div class="agent-panel agent-panel-wide">
-              <span class="panel-kicker">目标理解</span>
-              <strong>{{ agentResult.query }}</strong>
-              <p>{{ agentResult.plan.reasoning }}</p>
-              <div class="agent-answer">{{ agentResult.answer }}</div>
-            </div>
-
-            <div class="agent-panel">
-              <span class="panel-kicker">筛选条件</span>
-              <div class="condition-list">
-                <n-tag
-                  v-for="condition in agentConditionList"
-                  :key="condition"
-                  size="small"
-                  :bordered="false"
-                >
-                  {{ condition }}
-                </n-tag>
-              </div>
-              <small>排序：{{ agentSortText }}</small>
-            </div>
-
-            <div class="agent-panel">
-              <span class="panel-kicker">工具调用</span>
-              <div class="tool-trace">
-                <code v-for="trace in agentToolTrace" :key="trace">{{ trace }}</code>
-              </div>
-              <small>{{ activeTool?.description }}</small>
-            </div>
-
-            <div class="agent-panel">
-              <span class="panel-kicker">前排命中</span>
-              <div v-if="agentTopHits.length" class="hit-list">
-                <button
-                  v-for="hit in agentTopHits"
-                  :key="hit.code"
-                  type="button"
-                  @click="router.push(`/detail/${hit.code}`)"
-                >
-                  <span>
-                    <strong>{{ hit.name }}</strong>
-                    <small>{{ hit.code }} · {{ hit.industry }}</small>
-                  </span>
-                  <em :class="(hit.change_pct || 0) >= 0 ? 'up' : 'down'">
-                    {{ hit.change_pct == null ? '-' : `${hit.change_pct >= 0 ? '+' : ''}${hit.change_pct.toFixed(2)}%` }}
-                  </em>
-                </button>
-              </div>
-              <small v-else>当前没有命中股票。</small>
-            </div>
-
-            <div class="agent-panel agent-panel-wide">
-              <span class="panel-kicker">风险与数据说明</span>
-              <ul class="risk-list">
-                <li v-for="note in agentRiskNotes" :key="note">{{ note }}</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </n-card>
-
-      <n-card size="small" :bordered="true" class="structured-card">
-        <template #header>
-          <div class="structured-head">
-            <div>
-              <strong>手动条件筛选</strong>
-              <span>直接调用本地筛选引擎，适合明确的估值、财务、行业和规模条件。</span>
-            </div>
-            <n-button size="tiny" secondary @click="addStructuredCondition">添加条件</n-button>
-          </div>
-        </template>
-
-        <div class="structured-toolbar">
-          <div class="structured-control">
-            <span>条件关系</span>
-            <n-radio-group v-model:value="structuredLogic" size="small">
-              <n-radio-button value="AND">全部满足</n-radio-button>
-              <n-radio-button value="OR">满足任一</n-radio-button>
-            </n-radio-group>
-          </div>
-          <div class="structured-control sort-control">
-            <span>排序</span>
-            <n-select v-model:value="structuredSortBy" :options="structuredSortOptions" size="small" />
-            <n-button size="small" secondary @click="structuredSortDesc = !structuredSortDesc">
-              {{ structuredSortDesc ? '降序' : '升序' }}
-            </n-button>
-          </div>
+          <n-alert v-if="agentError" type="error" :bordered="false" class="notice compact">
+            {{ agentError }}
+          </n-alert>
         </div>
 
-        <div class="condition-builder">
-          <div v-for="(condition, index) in structuredConditions" :key="condition.id" class="condition-row">
-            <span class="condition-index">{{ String(index + 1).padStart(2, '0') }}</span>
-            <n-select
-              :value="condition.field"
-              :options="structuredFieldOptions"
-              size="small"
-              @update:value="updateStructuredField(condition, $event)"
-            />
-            <n-select v-model:value="condition.op" :options="getStructuredOperatorOptions(condition)" size="small" />
-            <n-input
-              v-if="getStructuredField(condition.field)?.data_type === 'text'"
-              v-model:value="condition.value"
-              size="small"
-              placeholder="输入行业或市场，多个值用逗号分隔"
-            />
-            <template v-else>
-              <n-input-number v-model:value="condition.value" size="small" placeholder="数值" />
-              <n-input-number
-                v-if="condition.op === 'between'"
-                v-model:value="condition.value2"
+        <div v-else-if="workspaceMode === 'structured'" class="mode-panel">
+          <div class="structured-toolbar">
+            <div class="structured-control">
+              <span>关系</span>
+              <n-radio-group v-model:value="structuredLogic" size="small">
+                <n-radio-button value="AND">全部满足</n-radio-button>
+                <n-radio-button value="OR">满足任一</n-radio-button>
+              </n-radio-group>
+            </div>
+            <div class="structured-control sort-control">
+              <span>排序</span>
+              <n-select v-model:value="structuredSortBy" :options="structuredSortOptions" size="small" />
+              <n-button size="small" secondary @click="structuredSortDesc = !structuredSortDesc">
+                {{ structuredSortDesc ? '降序' : '升序' }}
+              </n-button>
+            </div>
+            <n-button size="small" secondary @click="addStructuredCondition">添加条件</n-button>
+          </div>
+
+          <div class="condition-builder">
+            <div v-for="(condition, index) in structuredConditions" :key="condition.id" class="condition-row">
+              <span class="condition-index">{{ String(index + 1).padStart(2, '0') }}</span>
+              <n-select
+                :value="condition.field"
+                :options="structuredFieldOptions"
                 size="small"
-                placeholder="上限"
+                @update:value="updateStructuredField(condition, $event)"
               />
-            </template>
-            <n-button
-              size="small"
-              text
-              type="error"
-              :disabled="structuredConditions.length <= 1"
-              @click="removeStructuredCondition(condition.id)"
-            >
-              移除
+              <n-select v-model:value="condition.op" :options="getStructuredOperatorOptions(condition)" size="small" />
+              <n-input
+                v-if="getStructuredField(condition.field)?.data_type === 'text'"
+                v-model:value="condition.value"
+                size="small"
+                placeholder="输入值"
+              />
+              <template v-else>
+                <n-input-number v-model:value="condition.value" size="small" placeholder="数值" />
+                <n-input-number
+                  v-if="condition.op === 'between'"
+                  v-model:value="condition.value2"
+                  size="small"
+                  placeholder="上限"
+                />
+              </template>
+              <n-button
+                size="small"
+                text
+                type="error"
+                :disabled="structuredConditions.length <= 1"
+                @click="removeStructuredCondition(condition.id)"
+              >
+                删除
+              </n-button>
+            </div>
+          </div>
+
+          <div class="structured-foot">
+            <div>
+              <n-tag v-for="label in structuredConditionLabels" :key="label" size="small" :bordered="false">
+                {{ label }}
+              </n-tag>
+            </div>
+            <n-button type="primary" size="small" strong :loading="structuredLoading" @click="runStructuredScreen">
+              执行筛选
             </n-button>
           </div>
+          <n-alert v-if="structuredError" type="error" :bordered="false" class="notice compact">
+            {{ structuredError }}
+          </n-alert>
         </div>
 
-        <div class="structured-foot">
-          <div>
-            <span>当前条件</span>
-            <n-tag v-for="label in structuredConditionLabels" :key="label" size="small" :bordered="false">
-              {{ label }}
-            </n-tag>
-          </div>
-          <n-button type="primary" size="small" strong :loading="structuredLoading" @click="runStructuredScreen">
-            执行筛选
-          </n-button>
-        </div>
-        <n-alert v-if="structuredError" type="error" :bordered="false" class="notice compact">
-          {{ structuredError }}
-        </n-alert>
-      </n-card>
-
-      <div class="tool-workbench">
-        <n-card
-          v-for="tool in tools"
-          :key="tool.id"
-          size="small"
-          :bordered="true"
-          class="tool-card"
-          :class="{ active: activeTool?.id === tool.id }"
-        >
-          <template #header>
-            <div class="tool-head">
-              <strong>{{ tool.label }}</strong>
-              <n-tag size="tiny" :bordered="false">{{ tool.category }}</n-tag>
-            </div>
-          </template>
-          <p>{{ tool.description }}</p>
-          <div class="tool-io">
-            <span>输入：{{ tool.inputs.join(' / ') }}</span>
-            <span>输出：{{ tool.outputs.join(' / ') }}</span>
-          </div>
-          <div class="tool-examples">
-            <n-tag
-              v-for="example in tool.examples.slice(0, 3)"
-              :key="example"
-              size="small"
-              :bordered="false"
-            >
-              {{ example }}
-            </n-tag>
-          </div>
-        </n-card>
-      </div>
-
-      <n-card v-if="visibleFields.length" size="small" :bordered="true" class="field-card">
-        <template #header>
-          <div class="field-head">
-            <strong>结构化筛选字段</strong>
-            <span>Agent 只能基于这些本地字段生成筛选条件，缺失字段不会补假数据。</span>
-          </div>
-        </template>
-        <div class="field-grid">
-          <div v-for="field in visibleFields" :key="field.key" class="field-item">
-            <div>
-              <strong>{{ field.label }}</strong>
-              <code>{{ field.key }}</code>
-            </div>
-            <span>{{ field.description }}</span>
-          </div>
+        <div v-else class="strategy-picker">
+          <button
+            v-for="tpl in templates"
+            :key="tpl.id"
+            class="strategy-item"
+            :data-active="tpl.id === activeId"
+            @click="chooseStrategy(tpl.id)"
+          >
+            <span>
+              <strong>{{ tpl.name }}</strong>
+              <small>{{ tpl.description }}</small>
+            </span>
+            <n-tag size="small" :bordered="false">{{ tpl.tag }}</n-tag>
+          </button>
         </div>
       </n-card>
 
@@ -661,81 +523,74 @@ onMounted(bootstrap)
         {{ errorMsg }}
       </n-alert>
 
-      <n-grid :cols="4" :x-gap="12" :y-gap="12" responsive="screen" class="summary-grid">
-        <n-grid-item v-for="item in summary" :key="item.label">
-          <n-card size="small" :bordered="true" class="summary-card">
-            <div class="summary-label">{{ item.label }}</div>
-            <div class="summary-value">
-              <n-number-animation v-if="item.value != null" :from="0" :to="item.value" />
-              <span v-else>—</span>
-              <span v-if="item.value != null">{{ item.suffix }}</span>
+      <section class="result-panel">
+        <n-card size="small" :bordered="true">
+          <template #header>
+            <div class="table-head">
+              <div>
+                <strong>{{ displayTitle }}</strong>
+                <span>{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
+              </div>
+              <n-tag :bordered="false" size="small" :type="agentResult && !agentResult.plan.ai_used ? 'warning' : 'success'">
+                {{ agentResult ? (agentResult.plan.ai_used ? 'AI 规划' : '本地规划') : (structuredResult ? '条件筛选' : '内置策略') }}
+              </n-tag>
             </div>
-          </n-card>
-        </n-grid-item>
-      </n-grid>
+          </template>
 
-      <div class="main-grid">
-        <aside class="strategy-list">
-          <n-card title="策略库" size="small" :bordered="true">
-            <div v-if="!templates.length && loading" class="loading-list">
-              <n-skeleton v-for="i in 4" :key="i" text :repeat="2" />
-            </div>
-            <button
-              v-for="tpl in templates"
-              :key="tpl.id"
-              class="strategy-item"
-              :data-active="tpl.id === activeId"
-              @click="runSelection(tpl.id)"
-            >
-              <span>
-                <strong>{{ tpl.name }}</strong>
-                <small>{{ tpl.description }}</small>
-              </span>
-              <n-tag size="small" :bordered="false">{{ tpl.tag }}</n-tag>
-            </button>
-          </n-card>
+          <n-data-table
+            v-if="rows.length"
+            :columns="columns"
+            :data="rows"
+            :loading="tableLoading"
+            :pagination="{ pageSize: 20 }"
+            size="small"
+            striped
+          />
+          <n-empty v-else-if="!tableLoading" description="当前条件没有命中股票" />
+          <div v-else class="table-loading">
+            <n-skeleton text :repeat="8" />
+          </div>
+        </n-card>
 
-          <n-card v-if="activeTemplate" title="选股规则" size="small" :bordered="true">
-            <ul class="rules">
-              <li v-for="rule in activeTemplate.rules" :key="rule">{{ rule }}</li>
-            </ul>
-          </n-card>
-        </aside>
-
-        <section class="result-panel">
-          <n-card size="small" :bordered="true">
-            <template #header>
-              <div class="table-head">
-                <div>
-                  <strong>{{ displayTitle }}</strong>
-                  <span>交易日：{{ displayTradeDate }}</span>
-                </div>
-                <n-tag :bordered="false" type="success">
-                  {{ agentResult ? 'Agent 工具结果' : (structuredResult ? '结构化筛选结果' : (activeTemplate?.source || '本地策略')) }}
+        <details v-if="agentResult" class="details-panel">
+          <summary>查看筛选说明</summary>
+          <div class="details-grid">
+            <div>
+              <strong>筛选条件</strong>
+              <div class="condition-list">
+                <n-tag v-for="condition in agentConditionList" :key="condition" size="small" :bordered="false">
+                  {{ condition }}
                 </n-tag>
               </div>
-            </template>
-
-            <n-data-table
-              v-if="rows.length"
-              :columns="columns"
-              :data="rows"
-              :loading="tableLoading"
-              :pagination="{ pageSize: 20 }"
-              size="small"
-              striped
-            />
-            <n-empty v-else-if="!tableLoading" description="当前条件没有命中股票" />
-            <div v-else class="table-loading">
-              <n-skeleton text :repeat="8" />
+              <small>排序：{{ agentSortText }}</small>
             </div>
-          </n-card>
+            <div>
+              <strong>工具调用</strong>
+              <div class="tool-trace">
+                <code v-for="trace in agentToolTrace" :key="trace">{{ trace }}</code>
+              </div>
+            </div>
+            <div>
+              <strong>说明</strong>
+              <ul class="risk-list">
+                <li v-for="note in agentRiskNotes" :key="note">{{ note }}</li>
+              </ul>
+            </div>
+          </div>
+        </details>
 
-          <n-alert v-if="result?.notes?.length" type="info" :bordered="false" class="notice">
-            <div v-for="note in result.notes" :key="note">{{ note }}</div>
-          </n-alert>
-        </section>
-      </div>
+        <details v-if="workspaceMode === 'strategy' && activeTemplate" class="details-panel">
+          <summary>查看策略规则</summary>
+          <ul class="rules">
+            <li v-for="rule in activeTemplate.rules" :key="rule">{{ rule }}</li>
+          </ul>
+        </details>
+
+        <details v-if="result?.notes?.length" class="details-panel">
+          <summary>查看数据说明</summary>
+          <div v-for="note in result.notes" :key="note" class="detail-note">{{ note }}</div>
+        </details>
+      </section>
     </div>
   </Shell>
 </template>
@@ -744,22 +599,115 @@ onMounted(bootstrap)
 .strategy-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
-.hero {
+.page-head,
+.workspace-bar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 10px 0 4px;
+  gap: 12px;
 }
 
-.eyebrow {
+.page-head {
+  padding: 2px 0;
+}
+
+.page-head span {
+  display: block;
+  margin-top: 3px;
+  color: #71717A;
   font-size: 12px;
+}
+
+.workspace-card,
+.result-panel :deep(.n-card) {
+  border-radius: 5px;
+}
+
+.workspace-bar {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #EDEDED;
+}
+
+.mode-panel {
+  padding-top: 10px;
+}
+
+.quick-examples {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.quick-examples button {
+  padding: 3px 7px;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+  background: #FFFFFF;
+  color: #52525B;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.quick-examples button:hover {
+  border-color: #A1A1AA;
+  color: #111111;
+}
+
+.strategy-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 10px;
+}
+
+.details-panel {
+  margin-top: 8px;
+  border: 1px solid #E5E7EB;
+  border-radius: 5px;
+  background: #FFFFFF;
+  color: #52525B;
+  font-size: 12px;
+}
+
+.details-panel summary {
+  padding: 8px 10px;
+  color: #3F3F46;
+  cursor: pointer;
   font-weight: 700;
-  color: #16A34A;
-  margin-bottom: 6px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.details-grid > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #F0F0F0;
+  border-radius: 4px;
+}
+
+.details-grid strong {
+  display: block;
+  margin-bottom: 7px;
+  color: #111111;
+}
+
+.details-grid small {
+  display: block;
+  margin-top: 7px;
+}
+
+.detail-note {
+  padding: 0 10px 8px;
+  line-height: 1.6;
 }
 
 h1 {
@@ -767,58 +715,6 @@ h1 {
   font-size: 28px;
   line-height: 1.15;
   color: #111111;
-}
-
-p {
-  margin: 8px 0 0;
-  color: #71717A;
-  max-width: 680px;
-}
-
-.summary-grid {
-  margin-top: 2px;
-}
-
-.agent-card {
-  border-radius: 8px;
-}
-
-.agent-shell {
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 14px;
-  align-items: stretch;
-}
-
-.agent-copy {
-  padding: 4px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.agent-copy strong {
-  color: #111111;
-  font-size: 16px;
-}
-
-.agent-copy span,
-.agent-meta,
-.tool-trace {
-  color: #71717A;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.ai-health {
-  display: inline-flex;
-  width: fit-content;
-  padding: 3px 7px;
-  border: 1px solid #E5E7EB;
-  border-radius: 4px;
-  background: #FFFFFF;
-  color: #52525B;
-  font-size: 11px;
 }
 
 .agent-input {
@@ -836,34 +732,6 @@ p {
   border-radius: 6px;
 }
 
-.agent-examples {
-  margin-top: 10px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.agent-examples :deep(.n-button) {
-  border-radius: 5px;
-}
-
-.agent-result {
-  margin-top: 12px;
-  padding: 10px;
-  border: 1px solid #EDEDED;
-  border-radius: 6px;
-  background: #FAFAFA;
-}
-
-.structured-card {
-  border-radius: 6px;
-}
-
-.structured-card :deep(.n-card-header) {
-  padding-bottom: 8px;
-}
-
-.structured-head,
 .structured-toolbar,
 .structured-foot,
 .structured-control,
@@ -872,28 +740,14 @@ p {
   align-items: center;
 }
 
-.structured-head,
 .structured-foot {
   justify-content: space-between;
   gap: 12px;
 }
 
-.structured-head strong {
-  display: block;
-  color: #111111;
-  font-size: 14px;
-}
-
-.structured-head span,
-.structured-control > span,
-.structured-foot > div > span {
+.structured-control > span {
   color: #71717A;
   font-size: 11px;
-}
-
-.structured-head span {
-  display: block;
-  margin-top: 3px;
 }
 
 .structured-toolbar {
@@ -950,92 +804,10 @@ p {
   flex-wrap: wrap;
 }
 
-.agent-breakdown {
-  display: grid;
-  grid-template-columns: 1.15fr 0.85fr 0.85fr;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.agent-panel {
-  min-height: 112px;
-  padding: 10px;
-  border: 1px solid #E5E7EB;
-  border-radius: 5px;
-  background: #FFFFFF;
-}
-
-.agent-panel-wide {
-  grid-column: span 2;
-}
-
-.panel-kicker {
-  display: block;
-  margin-bottom: 7px;
-  color: #71717A;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.agent-panel strong {
-  color: #111111;
-  font-size: 14px;
-}
-
-.agent-panel p,
-.agent-panel small {
-  display: block;
-  max-width: none;
-  margin: 6px 0 0;
-  color: #71717A;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
 .condition-list {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
-}
-
-.hit-list {
-  display: grid;
-  gap: 5px;
-}
-
-.hit-list button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 0;
-  border: 0;
-  border-bottom: 1px solid #F4F4F5;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.hit-list button:last-child {
-  border-bottom: 0;
-}
-
-.hit-list strong {
-  display: block;
-  font-size: 12px;
-}
-
-.hit-list small {
-  margin: 1px 0 0;
-  font-size: 11px;
-}
-
-.hit-list em {
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 700;
-  white-space: nowrap;
 }
 
 .risk-list {
@@ -1044,138 +816,6 @@ p {
   color: #52525B;
   font-size: 12px;
   line-height: 1.65;
-}
-
-.tool-workbench {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.tool-card {
-  border-radius: 6px;
-}
-
-.tool-card.active {
-  border-color: #111111;
-  background: #FAFAFA;
-}
-
-.tool-card :deep(.n-card-header) {
-  padding-bottom: 6px;
-}
-
-.tool-card :deep(.n-card__content) {
-  padding-top: 0;
-}
-
-.tool-head,
-.field-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.tool-head strong,
-.field-head strong {
-  color: #111111;
-  font-size: 14px;
-}
-
-.field-head span {
-  color: #71717A;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.tool-card p {
-  margin: 0 0 8px;
-  max-width: none;
-  color: #52525B;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.tool-io {
-  display: grid;
-  gap: 4px;
-  padding: 7px 8px;
-  border: 1px solid #EDEDED;
-  border-radius: 5px;
-  background: #FFFFFF;
-  color: #71717A;
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.tool-examples {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-
-.field-card {
-  border-radius: 6px;
-}
-
-.field-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.field-item {
-  min-height: 74px;
-  padding: 9px 10px;
-  border: 1px solid #EDEDED;
-  border-radius: 5px;
-  background: #FFFFFF;
-}
-
-.field-item > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 5px;
-}
-
-.field-item strong {
-  color: #111111;
-  font-size: 12px;
-}
-
-.field-item code {
-  color: #71717A;
-  font-size: 10px;
-  font-family: 'IBM Plex Mono', monospace;
-}
-
-.field-item span {
-  display: block;
-  color: #71717A;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.agent-answer {
-  font-size: 13px;
-  color: #111111;
-  line-height: 1.65;
-  font-weight: 650;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #F4F4F5;
-}
-
-.agent-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
 }
 
 .tool-trace {
@@ -1195,56 +835,19 @@ p {
   word-break: break-all;
 }
 
-.summary-card {
-  border-radius: 8px;
-}
-
-.summary-label {
-  color: #71717A;
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-
-.summary-value {
-  font-size: 24px;
-  font-weight: 800;
-  color: #111111;
-  display: flex;
-  gap: 2px;
-  align-items: baseline;
-}
-
-.summary-value span {
-  font-size: 13px;
-  color: #71717A;
-}
-
-.main-grid {
-  display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-
-.strategy-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
 .strategy-item {
   width: 100%;
   border: 1px solid #EDEDED;
   background: #FFFFFF;
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: 5px;
+  padding: 9px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   text-align: left;
   cursor: pointer;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .strategy-item[data-active="true"] {
@@ -1307,17 +910,17 @@ p {
 }
 
 .up {
-  color: #16A34A;
-  font-weight: 700;
-}
-
-.down {
   color: #DC2626;
   font-weight: 700;
 }
 
+.down {
+  color: #16A34A;
+  font-weight: 700;
+}
+
 .notice {
-  border-radius: 8px;
+  border-radius: 5px;
 }
 
 .notice.compact {
@@ -1331,18 +934,7 @@ p {
 }
 
 @media (max-width: 960px) {
-  .hero {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .main-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .tool-workbench,
-  .field-grid,
-  .agent-breakdown {
+  .details-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1372,13 +964,19 @@ p {
     width: 100%;
   }
 
-  .agent-panel-wide {
-    grid-column: auto;
-  }
-
-  .agent-shell,
   .agent-input {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .strategy-picker {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-bar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>
