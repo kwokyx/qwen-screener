@@ -52,41 +52,86 @@ def _user_friendly_error(exc: Exception) -> str:
 # ---------------------- Health probe ----------------------
 
 def probe_health(timeout: float = 4.0) -> dict:
-    """轻量探测上游 AI 是否真的可用。前端启动时调一次。
+    """轻量探测当前配置的 AI 后端是否真的可用。"""
+    backend = (settings.ai_backend or "openai").lower()
+    if backend == "dashscope":
+        return _probe_dashscope_health(timeout)
+    return _probe_openai_health(timeout)
 
-    Some OpenAI-compatible gateways expose /models even when the selected model
-    cannot be used by the current account, so this performs a tiny chat request
-    instead of only checking the model list.
-    """
-    import time as _t
+
+def _probe_openai_health(timeout: float) -> dict:
+    """按真实调用顺序探测 Responses API，再回退 Chat Completions。"""
     if not settings.openai_api_key:
         return {"ok": False, "latency_ms": None, "reason": "未配置 OPENAI_API_KEY"}
     try:
         import httpx
-        url = f"{_openai_base_url()}/chat/completions"
+        base_url = _openai_base_url()
         headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
-        payload = {
+        responses_payload = {
+            "model": settings.openai_model,
+            "input": "ping",
+            "max_output_tokens": 1,
+        }
+        chat_payload = {
             "model": settings.openai_model,
             "messages": [{"role": "user", "content": "ping"}],
             "max_tokens": 1,
         }
-        t0 = _t.time()
+        t0 = time.time()
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as c:
-            r = c.post(url, headers=headers, json=payload)
-        latency_ms = int((_t.time() - t0) * 1000)
-        if r.status_code == 200:
+            responses_result = c.post(f"{base_url}/responses", headers=headers, json=responses_payload)
+            if responses_result.status_code == 200:
+                latency_ms = int((time.time() - t0) * 1000)
+                return {"ok": True, "latency_ms": latency_ms, "reason": None}
+            if responses_result.status_code in (401, 403):
+                latency_ms = int((time.time() - t0) * 1000)
+                return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
+            chat_result = c.post(f"{base_url}/chat/completions", headers=headers, json=chat_payload)
+        latency_ms = int((time.time() - t0) * 1000)
+        if chat_result.status_code == 200:
             return {"ok": True, "latency_ms": latency_ms, "reason": None}
-        if r.status_code in (401, 403):
+        if chat_result.status_code in (401, 403):
             return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
-        body = r.text[:220]
-        if "not supported" in body.lower():
-            return {"ok": False, "latency_ms": latency_ms, "reason": f"模型不可用: {settings.openai_model}"}
-        return {"ok": False, "latency_ms": latency_ms, "reason": f"HTTP {r.status_code}"}
+        body = f"{responses_result.text[:220]} {chat_result.text[:220]}".lower()
+        if "not supported" in body:
+            return {"ok": False, "latency_ms": latency_ms, "reason": f"模型或网关不兼容: {settings.openai_model}"}
+        if responses_result.status_code >= 500:
+            return {"ok": False, "latency_ms": latency_ms, "reason": f"上游网关不可用: HTTP {responses_result.status_code}"}
+        return {"ok": False, "latency_ms": latency_ms, "reason": f"HTTP {chat_result.status_code}"}
     except Exception as e:
         msg = str(e).lower()
         if "reset" in msg or "refused" in msg or "timed out" in msg or "timeout" in msg:
             return {"ok": False, "latency_ms": None, "reason": "上游网络不可达"}
         return {"ok": False, "latency_ms": None, "reason": "服务暂时不可用"}
+
+
+def _probe_dashscope_health(timeout: float) -> dict:
+    """使用 DashScope OpenAI 兼容接口做最小探测，避免 SDK 调用长时间挂起。"""
+    if not settings.dashscope_api_key:
+        return {"ok": False, "latency_ms": None, "reason": "未配置 DASHSCOPE_API_KEY"}
+    try:
+        import httpx
+        url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {settings.dashscope_api_key}"}
+        payload = {
+            "model": settings.qwen_model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        t0 = time.time()
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as c:
+            result = c.post(url, headers=headers, json=payload)
+        latency_ms = int((time.time() - t0) * 1000)
+        if result.status_code == 200:
+            return {"ok": True, "latency_ms": latency_ms, "reason": None}
+        if result.status_code in (401, 403):
+            return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
+        return {"ok": False, "latency_ms": latency_ms, "reason": f"千问服务不可用: HTTP {result.status_code}"}
+    except Exception as e:
+        msg = str(e).lower()
+        if "reset" in msg or "refused" in msg or "timed out" in msg or "timeout" in msg:
+            return {"ok": False, "latency_ms": None, "reason": "千问服务网络不可达"}
+        return {"ok": False, "latency_ms": None, "reason": "千问服务暂时不可用"}
 
 
 # ---------------------- OpenAI sync call ----------------------
