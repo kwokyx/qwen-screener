@@ -95,3 +95,14 @@ def test_unknown_field_raises(db, seed_stocks):
     import pytest
     with pytest.raises(ValueError, match="不支持的筛选字段"):
         _screen(db, conditions=[FilterCondition(field="bogus", op="eq", value=1)])
+
+
+def test_result_includes_latest_data_context(db, seed_stocks):
+    """结果携带最新交易日和可展示字段，前端不用再猜数据时间。"""
+    res = _screen(db, conditions=[FilterCondition(field="industry", op="eq", value="银行")])
+    item = res.items[0]
+    assert item.code == "600036.SH"
+    assert item.trade_date is not None
+    assert item.close == 11.0
+    assert item.pe == 6.5
+    assert item.roe == 16.5

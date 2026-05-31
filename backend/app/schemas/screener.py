@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -35,12 +36,18 @@ class NLScreenRequest(BaseModel):
 
 
 class ScreenResultItem(StockBasicOut):
+    trade_date: date | None = None
     pe: float | None = None
     pb: float | None = None
     roe: float | None = None
     market_cap: float | None = None
     dividend_yield: float | None = None
     close: float | None = None
+    turnover: float | None = None
+    revenue_yoy: float | None = None
+    profit_yoy: float | None = None
+    gross_margin: float | None = None
+    debt_ratio: float | None = None
 
 
 class ScreenResponse(BaseModel):

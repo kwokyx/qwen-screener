@@ -167,12 +167,18 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             name=basic.name,
             industry=basic.industry,
             market=basic.market,
+            trade_date=daily.trade_date if daily else None,
             pe=daily.pe if daily else None,
             pb=daily.pb if daily else None,
             close=daily.close if daily else None,
             market_cap=daily.market_cap if daily else None,
             dividend_yield=daily.dividend_yield if daily else None,
+            turnover=daily.turnover if daily else None,
             roe=fin.roe if fin else None,
+            revenue_yoy=fin.revenue_yoy if fin else None,
+            profit_yoy=fin.profit_yoy if fin else None,
+            gross_margin=fin.gross_margin if fin else None,
+            debt_ratio=fin.debt_ratio if fin else None,
         )
         for basic, daily, fin in rows
     ]

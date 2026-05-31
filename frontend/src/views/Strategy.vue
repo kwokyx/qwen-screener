@@ -6,17 +6,21 @@ import {
   NButton,
   NCard,
   NDataTable,
-  NDivider,
   NEmpty,
   NGrid,
   NGridItem,
   NInput,
+  NInputNumber,
   NNumberAnimation,
+  NRadioButton,
+  NRadioGroup,
+  NSelect,
   NSkeleton,
   NSpace,
   NTag,
 } from 'naive-ui'
 import Shell from '../components/Shell.vue'
+import { screen as screenStocks } from '../api/screener'
 import { getStrategyTemplates, getStrategyTools, runStrategyAgent, selectStrategy } from '../api/strategy'
 import { useAiStatusStore } from '../stores/aiStatus'
 
@@ -28,49 +32,76 @@ const tools = ref([])
 const activeId = ref('')
 const result = ref(null)
 const agentResult = ref(null)
+const structuredResult = ref(null)
 const agentQuery = ref('低估值高分红的银行股')
 const loading = ref(false)
 const agentLoading = ref(false)
+const structuredLoading = ref(false)
 const errorMsg = ref('')
 const agentError = ref('')
+const structuredError = ref('')
+let structuredConditionId = 2
+const structuredConditions = ref([
+  { id: 1, field: 'pe', op: 'lt', value: 20, value2: null },
+  { id: 2, field: 'roe', op: 'gt', value: 10, value2: null },
+])
+const structuredLogic = ref('AND')
+const structuredSortBy = ref('market_cap')
+const structuredSortDesc = ref(true)
 
 const activeTemplate = computed(() => templates.value.find((item) => item.id === activeId.value))
 const rows = computed(() => {
-  const screen = agentResult.value?.screen_result
-  if (screen?.items?.length) {
+  const screen = agentResult.value?.screen_result || structuredResult.value
+  if (screen) {
     const labels = agentResult.value?.plan?.condition_labels?.length
       ? agentResult.value.plan.condition_labels
-      : ['条件筛选']
-    return screen.items.map((item) => ({
-      ...item,
-      score: null,
-      signals: labels,
-      metrics: {
-        PE: item.pe,
-        PB: item.pb,
-        ROE: item.roe,
-        市值: item.market_cap,
-        股息率: item.dividend_yield,
-      },
-    }))
+      : structuredConditionLabels.value
+    return mapScreenRows(screen.items || [], labels)
   }
   return agentResult.value?.strategy_result?.items || result.value?.items || []
 })
-const displayTotal = computed(() => agentResult.value?.screen_result?.total ?? agentResult.value?.strategy_result?.total ?? result.value?.total ?? 0)
-const displayTradeDate = computed(() => agentResult.value?.strategy_result?.trade_date || result.value?.trade_date || '-')
+const displayTotal = computed(() => agentResult.value?.screen_result?.total ?? structuredResult.value?.total ?? agentResult.value?.strategy_result?.total ?? result.value?.total ?? 0)
+const displayTradeDate = computed(() => agentResult.value?.screen_result?.items?.[0]?.trade_date
+  || structuredResult.value?.items?.[0]?.trade_date
+  || agentResult.value?.strategy_result?.trade_date
+  || result.value?.trade_date
+  || '-')
 const displayTitle = computed(() => {
   if (agentResult.value) return `Agent：${agentResult.value.plan?.tool_label || '智能选股'}`
+  if (structuredResult.value) return '结构化条件筛选'
   return activeTemplate.value?.name || '策略'
 })
 const stockScreenTool = computed(() => tools.value.find((item) => item.id === 'stock_screen'))
 const strategyTool = computed(() => tools.value.find((item) => item.id === 'strategy_select'))
 const activeTool = computed(() => {
   if (agentResult.value?.plan?.tool) return tools.value.find((item) => item.id === agentResult.value.plan.tool)
+  if (structuredResult.value) return stockScreenTool.value
   return strategyTool.value || tools.value[0]
 })
 const visibleFields = computed(() => stockScreenTool.value?.fields?.slice(0, 9) || [])
 const activeToolNotes = computed(() => activeTool.value?.data_notes || [])
 const fieldLabelMap = computed(() => Object.fromEntries((stockScreenTool.value?.fields || []).map((field) => [field.key, field.label])))
+const structuredFieldOptions = computed(() => (stockScreenTool.value?.fields || []).map((field) => ({
+  label: field.label,
+  value: field.key,
+})))
+const structuredSortOptions = computed(() => [
+  { label: '默认排序', value: '' },
+  ...(stockScreenTool.value?.fields || [])
+    .filter((field) => field.data_type === 'number')
+    .map((field) => ({ label: field.label, value: field.key })),
+])
+const operatorLabels = {
+  gt: '大于',
+  gte: '大于等于',
+  lt: '小于',
+  lte: '小于等于',
+  eq: '等于',
+  between: '介于',
+  in: '包含任一',
+}
+const structuredConditionLabels = computed(() => structuredConditions.value.map(formatStructuredCondition))
+const tableLoading = computed(() => loading.value || agentLoading.value || structuredLoading.value)
 const agentConditionList = computed(() => {
   if (!agentResult.value) return []
   const labels = agentResult.value.plan?.condition_labels || []
@@ -106,14 +137,15 @@ const agentToolTrace = computed(() => agentResult.value?.tool_trace || [])
 
 const summary = computed(() => {
   const list = rows.value
-  const up = list.filter((item) => (item.change_pct || 0) > 0).length
+  const changeItems = list.filter((item) => typeof item.change_pct === 'number')
+  const up = changeItems.filter((item) => item.change_pct > 0).length
   const scoreItems = list.filter((item) => typeof item.score === 'number')
-  const avgScore = scoreItems.length ? scoreItems.reduce((sum, item) => sum + item.score, 0) / scoreItems.length : 0
+  const avgScore = scoreItems.length ? scoreItems.reduce((sum, item) => sum + item.score, 0) / scoreItems.length : null
   return [
     { label: '命中股票', value: displayTotal.value, suffix: '只' },
     { label: '当前显示', value: list.length, suffix: '只' },
-    { label: '上涨占比', value: list.length ? Math.round(up / list.length * 100) : 0, suffix: '%' },
-    { label: '平均得分', value: Number(avgScore.toFixed(1)), suffix: '' },
+    { label: '上涨占比', value: changeItems.length ? Math.round(up / changeItems.length * 100) : null, suffix: '%' },
+    { label: '平均得分', value: avgScore == null ? null : Number(avgScore.toFixed(1)), suffix: '' },
   ]
 })
 
@@ -123,6 +155,100 @@ const agentExamples = [
   '半导体行业里的大市值龙头',
   '白马股，ROE 高，估值不要太贵',
 ]
+
+function getStructuredField(field) {
+  return stockScreenTool.value?.fields?.find((item) => item.key === field)
+}
+
+function getStructuredOperatorOptions(condition) {
+  return (getStructuredField(condition.field)?.operators || []).map((op) => ({
+    label: operatorLabels[op] || op,
+    value: op,
+  }))
+}
+
+function updateStructuredField(condition, field) {
+  const meta = getStructuredField(field)
+  condition.field = field
+  condition.op = meta?.data_type === 'text' && meta.operators.includes('in')
+    ? 'in'
+    : (meta?.operators?.[0] || 'eq')
+  condition.value = meta?.data_type === 'text' ? '' : null
+  condition.value2 = null
+}
+
+function addStructuredCondition() {
+  structuredConditionId += 1
+  structuredConditions.value.push({
+    id: structuredConditionId,
+    field: 'market_cap',
+    op: 'gt',
+    value: 100,
+    value2: null,
+  })
+}
+
+function removeStructuredCondition(id) {
+  if (structuredConditions.value.length <= 1) return
+  structuredConditions.value = structuredConditions.value.filter((item) => item.id !== id)
+}
+
+function formatStructuredCondition(condition) {
+  const field = fieldLabelMap.value[condition.field] || condition.field
+  const op = operatorLabels[condition.op] || condition.op
+  if (condition.op === 'between') return `${field}${op}${condition.value ?? '—'} 至 ${condition.value2 ?? '—'}`
+  return `${field}${op}${condition.value ?? '—'}`
+}
+
+function normalizeStructuredCondition(condition) {
+  const meta = getStructuredField(condition.field)
+  if (!meta) throw new Error(`不支持的筛选字段：${condition.field}`)
+
+  if (meta.data_type === 'text') {
+    const text = String(condition.value || '').trim()
+    if (!text) throw new Error(`${meta.label}不能为空`)
+    return {
+      field: condition.field,
+      op: condition.op,
+      value: condition.op === 'in' ? text.split(/[,，、\s]+/).filter(Boolean) : text,
+    }
+  }
+
+  if (condition.op === 'between') {
+    const low = Number(condition.value)
+    const high = Number(condition.value2)
+    if (!Number.isFinite(low) || !Number.isFinite(high)) throw new Error(`${meta.label}区间必须填写两个数字`)
+    if (low > high) throw new Error(`${meta.label}区间下限不能高于上限`)
+    return { field: condition.field, op: condition.op, value: [low, high] }
+  }
+
+  const value = Number(condition.value)
+  if (!Number.isFinite(value)) throw new Error(`${meta.label}必须填写数字`)
+  return { field: condition.field, op: condition.op, value }
+}
+
+function mapScreenRows(items, labels) {
+  return items.map((item) => {
+    const metrics = {
+      PE: item.pe,
+      PB: item.pb,
+      ROE: item.roe,
+      市值: item.market_cap,
+      股息率: item.dividend_yield,
+      换手率: item.turnover,
+    }
+    const missingMetrics = Object.entries(metrics)
+      .filter(([, value]) => value === null || value === undefined)
+      .map(([label]) => label)
+    return {
+      ...item,
+      score: null,
+      signals: labels.length ? labels : ['条件筛选'],
+      metrics,
+      missingMetrics,
+    }
+  })
+}
 
 const columns = [
   {
@@ -172,13 +298,28 @@ const columns = [
       return h('div', { class: 'metrics-line' }, metrics.join(' / ') || '-')
     },
   },
+  {
+    title: '数据状态',
+    key: 'data_status',
+    width: 100,
+    render(row) {
+      if (!row.missingMetrics) return '-'
+      const missing = row.missingMetrics
+      return h(NTag, {
+        size: 'small',
+        bordered: false,
+        type: missing.length ? 'warning' : 'success',
+        title: missing.length ? `缺失：${missing.join('、')}` : '关键字段完整',
+      }, { default: () => missing.length ? `缺失 ${missing.length} 项` : '字段完整' })
+    },
+  },
 ]
 
 function formatMetric(key, value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return value
   if (key === '市值') return `${number.toFixed(0)}亿`
-  if (key === '股息率' || key === 'ROE') return `${number.toFixed(2)}%`
+  if (key === '股息率' || key === 'ROE' || key === '换手率') return `${number.toFixed(2)}%`
   return number.toFixed(2)
 }
 
@@ -187,6 +328,7 @@ async function runSelection(id = activeId.value) {
   loading.value = true
   errorMsg.value = ''
   agentResult.value = null
+  structuredResult.value = null
   try {
     activeId.value = id
     result.value = await selectStrategy(id, { limit: 80 })
@@ -203,6 +345,7 @@ async function runAgent() {
   agentLoading.value = true
   agentError.value = ''
   errorMsg.value = ''
+  structuredResult.value = null
   try {
     const data = await runStrategyAgent(query, { limit: 80 })
     agentResult.value = data
@@ -212,6 +355,28 @@ async function runAgent() {
     agentError.value = err.response?.data?.detail || err.message || 'Agent 选股失败'
   } finally {
     agentLoading.value = false
+  }
+}
+
+async function runStructuredScreen() {
+  structuredLoading.value = true
+  structuredError.value = ''
+  errorMsg.value = ''
+  try {
+    const conditions = structuredConditions.value.map(normalizeStructuredCondition)
+    const data = await screenStocks(conditions, {
+      logic: structuredLogic.value,
+      sort_by: structuredSortBy.value || undefined,
+      sort_desc: structuredSortDesc.value,
+      limit: 80,
+    })
+    structuredResult.value = data
+    agentResult.value = null
+    result.value = null
+  } catch (err) {
+    structuredError.value = err.response?.data?.detail || err.message || '结构化筛选失败'
+  } finally {
+    structuredLoading.value = false
   }
 }
 
@@ -360,6 +525,87 @@ onMounted(bootstrap)
         </div>
       </n-card>
 
+      <n-card size="small" :bordered="true" class="structured-card">
+        <template #header>
+          <div class="structured-head">
+            <div>
+              <strong>手动条件筛选</strong>
+              <span>直接调用本地筛选引擎，适合明确的估值、财务、行业和规模条件。</span>
+            </div>
+            <n-button size="tiny" secondary @click="addStructuredCondition">添加条件</n-button>
+          </div>
+        </template>
+
+        <div class="structured-toolbar">
+          <div class="structured-control">
+            <span>条件关系</span>
+            <n-radio-group v-model:value="structuredLogic" size="small">
+              <n-radio-button value="AND">全部满足</n-radio-button>
+              <n-radio-button value="OR">满足任一</n-radio-button>
+            </n-radio-group>
+          </div>
+          <div class="structured-control sort-control">
+            <span>排序</span>
+            <n-select v-model:value="structuredSortBy" :options="structuredSortOptions" size="small" />
+            <n-button size="small" secondary @click="structuredSortDesc = !structuredSortDesc">
+              {{ structuredSortDesc ? '降序' : '升序' }}
+            </n-button>
+          </div>
+        </div>
+
+        <div class="condition-builder">
+          <div v-for="(condition, index) in structuredConditions" :key="condition.id" class="condition-row">
+            <span class="condition-index">{{ String(index + 1).padStart(2, '0') }}</span>
+            <n-select
+              :value="condition.field"
+              :options="structuredFieldOptions"
+              size="small"
+              @update:value="updateStructuredField(condition, $event)"
+            />
+            <n-select v-model:value="condition.op" :options="getStructuredOperatorOptions(condition)" size="small" />
+            <n-input
+              v-if="getStructuredField(condition.field)?.data_type === 'text'"
+              v-model:value="condition.value"
+              size="small"
+              placeholder="输入行业或市场，多个值用逗号分隔"
+            />
+            <template v-else>
+              <n-input-number v-model:value="condition.value" size="small" placeholder="数值" />
+              <n-input-number
+                v-if="condition.op === 'between'"
+                v-model:value="condition.value2"
+                size="small"
+                placeholder="上限"
+              />
+            </template>
+            <n-button
+              size="small"
+              text
+              type="error"
+              :disabled="structuredConditions.length <= 1"
+              @click="removeStructuredCondition(condition.id)"
+            >
+              移除
+            </n-button>
+          </div>
+        </div>
+
+        <div class="structured-foot">
+          <div>
+            <span>当前条件</span>
+            <n-tag v-for="label in structuredConditionLabels" :key="label" size="small" :bordered="false">
+              {{ label }}
+            </n-tag>
+          </div>
+          <n-button type="primary" size="small" strong :loading="structuredLoading" @click="runStructuredScreen">
+            执行筛选
+          </n-button>
+        </div>
+        <n-alert v-if="structuredError" type="error" :bordered="false" class="notice compact">
+          {{ structuredError }}
+        </n-alert>
+      </n-card>
+
       <div class="tool-workbench">
         <n-card
           v-for="tool in tools"
@@ -420,8 +666,9 @@ onMounted(bootstrap)
           <n-card size="small" :bordered="true" class="summary-card">
             <div class="summary-label">{{ item.label }}</div>
             <div class="summary-value">
-              <n-number-animation :from="0" :to="item.value" />
-              <span>{{ item.suffix }}</span>
+              <n-number-animation v-if="item.value != null" :from="0" :to="item.value" />
+              <span v-else>—</span>
+              <span v-if="item.value != null">{{ item.suffix }}</span>
             </div>
           </n-card>
         </n-grid-item>
@@ -463,7 +710,9 @@ onMounted(bootstrap)
                   <strong>{{ displayTitle }}</strong>
                   <span>交易日：{{ displayTradeDate }}</span>
                 </div>
-                <n-tag :bordered="false" type="success">{{ agentResult ? 'Agent 工具结果' : (activeTemplate?.source || '本地策略') }}</n-tag>
+                <n-tag :bordered="false" type="success">
+                  {{ agentResult ? 'Agent 工具结果' : (structuredResult ? '结构化筛选结果' : (activeTemplate?.source || '本地策略')) }}
+                </n-tag>
               </div>
             </template>
 
@@ -471,12 +720,12 @@ onMounted(bootstrap)
               v-if="rows.length"
               :columns="columns"
               :data="rows"
-              :loading="loading"
+              :loading="tableLoading"
               :pagination="{ pageSize: 20 }"
               size="small"
               striped
             />
-            <n-empty v-else-if="!loading" description="当前策略没有命中股票" />
+            <n-empty v-else-if="!tableLoading" description="当前条件没有命中股票" />
             <div v-else class="table-loading">
               <n-skeleton text :repeat="8" />
             </div>
@@ -604,6 +853,101 @@ p {
   border: 1px solid #EDEDED;
   border-radius: 6px;
   background: #FAFAFA;
+}
+
+.structured-card {
+  border-radius: 6px;
+}
+
+.structured-card :deep(.n-card-header) {
+  padding-bottom: 8px;
+}
+
+.structured-head,
+.structured-toolbar,
+.structured-foot,
+.structured-control,
+.condition-row {
+  display: flex;
+  align-items: center;
+}
+
+.structured-head,
+.structured-foot {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.structured-head strong {
+  display: block;
+  color: #111111;
+  font-size: 14px;
+}
+
+.structured-head span,
+.structured-control > span,
+.structured-foot > div > span {
+  color: #71717A;
+  font-size: 11px;
+}
+
+.structured-head span {
+  display: block;
+  margin-top: 3px;
+}
+
+.structured-toolbar {
+  gap: 14px;
+  padding: 7px 8px;
+  border: 1px solid #EDEDED;
+  border-radius: 5px;
+  background: #FAFAFA;
+}
+
+.structured-control {
+  gap: 7px;
+}
+
+.sort-control {
+  margin-left: auto;
+}
+
+.sort-control :deep(.n-select) {
+  width: 138px;
+}
+
+.condition-builder {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.condition-row {
+  display: grid;
+  grid-template-columns: 28px 142px 112px minmax(160px, 1fr) auto auto;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #EDEDED;
+  border-radius: 5px;
+  background: #FFFFFF;
+}
+
+.condition-index {
+  color: #A1A1AA;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+}
+
+.structured-foot {
+  margin-top: 8px;
+}
+
+.structured-foot > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .agent-breakdown {
@@ -1000,6 +1344,32 @@ p {
   .field-grid,
   .agent-breakdown {
     grid-template-columns: 1fr;
+  }
+
+  .structured-toolbar,
+  .structured-foot {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sort-control {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .sort-control :deep(.n-select) {
+    flex: 1;
+    width: auto;
+  }
+
+  .condition-row {
+    grid-template-columns: 24px minmax(0, 1fr) minmax(0, 0.9fr);
+  }
+
+  .condition-row :deep(.n-input),
+  .condition-row :deep(.n-input-number) {
+    grid-column: 2 / span 2;
+    width: 100%;
   }
 
   .agent-panel-wide {
