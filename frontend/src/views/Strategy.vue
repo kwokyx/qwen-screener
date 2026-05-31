@@ -17,13 +17,14 @@ import {
   NTag,
 } from 'naive-ui'
 import Shell from '../components/Shell.vue'
-import { getStrategyTemplates, runStrategyAgent, selectStrategy } from '../api/strategy'
+import { getStrategyTemplates, getStrategyTools, runStrategyAgent, selectStrategy } from '../api/strategy'
 import { useAiStatusStore } from '../stores/aiStatus'
 
 const router = useRouter()
 const aiStatus = useAiStatusStore()
 
 const templates = ref([])
+const tools = ref([])
 const activeId = ref('')
 const result = ref(null)
 const agentResult = ref(null)
@@ -61,6 +62,13 @@ const displayTitle = computed(() => {
   if (agentResult.value) return `Agent：${agentResult.value.plan?.tool_label || '智能选股'}`
   return activeTemplate.value?.name || '策略'
 })
+const stockScreenTool = computed(() => tools.value.find((item) => item.id === 'stock_screen'))
+const strategyTool = computed(() => tools.value.find((item) => item.id === 'strategy_select'))
+const activeTool = computed(() => {
+  if (agentResult.value?.plan?.tool) return tools.value.find((item) => item.id === agentResult.value.plan.tool)
+  return strategyTool.value || tools.value[0]
+})
+const visibleFields = computed(() => stockScreenTool.value?.fields?.slice(0, 9) || [])
 
 const summary = computed(() => {
   const list = rows.value
@@ -182,7 +190,12 @@ async function bootstrap() {
   loading.value = true
   aiStatus.startAutoProbe()
   try {
-    templates.value = await getStrategyTemplates()
+    const [templateData, toolData] = await Promise.all([
+      getStrategyTemplates(),
+      getStrategyTools(),
+    ])
+    templates.value = templateData
+    tools.value = toolData
     activeId.value = templates.value.find((item) => item.id === 'rps_breakout')?.id || templates.value[0]?.id || ''
     await runSelection(activeId.value)
   } catch (err) {
@@ -258,6 +271,57 @@ onMounted(bootstrap)
           <div class="tool-trace">
             <span>工具调用</span>
             <code v-for="trace in agentResult.tool_trace" :key="trace">{{ trace }}</code>
+          </div>
+        </div>
+      </n-card>
+
+      <div class="tool-workbench">
+        <n-card
+          v-for="tool in tools"
+          :key="tool.id"
+          size="small"
+          :bordered="true"
+          class="tool-card"
+          :class="{ active: activeTool?.id === tool.id }"
+        >
+          <template #header>
+            <div class="tool-head">
+              <strong>{{ tool.label }}</strong>
+              <n-tag size="tiny" :bordered="false">{{ tool.category }}</n-tag>
+            </div>
+          </template>
+          <p>{{ tool.description }}</p>
+          <div class="tool-io">
+            <span>输入：{{ tool.inputs.join(' / ') }}</span>
+            <span>输出：{{ tool.outputs.join(' / ') }}</span>
+          </div>
+          <div class="tool-examples">
+            <n-tag
+              v-for="example in tool.examples.slice(0, 3)"
+              :key="example"
+              size="small"
+              :bordered="false"
+            >
+              {{ example }}
+            </n-tag>
+          </div>
+        </n-card>
+      </div>
+
+      <n-card v-if="visibleFields.length" size="small" :bordered="true" class="field-card">
+        <template #header>
+          <div class="field-head">
+            <strong>结构化筛选字段</strong>
+            <span>Agent 只能基于这些本地字段生成筛选条件，缺失字段不会补假数据。</span>
+          </div>
+        </template>
+        <div class="field-grid">
+          <div v-for="field in visibleFields" :key="field.key" class="field-item">
+            <div>
+              <strong>{{ field.label }}</strong>
+              <code>{{ field.key }}</code>
+            </div>
+            <span>{{ field.description }}</span>
           </div>
         </div>
       </n-card>
@@ -457,6 +521,120 @@ p {
   background: #FAFAFA;
 }
 
+.tool-workbench {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tool-card {
+  border-radius: 6px;
+}
+
+.tool-card.active {
+  border-color: #111111;
+  background: #FAFAFA;
+}
+
+.tool-card :deep(.n-card-header) {
+  padding-bottom: 6px;
+}
+
+.tool-card :deep(.n-card__content) {
+  padding-top: 0;
+}
+
+.tool-head,
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tool-head strong,
+.field-head strong {
+  color: #111111;
+  font-size: 14px;
+}
+
+.field-head span {
+  color: #71717A;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.tool-card p {
+  margin: 0 0 8px;
+  max-width: none;
+  color: #52525B;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.tool-io {
+  display: grid;
+  gap: 4px;
+  padding: 7px 8px;
+  border: 1px solid #EDEDED;
+  border-radius: 5px;
+  background: #FFFFFF;
+  color: #71717A;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.tool-examples {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.field-card {
+  border-radius: 6px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.field-item {
+  min-height: 74px;
+  padding: 9px 10px;
+  border: 1px solid #EDEDED;
+  border-radius: 5px;
+  background: #FFFFFF;
+}
+
+.field-item > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.field-item strong {
+  color: #111111;
+  font-size: 12px;
+}
+
+.field-item code {
+  color: #71717A;
+  font-size: 10px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.field-item span {
+  display: block;
+  color: #71717A;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .agent-answer {
   font-size: 13px;
   color: #111111;
@@ -635,6 +813,11 @@ p {
   }
 
   .main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-workbench,
+  .field-grid {
     grid-template-columns: 1fr;
   }
 

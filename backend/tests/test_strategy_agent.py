@@ -61,3 +61,14 @@ def test_agent_routes_breakout_query_to_strategy_tool(db, seed_stocks, monkeypat
     assert res.tool_trace == [
         "调用 strategy_selector.run_strategy_selection(strategy_id=turtle_breakout, limit=5)",
     ]
+
+
+def test_list_agent_tools_documents_screen_fields():
+    tools = strategy_selector.list_agent_tools()
+    by_id = {tool.id: tool for tool in tools}
+
+    assert {"stock_screen", "strategy_select"} <= set(by_id)
+    assert by_id["stock_screen"].fields
+    assert any(field.key == "pe" and field.label == "市盈率" for field in by_id["stock_screen"].fields)
+    assert "字段缺失" in " ".join(by_id["stock_screen"].data_notes)
+    assert "收益回测" in " ".join(by_id["strategy_select"].data_notes)

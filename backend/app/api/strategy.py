@@ -8,6 +8,7 @@ from app.schemas.strategy import (
     StrategySelectRequest,
     StrategySelectResponse,
     StrategyTemplate,
+    StrategyToolInfo,
 )
 from app.services import strategy_selector
 
@@ -19,6 +20,12 @@ router = APIRouter(prefix="/strategy", tags=["strategy"])
 def templates():
     """返回内置策略选股模板。"""
     return strategy_selector.list_templates()
+
+
+@router.get("/tools", response_model=list[StrategyToolInfo])
+def tools():
+    """返回 Agent 当前可调用的选股工具和字段边界。"""
+    return strategy_selector.list_agent_tools()
 
 
 @router.post("/select", response_model=StrategySelectResponse)

@@ -17,6 +17,26 @@ class StrategyTemplate(BaseModel):
     source: str = "Sequoia-X 规则改写"
 
 
+class StrategyToolField(BaseModel):
+    key: str
+    label: str
+    data_type: str
+    operators: list[str]
+    description: str
+
+
+class StrategyToolInfo(BaseModel):
+    id: str
+    label: str
+    category: str
+    description: str
+    inputs: list[str]
+    outputs: list[str]
+    examples: list[str]
+    fields: list[StrategyToolField] = Field(default_factory=list)
+    data_notes: list[str] = Field(default_factory=list)
+
+
 class StrategySelectRequest(BaseModel):
     strategy_id: str = Field(default="turtle_breakout")
     limit: int = Field(default=50, ge=1, le=200)

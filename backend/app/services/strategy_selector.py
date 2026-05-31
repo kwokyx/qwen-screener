@@ -17,6 +17,8 @@ from app.schemas.strategy import (
     StrategyPickItem,
     StrategySelectResponse,
     StrategyTemplate,
+    StrategyToolField,
+    StrategyToolInfo,
 )
 from app.services import qwen_client, screener_engine
 
@@ -76,6 +78,40 @@ class DailyPoint:
 
 def list_templates() -> list[StrategyTemplate]:
     return TEMPLATES
+
+
+def list_agent_tools() -> list[StrategyToolInfo]:
+    return [
+        StrategyToolInfo(
+            id="stock_screen",
+            label="结构化股票筛选",
+            category="基础工具",
+            description="把自然语言目标转换为字段条件，再调用 screener_engine.screen 查询本地最新行情、估值和财务表。",
+            inputs=["conditions", "logic", "sort_by", "limit"],
+            outputs=["股票代码", "名称", "行业", "现价", "估值", "市值", "命中条件"],
+            examples=["低估值高分红的银行股", "半导体行业里的大市值龙头", "白马股，ROE 高，估值不要太贵"],
+            fields=_tool_fields(),
+            data_notes=[
+                "行情字段来自本地 stock_daily 最新交易日。",
+                "ROE、营收同比、净利润同比等来自本地 StockFinancial 最新报告期。",
+                "字段缺失时对应条件不会命中，前端展示为缺失而不是补假数据。",
+            ],
+        ),
+        StrategyToolInfo(
+            id="strategy_select",
+            label="策略选股",
+            category="策略工具",
+            description="执行项目内置选股策略，当前策略参考 Sequoia-X 思路改写为本地日线实时计算。",
+            inputs=["strategy_id", "limit"],
+            outputs=["策略得分", "命中信号", "关键指标", "交易日"],
+            examples=[tpl.name for tpl in TEMPLATES],
+            data_notes=[
+                "当前策略只做选股，不做收益回测。",
+                "策略依赖日线 OHLCV；数据不足的股票会被跳过。",
+                "结果表示当前条件命中，不构成买卖建议。",
+            ],
+        ),
+    ]
 
 
 def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> StrategySelectResponse:
@@ -331,6 +367,36 @@ def _summarize_screen_agent(query: str, plan: StrategyAgentPlan, total: int, nam
 def _condition_labels(conditions: list[FilterCondition]) -> list[str]:
     labels = [_format_condition(cond) for cond in conditions]
     return [label for label in labels if label]
+
+
+def _tool_fields() -> list[StrategyToolField]:
+    numeric_ops = ["gt", "gte", "lt", "lte", "between"]
+    text_ops = ["eq", "in"]
+    fields = [
+        ("pe", "市盈率", "number", numeric_ops, "估值指标，越低通常代表估值越便宜，但需结合行业。"),
+        ("pb", "市净率", "number", numeric_ops, "估值指标，适合银行、周期等重资产行业参考。"),
+        ("roe", "ROE", "number", numeric_ops, "净资产收益率，衡量盈利质量。"),
+        ("market_cap", "总市值", "number", numeric_ops, "单位为亿元，用于区分小盘、中盘、大盘或龙头。"),
+        ("dividend_yield", "股息率", "number", numeric_ops, "现金分红收益率，字段缺失时不补算。"),
+        ("revenue_yoy", "营收同比", "number", numeric_ops, "最新报告期营业收入同比增速。"),
+        ("profit_yoy", "净利润同比", "number", numeric_ops, "最新报告期净利润同比增速。"),
+        ("gross_margin", "毛利率", "number", numeric_ops, "最新报告期毛利率。"),
+        ("debt_ratio", "资产负债率", "number", numeric_ops, "最新报告期资产负债率。"),
+        ("industry", "行业", "text", text_ops, "支持常见行业关键词和部分同义词扩展。"),
+        ("market", "市场", "text", text_ops, "交易市场或板块字段。"),
+        ("close", "收盘价", "number", numeric_ops, "最新交易日收盘价。"),
+        ("turnover", "换手率", "number", numeric_ops, "最新交易日换手率。"),
+    ]
+    return [
+        StrategyToolField(
+            key=key,
+            label=label,
+            data_type=data_type,
+            operators=ops,
+            description=description,
+        )
+        for key, label, data_type, ops, description in fields
+    ]
 
 
 def _format_condition(cond: FilterCondition) -> str:

@@ -5,6 +5,11 @@ export async function getStrategyTemplates() {
   return data
 }
 
+export async function getStrategyTools() {
+  const { data } = await client.get('/strategy/tools')
+  return data
+}
+
 export async function selectStrategy(strategyId, opts = {}) {
   const { data } = await client.post('/strategy/select', {
     strategy_id: strategyId,
