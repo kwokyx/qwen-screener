@@ -43,6 +43,8 @@ class ScreenResultItem(StockBasicOut):
     market_cap: float | None = None
     dividend_yield: float | None = None
     close: float | None = None
+    prev_close: float | None = None
+    change_pct: float | None = None
     turnover: float | None = None
     revenue_yoy: float | None = None
     profit_yoy: float | None = None

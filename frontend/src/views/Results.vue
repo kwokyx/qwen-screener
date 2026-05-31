@@ -159,6 +159,19 @@ const columns = computed(() => [
     render: (s) => rightMonoCell(fmtNum(s.close), { color: Preview.textMain, fontWeight: 700 }),
   },
   {
+    title: '涨跌幅',
+    key: 'change_pct',
+    align: 'right',
+    width: 84,
+    render: (s) => rightMonoCell(
+      s.change_pct == null ? '—' : `${s.change_pct >= 0 ? '+' : ''}${s.change_pct.toFixed(2)}%`,
+      {
+        color: s.change_pct == null ? Preview.textMuted : (s.change_pct >= 0 ? Preview.positive : Preview.negative),
+        fontWeight: s.change_pct == null ? 500 : 700,
+      },
+    ),
+  },
+  {
     title: 'PE',
     key: 'pe',
     align: 'right',

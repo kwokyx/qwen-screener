@@ -98,11 +98,29 @@ def test_unknown_field_raises(db, seed_stocks):
 
 
 def test_result_includes_latest_data_context(db, seed_stocks):
-    """结果携带最新交易日和可展示字段，前端不用再猜数据时间。"""
+    """结果携带最新交易日、上一日收盘和可展示字段，前端不用再猜数据时间。"""
     res = _screen(db, conditions=[FilterCondition(field="industry", op="eq", value="银行")])
     item = res.items[0]
     assert item.code == "600036.SH"
     assert item.trade_date is not None
     assert item.close == 11.0
+    assert item.prev_close == 10.0
+    assert item.change_pct == 10.0
     assert item.pe == 6.5
     assert item.roe == 16.5
+
+
+def test_result_change_pct_is_none_without_previous_close(db):
+    """只有一条日线时，涨跌幅保持为空，不补假数据。"""
+    from datetime import date
+
+    from app.models.stock import StockBasic, StockDaily
+
+    db.add(StockBasic(code="999999.SH", name="新股", industry="测试"))
+    db.add(StockDaily(code="999999.SH", trade_date=date.today(), close=50))
+    db.commit()
+
+    item = _screen(db, conditions=[FilterCondition(field="industry", op="eq", value="测试")]).items[0]
+
+    assert item.prev_close is None
+    assert item.change_pct is None

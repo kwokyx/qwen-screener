@@ -4,7 +4,7 @@
 是系统的"基础筛选模块"，论文里独立成章。
 """
 from sqlalchemy import and_, desc, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.stock import StockBasic, StockDaily, StockFinancial
 from app.schemas.screener import (
@@ -124,6 +124,14 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         .group_by(StockDaily.code)
         .subquery()
     )
+    previous_daily_dates = (
+        db.query(StockDaily.code, func.max(StockDaily.trade_date).label("d"))
+        .join(latest_daily_dates, latest_daily_dates.c.code == StockDaily.code)
+        .filter(StockDaily.trade_date < latest_daily_dates.c.d)
+        .group_by(StockDaily.code)
+        .subquery()
+    )
+    previous_daily = aliased(StockDaily)
     latest_finan_dates = (
         db.query(StockFinancial.code, func.max(StockFinancial.report_date).label("d"))
         .group_by(StockFinancial.code)
@@ -131,13 +139,21 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     )
 
     q = (
-        db.query(StockBasic, StockDaily, StockFinancial)
+        db.query(StockBasic, StockDaily, previous_daily, StockFinancial)
         .outerjoin(latest_daily_dates, latest_daily_dates.c.code == StockBasic.code)
         .outerjoin(
             StockDaily,
             and_(
                 StockDaily.code == latest_daily_dates.c.code,
                 StockDaily.trade_date == latest_daily_dates.c.d,
+            ),
+        )
+        .outerjoin(previous_daily_dates, previous_daily_dates.c.code == StockBasic.code)
+        .outerjoin(
+            previous_daily,
+            and_(
+                previous_daily.code == previous_daily_dates.c.code,
+                previous_daily.trade_date == previous_daily_dates.c.d,
             ),
         )
         .outerjoin(latest_finan_dates, latest_finan_dates.c.code == StockBasic.code)
@@ -174,12 +190,20 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             market_cap=daily.market_cap if daily else None,
             dividend_yield=daily.dividend_yield if daily else None,
             turnover=daily.turnover if daily else None,
+            prev_close=previous.close if previous else None,
+            change_pct=_change_pct(daily.close if daily else None, previous.close if previous else None),
             roe=fin.roe if fin else None,
             revenue_yoy=fin.revenue_yoy if fin else None,
             profit_yoy=fin.profit_yoy if fin else None,
             gross_margin=fin.gross_margin if fin else None,
             debt_ratio=fin.debt_ratio if fin else None,
         )
-        for basic, daily, fin in rows
+        for basic, daily, previous, fin in rows
     ]
     return ScreenResponse(total=total, items=items)
+
+
+def _change_pct(close: float | None, previous_close: float | None) -> float | None:
+    if close is None or previous_close in (None, 0):
+        return None
+    return (close - previous_close) / previous_close * 100
