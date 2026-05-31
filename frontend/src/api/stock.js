@@ -10,8 +10,18 @@ export async function detail(code) {
   return data
 }
 
-export async function kline(code, days = 120) {
-  const { data } = await client.get(`/stock/${code}/kline`, { params: { days } })
+export async function quote(code) {
+  const { data } = await client.get(`/stock/${code}/quote`)
+  return data
+}
+
+export async function kline(code, days = 120, frequency = 'd') {
+  const { data } = await client.get(`/stock/${code}/kline`, { params: { days, frequency } })
+  return data
+}
+
+export async function intraday(code, frequency = '5', days = 1) {
+  const { data } = await client.get(`/stock/${code}/intraday`, { params: { frequency, days } })
   return data
 }
 

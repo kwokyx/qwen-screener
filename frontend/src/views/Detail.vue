@@ -1,12 +1,30 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
-import PctChip from '../components/charts/PctChip.vue'
-import Donut from '../components/charts/Donut.vue'
-import FullCandle from '../components/charts/FullCandle.vue'
-import { A2 } from '../shared/theme.js'
+import KLineChart from '../components/charts/KLineChart.vue'
+import {
+  NAlert,
+  NButton,
+  NButtonGroup,
+  NCard,
+  NDataTable,
+  NDescriptions,
+  NDescriptionsItem,
+  NGi,
+  NGrid,
+  NProgress,
+  NResult,
+  NSkeleton,
+  NSpace,
+  NSpin,
+  NStatistic,
+  NTabPane,
+  NTag,
+  NTabs,
+} from 'naive-ui'
+import { Preview } from '../shared/theme.js'
 import * as stockApi from '../api/stock'
 import * as qwenApi from '../api/qwen'
 import * as screenerApi from '../api/screener'
@@ -17,49 +35,75 @@ const aiStatus = useAiStatusStore()
 import { marked } from 'marked'
 import { friendlyError } from '../shared/errors.js'
 
-// marked: 紧凑配置（不允许原始 HTML，禁用 mangle，保留 GFM 列表/粗体）
 marked.setOptions({ breaks: true, gfm: true })
 import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
-import Skeleton from '../components/Skeleton.vue'
 import { useWatchlistStore } from '../stores/watchlist'
 
 const wl = useWatchlistStore()
 
 const route = useRoute()
+const router = useRouter()
 
-// 默认显示茅台（如果路由没带 code）
 const code = computed(() => route.params.code || '600519.SH')
 
 const detail = ref(null)
-const klineData = ref([])
+const quote = ref(null)
+const rawDailyKlineData = ref([])
+const rawKlineData = ref([])
 const loading = ref(true)
 const errorMsg = ref('')
 
-// 千问分析（按需，流式）
 const aiText = ref('')
 const aiLoading = ref(false)
 const aiStreaming = ref(false)
 const aiError = ref('')
 let aiAbort = null
+let quoteTimer = null
 
-// K 线采样周期：用 days 参数控制后端取多少个交易日
-// 因为现阶段 DB 是日级粒度（无分时），分时改成"近 5 天"，季 K 改成"两年"
-const klineTabs = [
-  { label: '5日',  days: 5 },
-  { label: '30日', days: 30 },
-  { label: '日K',  days: 80 },
-  { label: '半年', days: 120 },
-  { label: '一年', days: 240 },
-  { label: '两年', days: 480 },
+const dailyKlineRanges = [
+  { label: '近1个月', short: '1月', days: 22 },
+  { label: '近3个月', short: '3月', days: 66 },
+  { label: '近6个月', short: '6月', days: 120 },
+  { label: '近1年', short: '1年', days: 240 },
+  { label: '近2年', short: '2年', days: 480 },
 ]
-const klinePeriod = ref(2)   // 默认 "日K"
+const weeklyKlineRanges = [
+  { label: '近6个月', short: '6月', days: 26 },
+  { label: '近1年', short: '1年', days: 52 },
+  { label: '近3年', short: '3年', days: 156 },
+  { label: '近5年', short: '5年', days: 260 },
+]
+const monthlyKlineRanges = [
+  { label: '近1年', short: '1年', days: 12 },
+  { label: '近3年', short: '3年', days: 36 },
+  { label: '近5年', short: '5年', days: 60 },
+  { label: '近10年', short: '10年', days: 120 },
+]
+const intradayKlineRanges = [
+  { label: '最近1个交易日', short: '1日', days: 1 },
+  { label: '最近3个交易日', short: '3日', days: 3 },
+  { label: '最近5个交易日', short: '5日', days: 5 },
+  { label: '最近10个交易日', short: '10日', days: 10 },
+]
+const klineFrequencies = [
+  { label: '5分', value: '5m', frequency: '5', intraday: true },
+  { label: '15分', value: '15m', frequency: '15', intraday: true },
+  { label: '30分', value: '30m', frequency: '30', intraday: true },
+  { label: '60分', value: '60m', frequency: '60', intraday: true },
+  { label: '日K', value: 'day', frequency: 'd', ranges: dailyKlineRanges, defaultRange: 2 },
+  { label: '周K', value: 'week', frequency: 'w', ranges: weeklyKlineRanges, defaultRange: 1 },
+  { label: '月K', value: 'month', frequency: 'm', ranges: monthlyKlineRanges, defaultRange: 2 },
+]
+const klineRange = ref(2)
+const klineFrequency = ref('day')
+const klineLoading = ref(false)
+const klineError = ref('')
 const indicators = ['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']
-const activeIndicator = ref(0)   // MA 默认开；其他纯标签
+const activeIndicator = ref(0)
 const detailTabs = ['财务摘要', '估值', '同行对比', '基本信息']
 const detailTab = ref(0)
 
-// 同行（同行业）数据
 const peers = ref([])
 const peersLoading = ref(false)
 async function loadPeers() {
@@ -81,22 +125,138 @@ watch(() => detail.value?.industry, (v) => { if (v) loadPeers() })
 watch(detailTab, (v) => { if (v === 2 && !peers.value.length) loadPeers() })
 
 
-function mapKline(real) {
-  if (!Array.isArray(real)) return []
-  return real.map((k) => ({
-    o: k.open, c: k.close, h: k.high, l: k.low, v: k.volume, day: k.trade_date,
-  }))
+function dayTime(day) {
+  const [year, month, date] = String(day || '').split('-').map(Number)
+  if (!year || !month || !date) return Number.NaN
+  return new Date(year, month - 1, date).getTime()
 }
 
-async function reloadKline() {
-  const days = klineTabs[klinePeriod.value].days
-  try {
-    const kl = await stockApi.kline(code.value, days)
-    const real = Array.isArray(kl) ? [...kl].reverse() : []
-    klineData.value = mapKline(real)
-  } catch {
-    klineData.value = []
+function isWeekday(day) {
+  const time = dayTime(day)
+  if (!Number.isFinite(time)) return false
+  const weekday = new Date(time).getDay()
+  return weekday !== 0 && weekday !== 6
+}
+
+function mapKline(real) {
+  if (!Array.isArray(real)) return []
+  const seen = new Set()
+  return real
+    .filter((k) => k?.trade_date && isWeekday(k.trade_date))
+    .sort((a, b) => dayTime(a.trade_date) - dayTime(b.trade_date))
+    .filter((k) => {
+      if (seen.has(k.trade_date)) return false
+      seen.add(k.trade_date)
+      return true
+    })
+    .map((k) => ({
+      o: k.open,
+      c: k.close,
+      h: k.high,
+      l: k.low,
+      v: k.volume,
+      day: k.trade_date,
+    }))
+}
+
+function mapIntradayKline(real) {
+  if (!Array.isArray(real)) return []
+  const seen = new Set()
+  return real
+    .filter((k) => k?.datetime)
+    .sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime())
+    .filter((k) => {
+      if (seen.has(k.datetime)) return false
+      seen.add(k.datetime)
+      return true
+    })
+    .map((k) => ({
+      o: k.open,
+      c: k.close,
+      h: k.high,
+      l: k.low,
+      v: k.volume,
+      datetime: k.datetime,
+    }))
+}
+
+const isIntradayFrequency = computed(() => klineFrequencies.find((x) => x.value === klineFrequency.value)?.intraday === true)
+const activeKlineFrequency = computed(() => klineFrequencies.find((x) => x.value === klineFrequency.value) || klineFrequencies[4])
+const activeKlineRanges = computed(() => {
+  if (isIntradayFrequency.value) return intradayKlineRanges
+  return activeKlineFrequency.value.ranges || dailyKlineRanges
+})
+const klineData = computed(() => isIntradayFrequency.value
+  ? rawKlineData.value
+  : rawDailyKlineData.value)
+const chartDisplayData = computed(() => klineData.value)
+const klineVisibleBars = computed(() => {
+  const count = chartDisplayData.value.length
+  if (count <= 10) return 18
+  if (isIntradayFrequency.value) {
+    if (klineFrequency.value === '5m') return 96
+    if (klineFrequency.value === '15m') return 80
+    if (klineFrequency.value === '30m') return 70
+    return 60
   }
+  if (count <= 35) return 35
+  if (klineFrequency.value === 'month') return 48
+  if (klineFrequency.value === 'week') return 64
+  return 90
+})
+const klineCaption = computed(() => {
+  const range = activeKlineRanges.value[klineRange.value]?.label || ''
+  const freq = activeKlineFrequency.value?.label || '日K'
+  return `${freq} · ${range} · ${isIntradayFrequency.value ? '不复权' : '前复权'}`
+})
+
+async function reloadKline() {
+  const days = activeKlineRanges.value[klineRange.value]?.days || activeKlineRanges.value[0].days
+  klineLoading.value = true
+  klineError.value = ''
+  try {
+    if (isIntradayFrequency.value) {
+      const kl = await stockApi.intraday(code.value, activeKlineFrequency.value.frequency, days)
+      rawKlineData.value = mapIntradayKline(kl)
+    } else {
+      const kl = await stockApi.kline(code.value, days, activeKlineFrequency.value.frequency)
+      rawDailyKlineData.value = mapKline(kl)
+    }
+  } catch (e) {
+    klineError.value = friendlyError(e, { context: 'data' })
+    if (isIntradayFrequency.value) rawKlineData.value = []
+    else rawDailyKlineData.value = []
+  } finally {
+    klineLoading.value = false
+  }
+}
+
+async function loadQuote() {
+  try {
+    quote.value = await stockApi.quote(code.value)
+  } catch {
+    quote.value = null
+  }
+}
+
+function setKlineRange(value) {
+  klineRange.value = Number(value)
+  reloadKline()
+}
+
+function setKlineFrequency(value) {
+  klineFrequency.value = value
+  const next = klineFrequencies.find((x) => x.value === value)
+  klineRange.value = next?.intraday ? 0 : (next?.defaultRange ?? 0)
+  reloadKline()
+}
+
+function setIndicator(value) {
+  activeIndicator.value = Number(value)
+}
+
+function setDetailTab(value) {
+  detailTab.value = Number(value)
 }
 
 async function load() {
@@ -104,14 +264,17 @@ async function load() {
   errorMsg.value = ''
   aiText.value = ''
   try {
-    const days = klineTabs[klinePeriod.value].days
-    const [d, kl] = await Promise.all([
+    const days = activeKlineRanges.value[klineRange.value]?.days || 120
+    const [d, kl, q] = await Promise.all([
       stockApi.detail(code.value),
-      stockApi.kline(code.value, days).catch(() => []),
+      stockApi.kline(code.value, days, activeKlineFrequency.value.frequency).catch(() => []),
+      stockApi.quote(code.value).catch(() => null),
     ])
     detail.value = d
-    const real = Array.isArray(kl) ? [...kl].reverse() : []
-    klineData.value = mapKline(real)
+    quote.value = q
+    rawDailyKlineData.value = mapKline(kl)
+    if (isIntradayFrequency.value) await reloadKline()
+    else rawKlineData.value = []
   } catch (e) {
     const status = e.response?.status
     if (status === 404) {
@@ -125,7 +288,6 @@ async function load() {
 }
 
 async function askQwen() {
-  // 复点同一按钮：正在跑就取消
   if (aiStreaming.value) {
     aiAbort?.abort()
     return
@@ -139,7 +301,6 @@ async function askQwen() {
   try {
     await qwenApi.streamAnalyze(code.value, (ev) => {
       if (ev.type === 'chunk' && ev.text) {
-        // 第一个 chunk 到达即视为开始 streaming，关掉"思考中"占位
         aiLoading.value = false
         aiText.value += ev.text
       } else if (ev.type === 'error') {
@@ -157,71 +318,86 @@ async function askQwen() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  quoteTimer = setInterval(loadQuote, 30000)
+})
+onBeforeUnmount(() => {
+  if (quoteTimer) clearInterval(quoteTimer)
+  aiAbort?.abort()
+})
 watch(code, load)
 
-// 涨跌：用今开 vs 现价近似
+const displayQuote = computed(() => quote.value || detail.value?.latest || null)
 const change = computed(() => {
-  const l = detail.value?.latest
-  if (!l || l.close == null || l.open == null) return null
-  return l.close - l.open
+  const q = displayQuote.value
+  if (!q) return null
+  if (q.change != null) return q.change
+  const prevClose = q.prev_close ?? detail.value?.prev_close
+  if (q.close == null || prevClose == null) return null
+  return q.close - prevClose
 })
 const changePct = computed(() => {
-  const l = detail.value?.latest
-  if (!l || l.close == null || l.open == null || l.open === 0) return 0
-  return ((l.close - l.open) / l.open) * 100
+  const q = displayQuote.value
+  if (q?.change_pct != null) return q.change_pct
+  return detail.value?.change_pct ?? 0
 })
 
-// header 指标（密集版：分两行 8+8）
+const priceColor = computed(() => (change.value != null && change.value >= 0) ? Preview.positive : Preview.negative)
+
 const headerMetrics = computed(() => {
-  const l = detail.value?.latest
+  const l = {
+    ...(detail.value?.latest || {}),
+    ...(displayQuote.value || {}),
+    pe: displayQuote.value?.pe ?? detail.value?.latest?.pe,
+    pb: displayQuote.value?.pb ?? detail.value?.latest?.pb,
+    market_cap: displayQuote.value?.market_cap ?? detail.value?.latest?.market_cap,
+    dividend_yield: detail.value?.latest?.dividend_yield,
+  }
   if (!l) return []
   const fmt = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
-  // 振幅 = (high - low) / open
-  const amp = l.open > 0 && l.high != null && l.low != null ? ((l.high - l.low) / l.open) * 100 : null
-  // 量比 = 当日量 / 过去 5 日均量；只在 K 线 ≥ 6 个交易日时计算，否则 null
+  const fmtPct = (v, d = 2, normalizeFraction = false) => {
+    if (v == null) return '—'
+    const n = Number(v)
+    if (!Number.isFinite(n)) return '—'
+    const pct = normalizeFraction && Math.abs(n) > 0 && Math.abs(n) < 1 ? n * 100 : n
+    return `${pct.toFixed(d)}%`
+  }
+
   let volRatio = null
-  if (klineData.value && klineData.value.length >= 6 && l.volume) {
-    const last5 = klineData.value.slice(-6, -1)  // 倒数第 2 到第 6 共 5 根（不含当日）
+  if (rawDailyKlineData.value && rawDailyKlineData.value.length >= 6 && l.volume) {
+    const last5 = rawDailyKlineData.value.slice(-6, -1)
     const vols = last5.map((k) => k.v ?? k.volume).filter((v) => v != null && v > 0)
     if (vols.length >= 3) {
       const avg5 = vols.reduce((a, b) => a + b, 0) / vols.length
       if (avg5 > 0) volRatio = l.volume / avg5
     }
   }
-  // 52 周高/低：从 K 线序列里提取（如果加载完成）
+
   let high52 = null, low52 = null
-  if (klineData.value && klineData.value.length) {
-    high52 = Math.max(...klineData.value.map((k) => k.h ?? k.high ?? -Infinity))
-    low52 = Math.min(...klineData.value.map((k) => k.l ?? k.low ?? Infinity))
+  if (rawDailyKlineData.value && rawDailyKlineData.value.length) {
+    high52 = Math.max(...rawDailyKlineData.value.map((k) => k.h ?? k.high ?? -Infinity))
+    low52 = Math.min(...rawDailyKlineData.value.map((k) => k.l ?? k.low ?? Infinity))
     if (!isFinite(high52)) high52 = null
     if (!isFinite(low52)) low52 = null
   }
-  // 流通市值：当前没字段，用总市值代替
-  const floatCap = l.market_cap
 
   return [
-    { l: '今开', v: fmt(l.open), c: A2.text },
-    { l: '最高', v: fmt(l.high), c: l.open != null && l.high > l.open ? A2.up : A2.text },
-    { l: '最低', v: fmt(l.low), c: l.open != null && l.low < l.open ? A2.down : A2.text },
-    { l: '振幅', v: amp != null ? amp.toFixed(2) + '%' : '—', c: A2.text },
-    { l: '成交量', v: l.volume != null ? (l.volume / 1e8).toFixed(2) + '亿' : '—', c: A2.text },
-    { l: '成交额', v: l.amount != null ? (l.amount / 1e8).toFixed(2) + '亿' : (l.volume != null && l.close != null ? (l.volume * l.close / 1e8).toFixed(2) + '亿' : '—'), c: A2.text },
-    { l: '换手率', v: fmt(l.turnover) + '%', c: A2.text },
-    { l: '量比', v: volRatio != null ? volRatio.toFixed(2) : '—', c: A2.text },
-    // 第二行
-    { l: '市盈率', v: fmt(l.pe), c: A2.text },
-    { l: '市净率', v: fmt(l.pb), c: A2.text },
-    { l: '总市值', v: l.market_cap != null ? Math.round(l.market_cap).toLocaleString() + '亿' : '—', c: A2.text },
-    { l: '流通市值', v: floatCap != null ? Math.round(floatCap).toLocaleString() + '亿' : '—', c: A2.text },
-    { l: '52周高', v: high52 != null ? high52.toFixed(2) : '—', c: A2.up },
-    { l: '52周低', v: low52 != null ? low52.toFixed(2) : '—', c: A2.down },
-    { l: '股息率', v: fmt(l.dividend_yield) + '%', c: l.dividend_yield > 4 ? A2.up : A2.text },
-    { l: '所属', v: detail.value?.industry || '—', c: A2.qwen, isText: true },
+    { l: '今开', v: fmt(l.open) },
+    { l: '最高', v: fmt(l.high) },
+    { l: '最低', v: fmt(l.low) },
+    { l: '市盈率', v: fmt(l.pe) },
+    { l: '市净率', v: fmt(l.pb) },
+    { l: '总市值', v: l.market_cap != null ? (l.market_cap >= 10000 ? (l.market_cap / 10000).toFixed(2) + '万亿' : Math.round(l.market_cap).toLocaleString() + '亿') : '—' },
+    { l: '股息率', v: fmtPct(l.dividend_yield, 2) },
+    { l: '换手率', v: fmtPct(l.turnover, 2) },
+    { l: '成交量', v: l.volume != null ? (l.volume / 1e8).toFixed(2) + '亿' : '—' },
+    { l: '量比', v: volRatio != null ? volRatio.toFixed(2) : '—' },
+    { l: '52周高', v: high52 != null ? high52.toFixed(2) : '—' },
+    { l: '52周低', v: low52 != null ? low52.toFixed(2) : '—' },
   ]
 })
 
-// 财务表
 const finRows = computed(() => {
   const d = detail.value
   if (!d) return []
@@ -236,35 +412,29 @@ const finRows = computed(() => {
   ]
 })
 
-// 子维度（每项 0-100）
 const scoreBreakdown = computed(() => {
   const d = detail.value
   if (!d) return []
   const l = d.latest || {}
-  // 估值得分：PE 越低越好（参考 < 10 满分），PB 辅助
   const peScore = l.pe && l.pe > 0
     ? Math.round(Math.max(20, Math.min(100, 110 - l.pe * 4)))
     : 60
-  // 盈利得分：ROE 主导
   const roeScore = d.roe != null
     ? Math.round(Math.max(20, Math.min(100, 40 + d.roe * 4)))
     : 60
-  // 成长得分：营收+净利同比
   const growth = ((d.revenue_yoy || 0) + (d.profit_yoy || 0)) / 2
   const growthScore = Math.round(Math.max(20, Math.min(100, 60 + growth * 1.5)))
-  // 现金流 / 分红
   const divScore = l.dividend_yield != null
     ? Math.round(Math.max(20, Math.min(100, 50 + l.dividend_yield * 8)))
     : 50
   return [
-    { l: '估值', v: peScore },
-    { l: '盈利', v: roeScore },
-    { l: '成长', v: growthScore },
-    { l: '分红', v: divScore },
+    { l: '估值', v: peScore, s: peScore > 60 ? 'success' : 'warning' },
+    { l: '盈利', v: roeScore, s: roeScore > 60 ? 'success' : 'warning' },
+    { l: '成长', v: growthScore, s: growthScore > 60 ? 'success' : 'warning' },
+    { l: '分红', v: divScore, s: divScore > 60 ? 'success' : 'warning' },
   ]
 })
 
-// 综合评分（同 Results 的逻辑）
 const bullScore = computed(() => {
   if (!detail.value) return 0
   const { latest, roe } = detail.value
@@ -275,6 +445,20 @@ const bullScore = computed(() => {
   return Math.round(Math.max(0, Math.min(99, s)))
 })
 
+const scoreLabel = computed(() => {
+  if (bullScore.value >= 80) return '强烈关注'
+  if (bullScore.value >= 60) return '可关注'
+  if (bullScore.value >= 40) return '中性'
+  return '谨慎'
+})
+
+const scoreColor = computed(() => {
+  if (bullScore.value >= 80) return Preview.brand
+  if (bullScore.value >= 60) return '#2563EB'
+  if (bullScore.value >= 40) return '#f0a020'
+  return '#D64545'
+})
+
 const market = computed(() => {
   const c = code.value || ''
   if (c.startsWith('688')) return '科创板'
@@ -283,291 +467,353 @@ const market = computed(() => {
   return '主板'
 })
 
-// 把 markdown 文本渲染成 HTML；流式中的尾光标用占位符 ▁ 替换为光标 span
 const aiHtml = computed(() => {
   if (!aiText.value) return ''
-  let html = marked.parse(aiText.value)
-  // 简单去掉段落首尾多余空白
-  return html
+  return marked.parse(aiText.value)
 })
 
 const valuationCells = computed(() => {
   const l = detail.value?.latest
   if (!l) return []
   const fmt = (v, d = 2, suf = '') => v == null ? '—' : v.toFixed(d) + suf
-  // PE 颜色：< 行业一般水位 红（贵）；中位 灰；> 绿（便宜）—— 简化按区间
-  const peTone = l.pe == null || l.pe <= 0 ? A2.text : (l.pe < 15 ? A2.up : (l.pe > 40 ? A2.down : A2.text))
   return [
-    { l: '市盈率 PE', v: fmt(l.pe), s: l.pe == null || l.pe <= 0 ? '—' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高'), tone: peTone },
-    { l: '市净率 PB', v: fmt(l.pb), s: l.pb == null ? '—' : (l.pb < 1.5 ? '破净 / 低 PB' : l.pb < 3 ? '合理' : '偏高'), tone: A2.text },
-    { l: '股息率 TTM', v: fmt(l.dividend_yield, 2, '%'), s: l.dividend_yield == null ? '—' : (l.dividend_yield > 4 ? '高股息' : l.dividend_yield > 2 ? '一般' : '偏低'), tone: l.dividend_yield > 4 ? A2.up : A2.text },
-    { l: '总市值', v: l.market_cap == null ? '—' : Math.round(l.market_cap).toLocaleString(), s: l.market_cap == null ? '—' : (l.market_cap > 1000 ? '大盘股' : l.market_cap > 100 ? '中盘股' : '小盘股'), tone: A2.text },
+    { l: '市盈率 PE', v: fmt(l.pe), s: l.pe == null || l.pe <= 0 ? '—' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高') },
+    { l: '市净率 PB', v: fmt(l.pb), s: l.pb == null ? '—' : (l.pb < 1.5 ? '破净 / 低 PB' : l.pb < 3 ? '合理' : '偏高') },
+    { l: '股息率 TTM', v: fmt(l.dividend_yield, 2, '%'), s: l.dividend_yield == null ? '—' : (l.dividend_yield > 4 ? '高股息' : l.dividend_yield > 2 ? '一般' : '偏低') },
+    { l: '总市值', v: l.market_cap == null ? '—' : Math.round(l.market_cap).toLocaleString(), s: l.market_cap == null ? '—' : (l.market_cap > 1000 ? '大盘股' : l.market_cap > 100 ? '中盘股' : '小盘股') },
   ]
 })
+
+const fmtPeer = (v, d = 2) => v != null ? Number(v).toFixed(d) : '—'
+const peerColumns = computed(() => [
+  {
+    title: '名称', key: 'name', minWidth: 120,
+    render: (p) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: p.code === detail.value?.code ? 700 : 600 } }, [
+      h('span', p.name),
+      p.code === detail.value?.code
+        ? h(NTag, { size: 'tiny', type: 'info', bordered: false }, { default: () => '本股' })
+        : null,
+    ]),
+  },
+  { title: '代码', key: 'code', width: 96, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', color: Preview.textMuted, fontSize: '10.5px' } }, p.code) },
+  { title: '现价', key: 'close', align: 'right', width: 78, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 } }, fmtPeer(p.close)) },
+  { title: 'PE', key: 'pe', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, p.pe != null && p.pe > 0 ? p.pe.toFixed(2) : '—') },
+  { title: 'PB', key: 'pb', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeer(p.pb)) },
+  {
+    title: 'ROE', key: 'roe', align: 'right', width: 78,
+    render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', fontWeight: p.roe > 10 ? 700 : 500 } }, p.roe != null ? `${p.roe.toFixed(2)}%` : '—'),
+  },
+  {
+    title: '股息率', key: 'dividend_yield', align: 'right', width: 86,
+    render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, p.dividend_yield != null ? `${p.dividend_yield.toFixed(2)}%` : '—'),
+  },
+  {
+    title: '总市值', key: 'market_cap', align: 'right', width: 104,
+    render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, `${p.market_cap != null ? Math.round(p.market_cap).toLocaleString() : '—'}亿`),
+  },
+])
+
+function peerRowProps(row) {
+  return {
+    style: 'cursor: pointer;',
+    onClick: () => router.push(`/detail/${row.code}`),
+  }
+}
 </script>
 
 <template>
   <Shell>
-    <!-- Loading skeleton -->
-    <div v-if="loading && !detail" :style="{ flex: 1, overflow: 'auto' }">
-      <div :style="{ background: A2.surface, borderBottom: `1px solid ${A2.borderHair}`, padding: '14px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }">
-        <div :style="{ display: 'flex', alignItems: 'center', gap: '14px' }">
-          <Skeleton :width="120" :height="28" />
-          <Skeleton :width="80" :height="14" />
-          <div style="flex:1" />
-          <Skeleton :width="180" :height="36" />
-          <Skeleton :width="80" :height="22" />
-        </div>
-        <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '14px' }">
-          <div v-for="n in 8" :key="n">
-            <Skeleton :width="40" :height="9" :style="{ marginBottom: '4px' }" />
-            <Skeleton :width="60" :height="14" />
-          </div>
-        </div>
-      </div>
-      <div :style="{ padding: '24px', display: 'grid', gridTemplateColumns: '1fr 380px', gap: '14px' }">
-        <Skeleton :height="380" :rounded="10" />
-        <Skeleton :height="380" :rounded="10" />
-      </div>
+    <!-- Loading -->
+    <div v-if="loading && !detail" class="detail-loading">
+      <NSpin size="large">
+        <NCard :bordered="false" style="width: min(800px, 100%);">
+          <NSpace vertical size="large">
+            <NSpace align="center">
+              <NSkeleton text :width="120" :sharp="false" />
+              <NSkeleton text :width="80" :sharp="false" />
+              <NSkeleton text :width="180" :sharp="false" />
+            </NSpace>
+            <NSkeleton height="430px" :sharp="false" />
+          </NSpace>
+        </NCard>
+      </NSpin>
     </div>
 
-    <div v-else-if="errorMsg" :style="{ flex: 1, display: 'grid', placeItems: 'center' }">
-      <div :style="{ background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '24px 32px', borderRadius: '12px', fontSize: '13px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', maxWidth: '460px', textAlign: 'center', boxShadow: A2.shadow }">
-        <div :style="{ width: '44px', height: '44px', background: A2.upSoft, color: A2.up, borderRadius: '50%', display: 'grid', placeItems: 'center' }">
-          <Icon name="alert" :size="22" />
-        </div>
-        <div :style="{ fontWeight: 700, fontSize: '14px', color: A2.text }">无法加载股票详情</div>
-        <div :style="{ fontSize: '12px', color: A2.textMuted, lineHeight: 1.6 }">{{ errorMsg }}</div>
-        <div :style="{ display: 'flex', gap: '8px' }">
-          <button class="btn-outline" @click="$router.push('/dashboard')">回到行情</button>
-          <button class="btn-primary" @click="load">
-            <Icon name="refresh" :size="12" /> 重试
-          </button>
-        </div>
-      </div>
+    <!-- Error -->
+    <div v-else-if="errorMsg" style="display:grid; place-items:center; min-height:400px;">
+      <NResult status="error" title="无法加载股票详情" :description="errorMsg">
+        <template #footer>
+          <NSpace justify="center">
+            <NButton @click="$router.push('/dashboard')">回到行情</NButton>
+            <NButton type="primary" @click="load">
+              <template #icon><Icon name="refresh" :size="12" /></template>
+              重试
+            </NButton>
+          </NSpace>
+        </template>
+      </NResult>
     </div>
 
-    <div v-else-if="detail" class="mobile-stack" :style="{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }">
-      <!-- 2-row header so metrics never get squeezed under the title row -->
-      <div :style="{ background: A2.surface, borderBottom: `1px solid ${A2.borderHair}`, padding: '12px 22px', display: 'flex', flexDirection: 'column', gap: '12px', flexShrink: 0 }">
-        <div :style="{ display: 'flex', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }">
-          <div :style="{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }">
-            <div :style="{ fontSize: '24px', fontWeight: 700, letterSpacing: '-0.4px' }">{{ detail.name }}</div>
-            <div :style="{ fontSize: '13px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.code }}</div>
-            <div :style="{ fontSize: '10px', padding: '3px 8px', background: '#FFEDD5', color: '#9A3412', borderRadius: '999px', fontWeight: 600 }">{{ market }}</div>
-            <div v-if="detail.industry" :style="{ fontSize: '10px', padding: '3px 8px', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '999px', fontWeight: 600 }">{{ detail.industry }}</div>
-          </div>
-          <div :style="{ display: 'flex', alignItems: 'baseline', gap: '10px' }">
-            <div :style="{ fontSize: '34px', fontWeight: 800, fontFamily: 'IBM Plex Mono, monospace', color: change >= 0 ? A2.up : A2.down, letterSpacing: '-1px', lineHeight: 1 }">
-              {{ detail.latest?.close?.toFixed(2) || '—' }}
-            </div>
-            <div v-if="change != null" :style="{ fontSize: '13px', color: change >= 0 ? A2.up : A2.down, fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 }">
+    <!-- Content -->
+    <div v-else-if="detail" class="detail-page">
+      <!-- Stock Header Bar -->
+      <div class="stock-header">
+        <div class="stock-header-left">
+          <span class="stock-code">{{ code }}</span>
+          <h2 class="stock-name">{{ detail.name }}</h2>
+          <NTag size="small" :bordered="false">{{ detail.industry || '—' }}</NTag>
+          <NTag size="small" :bordered="false" type="default">{{ market }}</NTag>
+          <div class="stock-price-inline">
+            <span class="price-big" :style="{ color: priceColor }">
+              {{ displayQuote?.close?.toFixed(2) || '—' }}
+            </span>
+            <span v-if="change != null" class="price-delta" :style="{ color: priceColor }">
               {{ change >= 0 ? '+' : '' }}{{ change.toFixed(2) }}
-            </div>
-            <PctChip v-if="change != null" :pct="changePct" size="lg" />
-          </div>
-          <div style="flex:1" />
-          <div :style="{ display: 'flex', gap: '6px', alignItems: 'center' }">
-            <StarButton variant="button" :stock="{ code: detail.code, name: detail.name, sector: detail.industry, refPrice: detail.latest?.close }" :size="12" />
-            <AlertRuleEditor v-if="wl.has(detail.code)" :code="detail.code" />
-            <button @click="askQwen"
-                    :disabled="!aiStreaming && !aiStatus.isUp"
-                    :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}）` : ''"
-                    :style="{ padding: '8px 16px', background: aiStreaming ? '#3F3D38' : (!aiStatus.isUp ? '#B8B4A8' : A2.qwenGrad), color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: !aiStreaming && !aiStatus.isUp ? 'not-allowed' : 'pointer', borderRadius: '7px', display: 'flex', alignItems: 'center', gap: '5px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: !aiStreaming && !aiStatus.isUp ? 0.7 : 1 }">
-              <Icon :name="aiStreaming ? 'x' : 'sparkle'" :size="12" />
-              {{ aiStreaming ? '停止' : (!aiStatus.isUp ? '千问离线' : (aiText ? '重新生成' : '问千问')) }}
-            </button>
+            </span>
+            <NTag v-if="changePct" :type="changePct >= 0 ? 'error' : 'success'" size="small" :bordered="false">
+              {{ changePct >= 0 ? '+' : '' }}{{ changePct.toFixed(2) }}%
+            </NTag>
           </div>
         </div>
-        <!-- Metrics: 16 字段两行 8 联，密集版 -->
-        <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: '8px 14px', fontSize: '11px' }">
-          <div v-for="(d, i) in headerMetrics" :key="i">
-            <div :style="{ color: A2.textMuted, marginBottom: '1px', fontSize: '9.5px', letterSpacing: '0.3px' }">{{ d.l }}</div>
-            <div :style="{ fontFamily: d.isText ? 'inherit' : 'IBM Plex Mono, monospace', fontWeight: 700, color: d.c, fontSize: '12.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }">{{ d.v }}</div>
-          </div>
+        <div class="stock-header-right">
+          <NSpace size="small">
+            <StarButton variant="button" :stock="{ code: detail.code, name: detail.name, sector: detail.industry, refPrice: displayQuote?.close || detail.latest?.close }" :size="12" />
+            <AlertRuleEditor v-if="wl.has(detail.code)" :code="detail.code" />
+            <NButton
+              size="small"
+              :type="aiStreaming ? 'default' : 'primary'"
+              :disabled="!aiStreaming && !aiStatus.isUp"
+              @click="askQwen"
+            >
+              <template #icon>
+                <Icon :name="aiStreaming ? 'x' : 'sparkle'" :size="12" />
+              </template>
+              {{ aiStreaming ? '停止' : (!aiStatus.isUp ? '千问离线' : (aiText ? '重新生成' : '千问解读')) }}
+            </NButton>
+          </NSpace>
         </div>
       </div>
 
-      <div :style="{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 380px', overflow: 'hidden' }">
-        <!-- K-line + tabs -->
-        <div :style="{ background: A2.surface, overflow: 'auto', padding: '14px', borderRight: `1px solid ${A2.borderHair}` }">
-          <div :style="{ display: 'flex', gap: 0, borderBottom: `1px solid ${A2.borderHair}`, marginBottom: '10px' }">
-            <div v-for="(t, i) in klineTabs" :key="t.label"
-                 @click="klinePeriod = i; reloadKline()"
-                 :style="{ padding: '8px 16px', fontSize: '12px', color: klinePeriod === i ? A2.text : A2.textMuted, fontWeight: klinePeriod === i ? 700 : 500, cursor: 'pointer', borderBottom: klinePeriod === i ? `2px solid ${A2.up}` : '2px solid transparent', transition: 'color 0.15s, border-color 0.15s' }">{{ t.label }}</div>
-            <div style="flex:1" />
-            <div v-for="(t, i) in indicators" :key="t"
-                 @click="activeIndicator = i"
-                 :style="{ padding: '8px 12px', fontSize: '11px', color: activeIndicator === i ? A2.qwenDeep : A2.textMuted, fontWeight: activeIndicator === i ? 700 : 500, cursor: 'pointer', transition: 'color 0.15s' }">{{ t }}</div>
-          </div>
-          <div :style="{ position: 'relative', background: A2.bgDeep, borderRadius: '8px', padding: '10px' }">
-            <FullCandle :data="klineData" :width="760" :height="340" />
-          </div>
-
-          <!-- Tabs below chart -->
-          <div :style="{ display: 'flex', gap: 0, borderBottom: `1px solid ${A2.borderHair}`, marginTop: '18px' }">
-            <div v-for="(t, i) in detailTabs" :key="t"
-                 @click="detailTab = i"
-                 :style="{ padding: '10px 16px', fontSize: '12px', color: detailTab === i ? A2.text : A2.textMuted, fontWeight: detailTab === i ? 700 : 500, cursor: 'pointer', borderBottom: detailTab === i ? `2px solid ${A2.text}` : '2px solid transparent', transition: 'color 0.15s, border-color 0.15s' }">{{ t }}</div>
-          </div>
-
-          <!-- 财务摘要 -->
-          <div v-if="detailTab === 0" :style="{ padding: '14px 4px' }">
-            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">核心财务指标 · 最新报告期</div>
-            <table :style="{ width: '100%', fontSize: '11.5px', borderCollapse: 'collapse' }">
-              <tbody>
-                <tr v-for="(r, i) in finRows" :key="i" :style="{ borderTop: i === 0 ? 'none' : `1px solid ${A2.borderHair}` }">
-                  <td :style="{ padding: '9px 8px', color: A2.textMuted, fontWeight: 500, width: '40%' }">{{ r.l }}</td>
-                  <td :style="{ padding: '9px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: r.v.startsWith('+') ? A2.up : (r.v.startsWith('-') ? A2.down : A2.text) }">{{ r.v }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- 估值 -->
-          <div v-else-if="detailTab === 1" :style="{ padding: '14px 4px' }">
-            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '10px' }">估值水平</div>
-            <div :style="{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }">
-              <div v-for="m in valuationCells" :key="m.l" :style="{ background: A2.bgDeep, border: `1px solid ${A2.borderHair}`, borderRadius: '7px', padding: '12px 14px' }">
-                <div :style="{ fontSize: '10px', color: A2.textMuted, marginBottom: '4px', fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase' }">{{ m.l }}</div>
-                <div :style="{ fontSize: '20px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: m.tone, letterSpacing: '-0.5px' }">{{ m.v }}</div>
-                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">{{ m.s }}</div>
+      <!-- Main: K-line (wide) + Sidebar -->
+      <div class="detail-main">
+        <div class="detail-left">
+          <!-- K-line Card -->
+          <NCard class="section-card chart-card" size="small">
+            <template #header>
+              <div class="chart-header">
+                <div>
+                  <strong>K 线走势</strong>
+                  <span class="chart-sub">{{ klineCaption }}</span>
+                </div>
               </div>
+            </template>
+            <template #header-extra>
+              <NSpace size="small" align="center">
+                <div class="kline-control-group">
+                  <span>K线</span>
+                  <NButtonGroup size="tiny">
+                    <NButton
+                      v-for="t in klineFrequencies"
+                      :key="t.value"
+                      :type="klineFrequency === t.value ? 'primary' : 'default'"
+                      secondary
+                      @click="setKlineFrequency(t.value)"
+                    >
+                      {{ t.label }}
+                    </NButton>
+                  </NButtonGroup>
+                </div>
+                <div class="kline-control-group">
+                  <span>区间</span>
+                  <NButtonGroup size="tiny" class="range-buttons">
+                    <NButton
+                      v-for="(t, i) in activeKlineRanges"
+                      :key="t.label"
+                      :type="klineRange === i ? 'primary' : 'default'"
+                      secondary
+                      @click="setKlineRange(i)"
+                    >
+                      {{ t.short }}
+                    </NButton>
+                  </NButtonGroup>
+                </div>
+              </NSpace>
+            </template>
+            <div class="chart-indicators">
+              <NButtonGroup size="tiny">
+                <NButton
+                  v-for="(t, i) in indicators"
+                  :key="t"
+                  :type="activeIndicator === i ? 'primary' : 'default'"
+                  secondary
+                  @click="setIndicator(i)"
+                >
+                  {{ t }}
+                </NButton>
+              </NButtonGroup>
+            </div>
+            <NAlert v-if="klineError" type="warning" :bordered="false" class="kline-error">
+              {{ klineError }}
+            </NAlert>
+            <NSpin :show="klineLoading">
+              <KLineChart
+                :data="chartDisplayData"
+                :height="390"
+                :indicator="indicators[activeIndicator]"
+                :visible-bars="klineVisibleBars"
+              />
+            </NSpin>
+          </NCard>
+
+          <!-- Key Stats Ribbon -->
+          <div class="stats-ribbon">
+            <div v-for="(m, i) in headerMetrics" :key="i" class="stat-cell">
+              <span class="stat-label">{{ m.l }}</span>
+              <strong class="stat-num">{{ m.v }}</strong>
             </div>
           </div>
 
-          <!-- 同行对比 -->
-          <div v-else-if="detailTab === 2" :style="{ padding: '14px 4px' }">
-            <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }">
-              <div :style="{ fontSize: '12px', fontWeight: 700 }">同行对比 · {{ detail.industry || '—' }}</div>
-              <span v-if="peers.length" :style="{ fontSize: '10.5px', color: A2.textMuted }">按市值排序，前 {{ peers.length }} 只</span>
-            </div>
-            <div v-if="peersLoading" :style="{ display: 'flex', flexDirection: 'column', gap: '6px' }">
-              <Skeleton v-for="n in 5" :key="n" :height="28" />
-            </div>
-            <table v-else-if="peers.length" :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '11.5px' }">
-              <thead>
-                <tr :style="{ color: A2.textMuted, fontSize: '10px', fontWeight: 600, letterSpacing: '0.4px', background: A2.bgDeep }">
-                  <th :style="{ textAlign: 'left', padding: '8px 12px' }">名称</th>
-                  <th :style="{ textAlign: 'left', padding: '8px 6px' }">代码</th>
-                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">现价</th>
-                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">PE</th>
-                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">PB</th>
-                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">ROE</th>
-                  <th :style="{ textAlign: 'right', padding: '8px 6px' }">股息率</th>
-                  <th :style="{ textAlign: 'right', padding: '8px 12px' }">总市值</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="p in peers" :key="p.code"
-                    @click="$router.push(`/detail/${p.code}`)"
-                    :class="{ 'peer-self': p.code === detail.code }"
-                    class="peer-row"
-                    :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }">
-                  <td :style="{ padding: '9px 12px', fontWeight: p.code === detail.code ? 700 : 600, color: p.code === detail.code ? A2.qwenDeep : A2.text }">
-                    {{ p.name }}<span v-if="p.code === detail.code" :style="{ fontSize: '9px', marginLeft: '5px', padding: '1px 5px', background: A2.qwenSoft, color: A2.qwenDeep, borderRadius: '3px', fontWeight: 700 }">本股</span>
-                  </td>
-                  <td :style="{ padding: '9px 6px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textMuted, fontSize: '10.5px' }">{{ p.code }}</td>
-                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600, color: A2.text }">{{ p.close != null ? p.close.toFixed(2) : '—' }}</td>
-                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ p.pe != null && p.pe > 0 ? p.pe.toFixed(2) : '—' }}</td>
-                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ p.pb != null ? p.pb.toFixed(2) : '—' }}</td>
-                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: p.roe > 10 ? A2.up : A2.textSub, fontWeight: p.roe > 10 ? 600 : 500 }">{{ p.roe != null ? p.roe.toFixed(2) + '%' : '—' }}</td>
-                  <td :style="{ padding: '9px 6px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: p.dividend_yield > 4 ? A2.up : A2.textSub }">{{ p.dividend_yield != null ? p.dividend_yield.toFixed(2) + '%' : '—' }}</td>
-                  <td :style="{ padding: '9px 12px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ p.market_cap != null ? Math.round(p.market_cap).toLocaleString() : '—' }}<span :style="{ color: A2.textDim, fontSize: '9px' }">亿</span></td>
-                </tr>
-              </tbody>
-            </table>
-            <EmptyState v-else icon="chart" title="暂无同行数据" subtitle="该行业暂无其他可比公司，或行业数据未同步" compact />
-          </div>
+          <!-- Tabs + Content -->
+          <NCard class="section-card" size="small" style="margin-top:12px;">
+            <template #header>
+              <NTabs :value="detailTab" type="line" size="small" animated @update:value="setDetailTab">
+                <NTabPane v-for="(t, i) in detailTabs" :key="t" :name="i" :tab="t" />
+              </NTabs>
+            </template>
 
-          <!-- 基本信息 -->
-          <div v-else :style="{ padding: '14px 4px' }">
-            <div :style="{ fontSize: '12px', fontWeight: 700, marginBottom: '12px' }">基本信息</div>
-            <div :style="{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 28px', fontSize: '12px', lineHeight: 1.7 }">
-              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
-                <span :style="{ color: A2.textMuted }">股票代码</span>
-                <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.code }}</strong>
-              </div>
-              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
-                <span :style="{ color: A2.textMuted }">股票名称</span>
-                <strong :style="{ color: A2.text }">{{ detail.name }}</strong>
-              </div>
-              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
-                <span :style="{ color: A2.textMuted }">所属行业</span>
-                <strong :style="{ color: A2.text }">{{ detail.industry || '—' }}</strong>
-              </div>
-              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
-                <span :style="{ color: A2.textMuted }">上市板块</span>
-                <strong :style="{ color: A2.text }">{{ market }}</strong>
-              </div>
-              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
-                <span :style="{ color: A2.textMuted }">最新交易日</span>
-                <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ detail.latest?.trade_date || '—' }}</strong>
-              </div>
-              <div :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: `1px dashed ${A2.borderHair}`, paddingBottom: '6px' }">
-                <span :style="{ color: A2.textMuted }">货币单位</span>
-                <strong :style="{ color: A2.text }">人民币 CNY</strong>
-              </div>
+            <!-- 财务摘要 -->
+            <div v-if="detailTab === 0">
+              <NDescriptions :column="3" size="small" label-placement="top" bordered>
+                <NDescriptionsItem v-for="r in finRows" :key="r.l" :label="r.l">
+                  <span class="mono-bold">{{ r.v }}</span>
+                </NDescriptionsItem>
+              </NDescriptions>
             </div>
-            <div :style="{ marginTop: '16px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '7px', fontSize: '11px', color: A2.textMuted, lineHeight: 1.55, display: 'flex', alignItems: 'flex-start', gap: '6px' }">
-              <Icon name="shield" :size="11" />
-              <span>本页面所有数据仅供研究参考，不构成投资建议；据此操作，盈亏自负。</span>
+
+            <!-- 估值 -->
+            <div v-else-if="detailTab === 1">
+              <NGrid :cols="4" :x-gap="10">
+                <NGi v-for="m in valuationCells" :key="m.l">
+                  <NCard size="small" embedded>
+                    <NStatistic :label="m.l" :value="m.v" />
+                    <NTag size="small" :bordered="false">{{ m.s }}</NTag>
+                  </NCard>
+                </NGi>
+              </NGrid>
             </div>
-          </div>
+
+            <!-- 同行对比 -->
+            <div v-else-if="detailTab === 2">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                <span style="font-size:12px; font-weight:700;">同行对比 · {{ detail.industry || '—' }}</span>
+                <span v-if="peers.length" style="font-size:10.5px; color:#64748B;">前 {{ peers.length }} 只</span>
+              </div>
+              <div v-if="peersLoading" style="display:flex; flex-direction:column; gap:6px;">
+                <NSkeleton v-for="n in 5" :key="n" height="28px" :sharp="false" />
+              </div>
+              <NDataTable
+                v-else-if="peers.length"
+                :columns="peerColumns"
+                :data="peers"
+                :row-key="(row) => row.code"
+                :row-props="peerRowProps"
+                :pagination="false"
+                size="small"
+                :bordered="false"
+              />
+              <EmptyState v-else icon="chart" title="暂无同行数据" subtitle="该行业暂无其他可比公司" compact />
+            </div>
+
+            <!-- 基本信息 -->
+            <div v-else>
+              <NDescriptions :column="2" size="small" bordered>
+                <NDescriptionsItem label="股票代码"><span class="mono-bold">{{ detail.code }}</span></NDescriptionsItem>
+                <NDescriptionsItem label="股票名称">{{ detail.name }}</NDescriptionsItem>
+                <NDescriptionsItem label="所属行业">{{ detail.industry || '—' }}</NDescriptionsItem>
+                <NDescriptionsItem label="上市板块">{{ market }}</NDescriptionsItem>
+                <NDescriptionsItem label="最新交易日"><span style="font-family:'IBM Plex Mono', monospace;">{{ detail.latest?.trade_date || '—' }}</span></NDescriptionsItem>
+                <NDescriptionsItem label="货币单位">人民币 CNY</NDescriptionsItem>
+              </NDescriptions>
+            </div>
+          </NCard>
+
+          <!-- AI Analysis Card -->
+          <NCard title="千问解读" size="small" class="section-card ai-card-wide">
+            <template #header-extra>
+              <NSpace size="small" align="center">
+                <NTag size="small" :bordered="false">基本面摘要</NTag>
+                <NButton v-if="aiText && !aiStreaming" text size="tiny" type="primary" @click="askQwen">重新生成</NButton>
+              </NSpace>
+            </template>
+
+            <NAlert v-if="!aiText && !aiLoading && !aiStreaming && !aiError" type="default" :bordered="false" class="ai-empty">
+              点击顶部「千问解读」按钮，生成估值、盈利质量、成长和风险摘要。
+            </NAlert>
+
+            <div v-if="aiLoading && !aiText" class="ai-thinking">
+              <NSpin size="small" /> 正在分析当前行情和财务指标...
+            </div>
+
+            <NAlert v-if="aiError" type="error" :bordered="false">
+              <span>{{ aiError }}</span>
+              <NButton size="tiny" secondary @click="askQwen" style="margin-top:6px;">重试</NButton>
+            </NAlert>
+
+            <div v-if="aiText" class="ai-md">
+              <div v-html="aiHtml" />
+              <span v-if="aiStreaming" class="caret" />
+            </div>
+          </NCard>
         </div>
 
-        <!-- Right: Qwen analysis -->
-        <div :style="{ background: A2.surface, padding: '16px', overflow: 'auto', fontSize: '12px' }">
-          <div :style="{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }">
-            <div :style="{ width: '26px', height: '26px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 800, borderRadius: '7px', boxShadow: '0 2px 6px rgba(14,14,12,0.10)' }">千</div>
-            <div :style="{ fontSize: '14px', fontWeight: 700, letterSpacing: '-0.2px' }">千问深度解读</div>
-          </div>
-
-          <!-- Score block -->
-          <div :style="{ background: A2.qwenGradSoft, border: `1px solid ${A2.borderHair}`, padding: '14px', marginBottom: '14px', borderRadius: '10px' }">
-            <div :style="{ display: 'flex', alignItems: 'center', gap: '14px' }">
-              <Donut :value="bullScore" :size="68" :stroke="7" :color="A2.qwen" :label="bullScore" />
-              <div style="flex:1">
-                <div :style="{ fontSize: '11px', color: A2.textMuted }">综合评分</div>
-                <div :style="{ fontSize: '18px', fontWeight: 800, color: A2.qwenDeep, letterSpacing: '-0.3px' }">
-                  {{ bullScore >= 80 ? '强烈关注' : bullScore >= 60 ? '可关注' : bullScore >= 40 ? '中性' : '谨慎' }}
-                </div>
-                <div :style="{ fontSize: '10px', color: A2.textMuted, marginTop: '2px' }">基于估值 / 盈利 / 现金流综合</div>
+        <!-- Sidebar -->
+        <div class="detail-right">
+          <!-- Score Card -->
+          <NCard title="综合评分" size="small" class="section-card">
+            <div class="score-block">
+              <div class="score-ring" :style="{ color: scoreColor, borderColor: scoreColor }">
+                {{ bullScore }}
+              </div>
+              <div class="score-text">
+                <div class="score-label" :style="{ color: scoreColor }">{{ scoreLabel }}</div>
+                <div class="score-sub">{{ bullScore }}/99</div>
               </div>
             </div>
-            <!-- 4 个子维度 -->
-            <div :style="{ marginTop: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }">
-              <div v-for="d in scoreBreakdown" :key="d.l" :style="{ fontSize: '11px' }">
-                <div :style="{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }">
-                  <span :style="{ color: A2.textSub, fontWeight: 500 }">{{ d.l }}</span>
-                  <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep }">{{ d.v }}</span>
+            <div class="score-bars">
+              <div v-for="d in scoreBreakdown" :key="d.l" class="score-bar-item">
+                <div class="score-bar-head">
+                  <span>{{ d.l }}</span>
+                  <strong>{{ d.v }}</strong>
                 </div>
-                <div :style="{ height: '4px', background: 'rgba(255,255,255,0.7)', borderRadius: '2px', overflow: 'hidden' }">
-                  <div :style="{ width: `${d.v}%`, height: '100%', background: A2.qwenGrad, transition: 'width 0.4s ease' }" />
-                </div>
+                <NProgress
+                  type="line"
+                  :percentage="d.v"
+                  :height="6"
+                  :show-indicator="false"
+                  :status="d.s"
+                />
               </div>
             </div>
-          </div>
+          </NCard>
 
-          <!-- AI text -->
-          <div v-if="!aiText && !aiLoading && !aiStreaming && !aiError" :style="{ padding: '24px 14px', textAlign: 'center', background: A2.bgDeep, borderRadius: '10px', color: A2.textMuted, fontSize: '12px' }">
-            点击右上角「问千问」按钮，让大模型基于当前基本面数据生成深度分析。
-          </div>
-          <div v-if="aiLoading && !aiText" :style="{ padding: '20px 14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: A2.bgDeep, borderRadius: '10px', color: A2.textMuted, fontSize: '12px' }">
-            <span class="dots-loader" :style="{ '--c': A2.qwen }"></span>
-            千问思考中…
-          </div>
-          <div v-if="aiError" :style="{ padding: '12px 14px', background: A2.upSoft, color: A2.up, borderRadius: '8px', fontSize: '12px', lineHeight: 1.6, display: 'flex', alignItems: 'flex-start', gap: '8px' }">
-            <Icon name="alert" :size="13" />
-            <span style="flex:1">{{ aiError }}</span>
-            <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="askQwen">
-              <Icon name="refresh" :size="11" /> 重试
-            </button>
-          </div>
-          <div v-if="aiText" class="ai-md" :style="{ padding: '14px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', fontSize: '12.5px', color: A2.textSub }">
-            <div v-html="aiHtml" />
-            <span v-if="aiStreaming" class="caret" />
-          </div>
+          <!-- Stock Info Card -->
+          <NCard title="股票信息" size="small" class="section-card">
+            <NDescriptions :column="1" label-placement="left" size="small">
+              <NDescriptionsItem label="代码">{{ code }}</NDescriptionsItem>
+              <NDescriptionsItem label="行业">{{ detail.industry || '—' }}</NDescriptionsItem>
+              <NDescriptionsItem label="板块">{{ market }}</NDescriptionsItem>
+              <NDescriptionsItem label="交易日">{{ detail.latest?.trade_date || '—' }}</NDescriptionsItem>
+            </NDescriptions>
+            <NButton block type="primary" size="small" :loading="loading" style="margin-top:12px;" @click="load">
+              <template #icon><Icon name="refresh" :size="12" /></template>
+              刷新数据
+            </NButton>
+          </NCard>
+
+          <NAlert type="warning" :bordered="false" class="risk-note">
+            <template #icon><Icon name="shield" :size="11" /></template>
+            仅供研究参考，不构成投资建议
+          </NAlert>
         </div>
       </div>
     </div>
@@ -575,93 +821,375 @@ const valuationCells = computed(() => {
 </template>
 
 <style scoped>
-.peer-row { transition: background 0.12s; }
-.peer-row:hover { background: #EFEDE6; }
-.peer-row.peer-self { background: rgba(36, 86, 216, 0.06); }
-.peer-row.peer-self:hover { background: rgba(36, 86, 216, 0.10); }
-</style>
+.detail-page {
+  color: #111111;
+  padding-top: 0;
+}
 
-<style scoped>
-/* AI 输出的 markdown 排版 */
+.detail-loading {
+  display: grid;
+  place-items: center;
+  padding: 60px 0;
+}
+
+/* ---- Stock Header ---- */
+.stock-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 0 0 12px;
+  background: #FFFFFF;
+  border: 0;
+  border-radius: 0;
+  margin-bottom: 0;
+  box-shadow: none;
+}
+
+.stock-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: 820px;
+}
+
+.stock-code {
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: #71717A;
+  order: 1;
+}
+
+.stock-name {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: #111111;
+  line-height: 1;
+  order: 0;
+}
+
+.stock-header :deep(.n-tag) {
+  background: #F5F5F5;
+  color: #52525B;
+  border-radius: 4px;
+  order: 2;
+}
+
+.stock-price-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: 0;
+  width: 100%;
+  order: 3;
+  padding-top: 8px;
+}
+
+.price-big {
+  font-size: 46px;
+  font-weight: 800;
+  font-family: 'IBM Plex Mono', monospace;
+  line-height: 0.95;
+  letter-spacing: -1.5px;
+}
+
+.price-delta {
+  font-size: 15px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+}
+
+.stock-header-right {
+  flex-shrink: 0;
+}
+
+/* ---- Main Layout ---- */
+.detail-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.detail-left {
+  min-width: 0;
+}
+
+.detail-right {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.section-card {
+  background: #F7F7F7;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+/* ---- K-line ---- */
+.chart-card {
+  border-top: 0;
+}
+
+.chart-card :deep(.n-card-header) {
+  padding: 12px 16px 0;
+  gap: 8px;
+}
+
+.chart-card :deep(.n-card__content) {
+  padding: 6px 16px 14px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-header strong {
+  font-size: 16px;
+  color: #111111;
+}
+
+.chart-sub {
+  font-size: 11px;
+  color: #71717A;
+  margin-left: 10px;
+}
+
+.chart-indicators {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.kline-error {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.kline-control-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.kline-control-group > span {
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 650;
+  flex-shrink: 0;
+}
+
+.kline-control-group :deep(.n-button-group) {
+  flex-wrap: wrap;
+}
+
+.kline-control-group :deep(.n-button) {
+  min-width: 36px;
+}
+
+/* ---- Stats Ribbon ---- */
+.stats-ribbon {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.stat-cell {
+  padding: 8px 10px;
+  background: #F7F7F7;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.stat-label {
+  display: block;
+  font-size: 10px;
+  color: #71717A;
+  margin-bottom: 3px;
+}
+
+.stat-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  color: #111111;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---- Score ---- */
+.score-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.score-ring {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 2px solid;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 800;
+  font-family: 'IBM Plex Mono', monospace;
+  flex-shrink: 0;
+}
+
+.score-text { flex: 1; }
+.score-label { font-size: 14px; font-weight: 800; }
+.score-sub { font-size: 11px; color: #71717A; margin-top: 1px; }
+
+.score-bars {
+  /* inside score card */
+}
+
+.score-bar-item {
+  margin-bottom: 7px;
+}
+
+.score-bar-item:last-child {
+  margin-bottom: 0;
+}
+
+.score-bar-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.score-bar-head strong {
+  font-family: 'IBM Plex Mono', monospace;
+  color: #1F2937;
+}
+
+/* ---- AI ---- */
+.ai-empty {
+  font-size: 12px;
+  background: #FFFFFF;
+}
+
+.ai-card-wide {
+  margin-top: 12px;
+}
+
+.ai-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.risk-note {
+  font-size: 11px;
+  background: #F7F7F7;
+}
+
+.mono-bold {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+}
+
+/* ---- AI markdown ---- */
 .ai-md :deep(h1),
 .ai-md :deep(h2),
 .ai-md :deep(h3) {
   font-size: 13px;
   font-weight: 700;
-  margin: 12px 0 6px;
-  color: #111110;
+  margin: 10px 0 5px;
+  color: #111111;
 }
 .ai-md :deep(h1):first-child,
 .ai-md :deep(h2):first-child,
 .ai-md :deep(h3):first-child { margin-top: 0; }
-.ai-md :deep(p) { margin: 6px 0; line-height: 1.75; }
+.ai-md :deep(p) { margin: 5px 0; line-height: 1.7; font-size: 12px; }
 .ai-md :deep(p):first-child { margin-top: 0; }
 .ai-md :deep(p):last-child { margin-bottom: 0; }
-.ai-md :deep(strong) { color: #111110; font-weight: 700; }
-.ai-md :deep(em) { color: #3F3D38; font-style: normal; font-weight: 600; }
+.ai-md :deep(strong) { color: #111111; font-weight: 700; }
+.ai-md :deep(em) { color: #3F3F46; font-style: normal; font-weight: 600; }
 .ai-md :deep(ul),
-.ai-md :deep(ol) { padding-left: 18px; margin: 6px 0; }
-.ai-md :deep(li) { margin: 3px 0; line-height: 1.7; }
+.ai-md :deep(ol) { padding-left: 16px; margin: 5px 0; }
+.ai-md :deep(li) { margin: 2px 0; line-height: 1.6; font-size: 12px; }
 .ai-md :deep(code) {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 11.5px;
-  padding: 1px 5px;
-  background: #EFEDE6;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: #FFFFFF;
   border-radius: 3px;
 }
 .ai-md :deep(blockquote) {
-  margin: 8px 0;
-  padding: 4px 12px;
-  border-left: 3px solid rgba(36, 86, 216, 0.4);
-  color: #3F3D38;
-  background: #EFF3FD;
-  border-radius: 0 6px 6px 0;
-}
-.ai-md :deep(hr) {
-  border: none;
-  border-top: 1px dashed rgba(14, 14, 12, 0.10);
-  margin: 10px 0;
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid #111111;
+  color: #3F3F46;
+  background: #FFFFFF;
+  border-radius: 0 4px 4px 0;
 }
 
-/* 打字光标 */
 .caret {
   display: inline-block;
   width: 6px;
   height: 14px;
   margin-left: 2px;
-  background: #2456D8;
+  background: #111111;
   vertical-align: middle;
   animation: caret-blink 1s steps(2) infinite;
 }
 @keyframes caret-blink { 50% { opacity: 0 } }
 
-/* 三点 loader */
-.dots-loader {
-  display: inline-block;
-  width: 28px;
-  height: 6px;
-  position: relative;
-}
-.dots-loader::before,
-.dots-loader::after,
-.dots-loader { background: var(--c, #2456D8); }
-.dots-loader {
-  border-radius: 50%;
-  width: 6px; height: 6px;
-  animation: dot-pulse 1.0s infinite alternate;
-  animation-delay: 0.2s;
-}
-.dots-loader::before, .dots-loader::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-}
-.dots-loader::before { left: -10px; animation: dot-pulse 1.0s infinite alternate; }
-.dots-loader::after  { left: 10px;  animation: dot-pulse 1.0s infinite alternate; animation-delay: 0.4s; }
-@keyframes dot-pulse {
-  0%   { opacity: 0.3; transform: scale(0.8); }
-  100% { opacity: 1;   transform: scale(1.1); }
+@media (max-width: 900px) {
+  .chart-card :deep(.n-card-header) {
+    flex-wrap: wrap;
+  }
+
+  .chart-card :deep(.n-card-header__extra) {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .chart-card :deep(.n-card-header__extra .n-space) {
+    width: 100%;
+    row-gap: 6px !important;
+    flex-wrap: wrap !important;
+  }
+
+  .kline-control-group {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .kline-control-group :deep(.n-button-group) {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .chart-indicators {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .detail-main {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-ribbon {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 </style>

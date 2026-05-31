@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { A2 } from '../shared/theme.js'
 import { ticker as fetchTicker, movers as fetchMovers } from '../api/market'
+import { NLayoutHeader, NTag } from 'naive-ui'
 
 // 模块级缓存：跨路由切换不重复拉
 let cache = null
@@ -58,11 +59,11 @@ onMounted(load)
 </script>
 
 <template>
-  <div :style="{ background: '#EFEDE6', color: A2.textSub, height: '24px', display: 'flex', alignItems: 'center', fontSize: '10.5px', fontFamily: 'IBM Plex Mono, monospace', boxShadow: '0 1px 0 ' + A2.borderHair, flexShrink: 0, overflow: 'hidden' }">
+  <n-layout-header bordered class="ticker-bar">
     <!-- 左侧：4 大指数固定 -->
     <div :style="{ display: 'flex', alignItems: 'center', gap: '20px', padding: '0 14px', flexShrink: 0, borderRight: `1px solid ${A2.borderHair}`, height: '100%' }">
       <div v-for="idx in indices" :key="idx.code" :style="{ display: 'flex', alignItems: 'center', gap: '5px' }">
-        <span :style="{ color: A2.textMuted, fontSize: '10px' }">{{ idx.name }}</span>
+        <n-tag size="tiny" :bordered="false">{{ idx.name }}</n-tag>
         <span :style="{ color: A2.text, fontWeight: 600 }">{{ idx.value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</span>
         <span :style="{ color: idx.change >= 0 ? A2.up : A2.down, fontWeight: 600 }">
           {{ idx.change >= 0 ? '▲' : '▼' }} {{ (idx.change >= 0 ? '+' : '') + idx.change_pct.toFixed(2) }}%
@@ -75,7 +76,7 @@ onMounted(load)
       <div class="ticker-scroll">
         <span v-for="(s, i) in scrollItems" :key="`${s.code}-${i}`"
               :style="{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '0 14px', borderRight: `1px solid ${A2.borderHair}` }">
-          <span :style="{ color: A2.textMuted, fontSize: '10px' }">{{ s.name }}</span>
+        <n-tag size="tiny" :bordered="false">{{ s.name }}</n-tag>
           <span :style="{ color: A2.text, fontWeight: 600 }">{{ s.close != null ? s.close.toFixed(2) : '—' }}</span>
           <span :style="{ color: (s.change_pct || 0) >= 0 ? A2.up : A2.down, fontWeight: 600 }">
             {{ (s.change_pct || 0) >= 0 ? '+' : '' }}{{ (s.change_pct || 0).toFixed(2) }}%
@@ -94,10 +95,21 @@ onMounted(load)
         {{ tradeDate }}
       </span>
     </div>
-  </div>
+  </n-layout-header>
 </template>
 
 <style scoped>
+.ticker-bar {
+  background: #EFEDE6;
+  color: #3F3D38;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-family: 'IBM Plex Mono', monospace;
+  flex-shrink: 0;
+  overflow: hidden;
+}
 .ticker-scroll-wrap::before,
 .ticker-scroll-wrap::after {
   content: '';

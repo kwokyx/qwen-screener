@@ -41,8 +41,7 @@ function demoQuote(item) {
 
 async function fetchQuote(code) {
   try {
-    const d = await stockApi.detail(code)
-    const l = d.latest || {}
+    const l = await stockApi.quote(code)
     return {
       close: l.close ?? null,
       open: l.open ?? null,

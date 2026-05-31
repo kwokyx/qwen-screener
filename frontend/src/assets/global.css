@@ -7,15 +7,15 @@ html, body, #app {
   font-family: 'IBM Plex Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #F6F5F0;
-  color: #111110;
+  background: #FFFFFF;
+  color: #111111;
 }
 
 button { font-family: inherit; }
 input, textarea { font-family: inherit; }
 
 /* selection */
-::selection { background: rgba(36, 86, 216, 0.18); }
+::selection { background: rgba(184, 255, 44, 0.45); }
 
 /* scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -32,15 +32,15 @@ button {
 button:not(:disabled) { cursor: pointer; }
 button:not(:disabled):active { transform: translateY(0.5px); }
 button:focus-visible {
-  outline: 2px solid #2456D8;
+  outline: 2px solid #111111;
   outline-offset: 2px;
 }
 
 /* table row hover (used across views) */
 .row-hover { transition: background 0.15s ease; }
-.row-hover:hover { background: #EFEDE6; }
+.row-hover:hover { background: #FAFAFA; }
 .row-clickable { cursor: pointer; }
-.row-clickable:hover { background: #EAF0FE !important; }
+.row-clickable:hover { background: #FAFAFA !important; }
 
 /* index/stat card hover lift */
 .card-hover { transition: box-shadow 0.18s ease, transform 0.18s ease; }
@@ -62,25 +62,25 @@ button:focus-visible {
 
 /* primary button (qwen blue) */
 .btn-primary {
-  background: #2456D8;
+  background: #111111;
   color: #fff;
   border: none;
-  border-radius: 7px;
+  border-radius: 5px;
   font-weight: 600;
   padding: 7px 14px;
   font-size: 12px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  box-shadow: 0 2px 8px rgba(36, 86, 216, 0.18);
+  box-shadow: none;
 }
-.btn-primary:hover { background: #1E3FA8; box-shadow: 0 3px 12px rgba(36, 86, 216, 0.30); }
+.btn-primary:hover { background: #000000; box-shadow: none; }
 
 /* ghost icon button */
 .btn-ghost {
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   color: #3F3D38;
   display: grid;
   place-items: center;
@@ -95,7 +95,7 @@ button:focus-visible {
   background: #FFFFFF;
   color: #3F3D38;
   border: 1px solid rgba(14,14,12,0.08);
-  border-radius: 7px;
+  border-radius: 5px;
   font-weight: 500;
   padding: 7px 12px;
   font-size: 12px;
@@ -103,7 +103,7 @@ button:focus-visible {
   align-items: center;
   gap: 5px;
 }
-.btn-outline:hover { background: #FBFBF9; border-color: rgba(14,14,12,0.14); color: #111110; }
+.btn-outline:hover { background: #F5F5F5; border-color: #D8D8D8; color: #111111; }
 
 /* tab link (in topbar) */
 .tab-link {
@@ -119,14 +119,14 @@ button:focus-visible {
   transition: color 0.15s ease;
 }
 .tab-link:hover { color: #111110; }
-.tab-link.active { color: #111110; font-weight: 600; }
+.tab-link.active { color: #111111; font-weight: 600; }
 
 /* tab indicator (positioned absolute, animated) */
 .tab-indicator {
   position: absolute;
   bottom: 0;
   height: 2px;
-  background: #2456D8;
+  background: #111111;
   border-radius: 2px;
   transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1), width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -136,7 +136,7 @@ button:focus-visible {
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
   cursor: pointer;
 }
-.chip-clickable:hover { background: #EFEDE6; }
+.chip-clickable:hover { background: #F5F5F5; }
 .chip-clickable:active { transform: scale(0.98); }
 
 /* page fade transition */
@@ -151,7 +151,7 @@ button:focus-visible {
 .card {
   background: #FFFFFF;
   border: 1px solid rgba(14,14,12,0.06);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 1px 3px rgba(14,14,12,0.04);
 }
 .card-pad { padding: 14px; }

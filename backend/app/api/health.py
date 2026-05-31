@@ -4,12 +4,32 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily, StockFinancial
 from app.services import cache, db_backup, qwen_client, scheduler
 
 
 router = APIRouter(prefix="/health", tags=["health"])
+
+
+def _covered_latest_trade_date(db: Session, basic_cnt: int):
+    """Latest date with enough rows to represent the whole market.
+
+    Individual detail pages may backfill one stock to a newer date; reporting
+    that sparse date as "latest data" makes the health page look fresher than
+    the market-wide dataset actually is.
+    """
+    min_rows = max(100, int(basic_cnt * 0.5)) if basic_cnt else 100
+    cnt = func.count(StockDaily.id)
+    row = (
+        db.query(StockDaily.trade_date, cnt.label("n"))
+        .group_by(StockDaily.trade_date)
+        .having(cnt >= min_rows)
+        .order_by(StockDaily.trade_date.desc())
+        .first()
+    )
+    return row[0] if row else db.query(func.max(StockDaily.trade_date)).scalar()
 
 
 @router.get("/ai")
@@ -25,7 +45,22 @@ def data_health(db: Session = Depends(get_db)):
     fin_cnt = db.query(StockFinancial).count()
     basic_cnt = db.query(StockBasic).count()
     industry_cnt = db.query(StockBasic).filter(StockBasic.industry.isnot(None)).count()
-    latest_trade_date = db.query(func.max(StockDaily.trade_date)).scalar()
+    newest_trade_date = db.query(func.max(StockDaily.trade_date)).scalar()
+    latest_trade_date = _covered_latest_trade_date(db, basic_cnt)
+    latest_daily_cnt = 0
+    valuation_cnt = 0
+    if latest_trade_date:
+        latest_daily_cnt = db.query(StockDaily).filter(
+            StockDaily.trade_date == latest_trade_date,
+        ).count()
+        valuation_cnt = db.query(StockDaily).filter(
+            StockDaily.trade_date == latest_trade_date,
+            (
+                StockDaily.pe.isnot(None)
+                | StockDaily.pb.isnot(None)
+                | StockDaily.market_cap.isnot(None)
+            ),
+        ).count()
 
     sync_meta = scheduler.get_meta()
 
@@ -37,11 +72,21 @@ def data_health(db: Session = Depends(get_db)):
     return {
         "fresh": fresh,
         "latest_trade_date": str(latest_trade_date) if latest_trade_date else None,
+        "newest_trade_date": str(newest_trade_date) if newest_trade_date else None,
+        "data_provider": settings.data_provider,
         "counts": {
             "basic": basic_cnt,
             "daily": daily_cnt,
             "financial": fin_cnt,
             "with_industry": industry_cnt,
+            "latest_daily": latest_daily_cnt,
+            "latest_valuation": valuation_cnt,
+        },
+        "coverage": {
+            "industry": round(industry_cnt / basic_cnt, 4) if basic_cnt else 0,
+            "financial": round(fin_cnt / basic_cnt, 4) if basic_cnt else 0,
+            "latest_daily": round(latest_daily_cnt / basic_cnt, 4) if basic_cnt else 0,
+            "latest_valuation": round(valuation_cnt / latest_daily_cnt, 4) if latest_daily_cnt else 0,
         },
         "sync_meta": sync_meta,
     }
@@ -78,3 +123,25 @@ def trigger_sync(job_name: str, wait: bool = False):
 def list_backups():
     """列出 /app/data/backups/ 下的 SQLite 冷备份文件，时间倒序。"""
     return {"items": db_backup.list_backups()}
+
+
+@router.get("/baostock")
+def baostock_health():
+    """检查 baostock 数据源连通性。"""
+    try:
+        from app.services.providers.baostock_provider import probe_baostock
+        return probe_baostock()
+    except ImportError:
+        return {"status": "not_installed", "error": "baostock 未安装"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)[:200]}
+
+
+@router.get("/providers")
+def providers_health():
+    """汇总当前主要数据源状态，便于前端/调试页一次性展示。"""
+    baostock = baostock_health()
+    return {
+        "active": settings.data_provider,
+        "baostock": baostock,
+    }

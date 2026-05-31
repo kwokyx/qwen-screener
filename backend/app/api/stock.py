@@ -1,3 +1,7 @@
+from datetime import date, timedelta
+from multiprocessing import Process, Queue
+import time
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -11,12 +15,114 @@ from app.schemas.stock import (
     StockBasicOut,
     StockDailyOut,
     StockDetailOut,
+    StockIntradayOut,
+    StockQuoteOut,
     WatchlistCreate,
     WatchlistOut,
 )
 
 
 router = APIRouter(prefix="/stock", tags=["stock"])
+
+_baostock_intraday_disabled_until = 0.0
+_intraday_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
+_INTRADAY_CACHE_TTL = 300
+
+
+def _baostock_intraday_available() -> bool:
+    return time.monotonic() >= _baostock_intraday_disabled_until
+
+
+def _disable_baostock_intraday(seconds: int = 30):
+    global _baostock_intraday_disabled_until
+    _baostock_intraday_disabled_until = time.monotonic() + seconds
+
+
+def _get_intraday_cache(code: str, frequency: str, days: int) -> list[dict] | None:
+    item = _intraday_cache.get((code, frequency, days))
+    if not item:
+        return None
+    expires_at, rows = item
+    if time.monotonic() >= expires_at:
+        _intraday_cache.pop((code, frequency, days), None)
+        return None
+    return rows
+
+
+def _set_intraday_cache(code: str, frequency: str, days: int, rows: list[dict]):
+    _intraday_cache[(code, frequency, days)] = (time.monotonic() + _INTRADAY_CACHE_TTL, rows)
+
+
+def _is_weekday_row(row: StockDaily) -> bool:
+    return bool(row.trade_date and row.trade_date.weekday() < 5)
+
+
+def _kline_start_date(days: int, frequency: str) -> str:
+    """Convert requested bar count into a conservative calendar start date."""
+    today = date.today()
+    if frequency == "w":
+        delta = days * 8 + 30
+    elif frequency == "m":
+        delta = days * 32 + 60
+    else:
+        delta = days * 2 + 30
+    return (today - timedelta(days=delta)).strftime("%Y-%m-%d")
+
+
+def _stock_daily_out(row: dict | StockDaily) -> dict:
+    if isinstance(row, dict):
+        return {
+            "code": row.get("code"),
+            "trade_date": row.get("trade_date"),
+            "open": row.get("open"),
+            "high": row.get("high"),
+            "low": row.get("low"),
+            "close": row.get("close"),
+            "volume": row.get("volume"),
+            "pe": row.get("pe"),
+            "pb": row.get("pb"),
+            "market_cap": row.get("market_cap"),
+            "dividend_yield": row.get("dividend_yield"),
+            "turnover": row.get("turnover"),
+        }
+    return StockDailyOut.model_validate(row).model_dump()
+
+
+def _fetch_intraday_worker(queue: Queue, code: str, start_date: str, end_date: str, frequency: str):
+    try:
+        from app.services.providers.baostock_provider import fetch_intraday_kline
+
+        rows = fetch_intraday_kline(
+            code,
+            start_date=start_date,
+            end_date=end_date,
+            frequency=frequency,
+        )
+        queue.put(("ok", rows))
+    except Exception as exc:
+        queue.put(("error", str(exc)))
+
+
+def _fetch_intraday_with_timeout(code: str, start_date: str, end_date: str, frequency: str, timeout: int = 25):
+    queue: Queue = Queue(maxsize=1)
+    proc = Process(
+        target=_fetch_intraday_worker,
+        args=(queue, code, start_date, end_date, frequency),
+        daemon=True,
+    )
+    proc.start()
+    proc.join(timeout)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(2)
+        raise TimeoutError("baostock 分钟线查询超时")
+
+    if queue.empty():
+        raise RuntimeError("baostock 分钟线查询无返回")
+    status, payload = queue.get()
+    if status != "ok":
+        raise RuntimeError(payload)
+    return payload
 
 
 @router.get("/search", response_model=list[StockBasicOut])
@@ -70,23 +176,155 @@ def detail(code: str, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{code}/kline", response_model=list[StockDailyOut])
-def kline(code: str, days: int = 120, db: Session = Depends(get_db)):
-    """返回最近 N 个交易日 OHLCV。本地行数不够时，
-    先去 akshare 拉一次历史回填，避免 sparkline / 详情页 K 线画不出来。
-    """
-    from app.services.data_sync import backfill_kline_single
+@router.get("/{code}/quote", response_model=StockQuoteOut)
+def quote(code: str, db: Session = Depends(get_db)):
+    basic = db.get(StockBasic, code)
+    if not basic:
+        raise HTTPException(404, "股票不存在")
 
-    have = db.query(StockDaily).filter(StockDaily.code == code).count()
-    if have < days:
-        backfill_kline_single(db, code, days)
-    return (
+    from app.services.providers.quote_provider import fetch_realtime_quote
+
+    live = fetch_realtime_quote(code)
+    if live:
+        live["name"] = live.get("name") or basic.name
+        return live
+
+    last2 = (
         db.query(StockDaily)
         .filter(StockDaily.code == code)
         .order_by(desc(StockDaily.trade_date))
-        .limit(days)
+        .limit(2)
         .all()
     )
+    latest = last2[0] if last2 else None
+    prev_close = last2[1].close if len(last2) > 1 else None
+    change = None
+    change_pct = None
+    if latest and latest.close is not None and prev_close:
+        change = latest.close - prev_close
+        change_pct = change / prev_close * 100
+    return StockQuoteOut(
+        code=basic.code,
+        name=basic.name,
+        close=latest.close if latest else None,
+        prev_close=prev_close,
+        open=latest.open if latest else None,
+        high=latest.high if latest else None,
+        low=latest.low if latest else None,
+        volume=latest.volume if latest else None,
+        turnover=latest.turnover if latest else None,
+        pe=latest.pe if latest else None,
+        pb=latest.pb if latest else None,
+        market_cap=latest.market_cap if latest else None,
+        change=change,
+        change_pct=change_pct,
+        source="local",
+        quote_time=str(latest.trade_date) if latest else None,
+    )
+
+
+@router.get("/{code}/kline", response_model=list[StockDailyOut])
+def kline(
+    code: str,
+    days: int = Query(120, ge=1, le=800),
+    frequency: str = Query("d", pattern="^(d|w|m)$"),
+    db: Session = Depends(get_db),
+):
+    """返回 K 线 OHLCV。
+
+    日 K 使用本地 stock_daily 并按需回填；周 K/月 K 直接向 baostock 请求
+    对应周期，避免前端用少量日线临时聚合导致周期语义不准。
+    """
+    from app.config import settings
+    from app.services.data_sync import backfill_kline_single, backfill_kline_single_bs
+
+    if not db.get(StockBasic, code):
+        raise HTTPException(404, "股票不存在")
+
+    if frequency in {"w", "m"} and settings.data_provider == "baostock":
+        from app.services.providers.baostock_provider import fetch_kline
+
+        rows = fetch_kline(
+            code,
+            start_date=_kline_start_date(days, frequency),
+            end_date=date.today().strftime("%Y-%m-%d"),
+            frequency=frequency,
+        )
+        return [_stock_daily_out(row) for row in rows[-days:]]
+
+    have_dates = db.query(StockDaily.trade_date).filter(StockDaily.code == code).all()
+    have = sum(1 for (trade_date,) in have_dates if trade_date and trade_date.weekday() < 5)
+    if have < days:
+        if settings.data_provider == "baostock":
+            backfill_kline_single_bs(db, code, days)
+        else:
+            backfill_kline_single(db, code, days)
+    rows = (
+        db.query(StockDaily)
+        .filter(StockDaily.code == code)
+        .order_by(desc(StockDaily.trade_date))
+        .limit(max(days * 3, days + 20))
+        .all()
+    )
+    return [_stock_daily_out(row) for row in rows if _is_weekday_row(row)][:days]
+
+
+@router.get("/{code}/intraday", response_model=list[StockIntradayOut])
+def intraday(
+    code: str,
+    frequency: str = Query("5", pattern="^(5|15|30|60)$"),
+    days: int = Query(1, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """返回分钟 K 线。
+
+    目前分钟线优先走 baostock，失败或空数据时再尝试 AKShare；
+    数据按需拉取，不入库。日线/周线/月线仍走 stock_daily。
+    """
+    basic = db.get(StockBasic, code)
+    if not basic:
+        raise HTTPException(404, "股票不存在")
+
+    cached = _get_intraday_cache(code, frequency, days)
+    if cached is not None:
+        return cached
+
+    end = date.today()
+    # A 股只在工作日交易，往前多取一些自然日以覆盖周末/节假日。
+    start = end - timedelta(days=max(days * 2 + 2, 4))
+    start_date = start.strftime("%Y-%m-%d")
+    end_date = end.strftime("%Y-%m-%d")
+    rows = []
+    bs_error: Exception | None = None
+    if _baostock_intraday_available():
+        try:
+            rows = _fetch_intraday_with_timeout(code, start_date, end_date, frequency, timeout=15)
+        except (TimeoutError, RuntimeError) as exc:
+            bs_error = exc
+            _disable_baostock_intraday()
+        if not rows:
+            _disable_baostock_intraday()
+    else:
+        bs_error = RuntimeError("baostock 刚刚失败，短时间内跳过重试")
+
+    if not rows:
+        bs_msg = str(bs_error)[:80] if bs_error else "返回空数据"
+        raise HTTPException(503, f"baostock 分钟线暂不可用：{bs_msg}")
+
+    rows = sorted(rows, key=lambda item: item["datetime"])
+    trade_days = []
+    seen = set()
+    for item in reversed(rows):
+        d = item["datetime"].date()
+        if d not in seen:
+            trade_days.append(d)
+            seen.add(d)
+        if len(trade_days) >= days:
+            break
+    keep = set(trade_days)
+    filtered_rows = [item for item in rows if item["datetime"].date() in keep]
+    _set_intraday_cache(code, frequency, days, filtered_rows)
+    return filtered_rows
 
 
 # ----- 自选股 -----

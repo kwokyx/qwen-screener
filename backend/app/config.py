@@ -15,13 +15,16 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440
     algorithm: str = "HS256"
 
+    # 数据源后端：baostock (默认) / akshare (legacy)
+    data_provider: str = "baostock"
+
     # 大模型后端：openai (默认) / dashscope
     ai_backend: str = "openai"
 
     # OpenAI 兼容（支持自建/中转：base_url 可换）
     openai_api_key: str = ""
     openai_base_url: str = "https://api2.up.railway.app"
-    openai_model: str = "gpt-5.4"
+    openai_model: str = "gpt-4.1-mini"
     openai_reasoning: str = "high"
 
     # 阿里云百炼 dashscope（备用）

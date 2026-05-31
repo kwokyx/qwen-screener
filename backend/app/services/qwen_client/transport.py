@@ -24,6 +24,13 @@ _TRANSIENT_KEYWORDS = (
 )
 
 
+def _openai_base_url() -> str:
+    base_url = (settings.openai_base_url or "https://api.openai.com").rstrip("/")
+    if not base_url.endswith("/v1"):
+        base_url = f"{base_url}/v1"
+    return base_url
+
+
 def _is_transient(exc: Exception) -> bool:
     s = str(exc).lower()
     name = exc.__class__.__name__.lower()
@@ -45,22 +52,35 @@ def _user_friendly_error(exc: Exception) -> str:
 # ---------------------- Health probe ----------------------
 
 def probe_health(timeout: float = 4.0) -> dict:
-    """轻量探测上游 AI 是否可用。前端启动时调一次。"""
+    """轻量探测上游 AI 是否真的可用。前端启动时调一次。
+
+    Some OpenAI-compatible gateways expose /models even when the selected model
+    cannot be used by the current account, so this performs a tiny chat request
+    instead of only checking the model list.
+    """
     import time as _t
     if not settings.openai_api_key:
         return {"ok": False, "latency_ms": None, "reason": "未配置 OPENAI_API_KEY"}
     try:
         import httpx
-        base = (settings.openai_base_url or "https://api.openai.com").rstrip("/")
-        url = f"{base}/v1/models"
+        url = f"{_openai_base_url()}/chat/completions"
         headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+        payload = {
+            "model": settings.openai_model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
         t0 = _t.time()
         with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as c:
-            r = c.get(url, headers=headers)
+            r = c.post(url, headers=headers, json=payload)
         latency_ms = int((_t.time() - t0) * 1000)
-        if r.status_code in (200, 401, 403):
-            return {"ok": r.status_code == 200, "latency_ms": latency_ms,
-                    "reason": None if r.status_code == 200 else "鉴权失败"}
+        if r.status_code == 200:
+            return {"ok": True, "latency_ms": latency_ms, "reason": None}
+        if r.status_code in (401, 403):
+            return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
+        body = r.text[:220]
+        if "not supported" in body.lower():
+            return {"ok": False, "latency_ms": latency_ms, "reason": f"模型不可用: {settings.openai_model}"}
         return {"ok": False, "latency_ms": latency_ms, "reason": f"HTTP {r.status_code}"}
     except Exception as e:
         msg = str(e).lower()
@@ -78,7 +98,7 @@ def openai_client():
         from openai import OpenAI
     except ImportError as e:
         raise RuntimeError("openai 未安装，请 pip install -r requirements.txt") from e
-    return OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url or None)
+    return OpenAI(api_key=settings.openai_api_key, base_url=_openai_base_url())
 
 
 def _openai_call(prompt: str, *, json_mode: bool = False) -> str:
@@ -194,8 +214,7 @@ def _openai_stream(prompt: str):
 
 def _openai_stream_once(prompt: str):
     import httpx
-    base = (settings.openai_base_url or "https://api.openai.com").rstrip("/")
-    url = f"{base}/v1/chat/completions"
+    url = f"{_openai_base_url()}/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",

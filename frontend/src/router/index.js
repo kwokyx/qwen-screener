@@ -9,7 +9,7 @@ const routes = [
   { path: '/results', name: 'results', component: () => import('../views/Results.vue'), meta: { public: true, label: '03 · 因子筛选 + 结果列表' } },
   { path: '/detail/:code?', name: 'detail', component: () => import('../views/Detail.vue'), meta: { public: true, label: '04 · 股票详情 + 千问解读' } },
   { path: '/portfolio', name: 'portfolio', component: () => import('../views/Portfolio.vue'), meta: { public: true, label: '05 · 自选监控' } },
-  { path: '/strategy', name: 'strategy', component: () => import('../views/Strategy.vue'), meta: { public: true, label: '06 · 策略回测' } },
+  { path: '/strategy', name: 'strategy', component: () => import('../views/Strategy.vue'), meta: { public: true, label: '06 · 策略选股' } },
 ]
 
 const router = createRouter({

@@ -59,7 +59,7 @@ function continueAsGuest() {
             用一句话<br/>把市场<span :style="{ color: A2.qwen }">说清楚</span>
           </div>
           <div :style="{ fontSize: '13px', color: A2.textSub, lineHeight: 1.7, marginBottom: '28px' }">
-            千问大模型 + 沪深 800 只成分股的实时基本面，让自然语言筛选、深度研报、策略回测在一个工作台里完成。
+            千问大模型 + 沪深 800 只成分股的实时基本面，让自然语言筛选、深度研报、策略选股在一个工作台里完成。
           </div>
         </div>
 
@@ -141,7 +141,7 @@ function continueAsGuest() {
 const features = [
   { icon: 'sparkle', t: '自然语言筛选', s: '"低估值高股息的银行股" 一句话即出结果' },
   { icon: 'chart',   t: '千问深度解读', s: '基于基本面数据的研报，流式生成' },
-  { icon: 'flask',   t: '策略回测引擎', s: '从筛选条件到净值曲线、夏普、回撤' },
+  { icon: 'flask',   t: '策略选股引擎', s: '套用突破、均线、RPS 等规则输出股票池' },
   { icon: 'bell',    t: '价格预警',     s: '涨幅 / 跌幅 / 突破 / 日内 五种规则' },
 ]
 export default { setup: () => ({ features }) }

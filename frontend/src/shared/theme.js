@@ -1,32 +1,57 @@
 // Direction A v2 — refined pro terminal theme
+// (kept for backward compat — other views may still reference A2)
 
 export const A2 = {
-  bg: '#F6F5F0',
-  bgDeep: '#EFEDE6',
-  surface: '#FFFFFF',
+  bg: '#FFFFFF',
+  bgDeep: '#F5F5F5',
+  surface: '#F7F7F7',
   surfaceElev: '#FFFFFF',
   border: 'transparent',
-  borderHair: 'rgba(14,14,12,0.06)',
-  borderStrong: 'rgba(14,14,12,0.10)',
-  text: '#111110',
-  textSub: '#3F3D38',
-  textMuted: '#7A776F',
-  textDim: '#B8B4A8',
-  qwen: '#2456D8',
-  qwenDeep: '#1E3FA8',
-  qwenSoft: '#EAF0FE',
-  qwenGrad: '#2456D8',
-  qwenGradSoft: '#EFF3FD',
-  up: '#C8312A',
-  upSoft: '#FBEEEC',
-  down: '#0E8A66',
-  downSoft: '#E9F6F0',
-  amber: '#C77E18',
-  amberSoft: '#FAF1E0',
-  shadow: '0 1px 2px rgba(14,14,12,0.04), 0 2px 8px rgba(14,14,12,0.05)',
-  shadowMd: '0 2px 4px rgba(14,14,12,0.05), 0 8px 20px rgba(14,14,12,0.06)',
-  shadowLg: '0 12px 32px rgba(14,14,12,0.10), 0 4px 12px rgba(14,14,12,0.05)',
+  borderHair: '#EDEDED',
+  borderStrong: '#D8D8D8',
+  text: '#111111',
+  textSub: '#3F3F46',
+  textMuted: '#71717A',
+  textDim: '#A1A1AA',
+  qwen: '#111111',
+  qwenDeep: '#000000',
+  qwenSoft: '#F1F5F9',
+  qwenGrad: '#111111',
+  qwenGradSoft: '#F5F5F5',
+  up: '#E04F76',
+  upSoft: '#FFF1F1',
+  down: '#16A35C',
+  downSoft: '#ECFDF5',
+  amber: '#B8FF2C',
+  amberSoft: '#FFFBEB',
+  shadow: 'none',
+  shadowMd: 'none',
+  shadowLg: 'none',
 }
 
-export const card = { background: A2.surface, borderRadius: '10px', boxShadow: A2.shadow }
-export const cardElev = { background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowMd }
+// Professional light financial terminal tokens.
+// Brand colors stay neutral/blue; red/green are reserved for price direction.
+export const Preview = {
+  bg: '#FFFFFF',
+  card: '#F7F7F7',
+  border: '#EDEDED',
+  mutedBg: '#F5F5F5',
+  ink: '#111111',
+  brand: '#111111',
+  brandHover: '#000000',
+  brandSoft: '#F1F5F9',
+  accent: '#B8FF2C',
+  chartGrid: '#E7E7E7',
+  chartGridLight: '#F1F1F1',
+  textMain: '#111111',
+  textMuted: '#71717A',
+  textFaint: '#A1A1AA',
+  positive: '#E04F76',
+  negative: '#16A35C',
+  upSoft: '#FFF1F1',
+  downSoft: '#ECFDF5',
+  shadow: 'none',
+}
+
+export const card = { background: A2.surface, borderRadius: '8px', boxShadow: A2.shadow }
+export const cardElev = { background: A2.surface, borderRadius: '8px', boxShadow: A2.shadowMd }

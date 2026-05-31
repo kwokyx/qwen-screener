@@ -9,6 +9,7 @@ cryptography==43.0.3
 redis==5.2.0
 apscheduler==3.10.4
 akshare==1.18.59
+baostock==0.9.1
 dashscope==1.20.11
 openai>=1.54.0
 python-jose[cryptography]==3.3.0

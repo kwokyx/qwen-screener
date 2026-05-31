@@ -116,11 +116,11 @@ const items = computed(() => wl.items)
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
+  padding: 8px 12px;
   background: #FFFFFF;
   border: 1px solid rgba(14,14,12,0.10);
-  border-radius: 999px;
-  box-shadow: 0 4px 14px rgba(14,14,12,0.10), 0 1px 4px rgba(14,14,12,0.06);
+  border-radius: 6px;
+  box-shadow: 0 3px 10px rgba(14,14,12,0.08);
   font-size: 12px;
   font-weight: 600;
   color: #111110;
@@ -129,12 +129,12 @@ const items = computed(() => wl.items)
 }
 .watchdock-tab:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(14,14,12,0.14), 0 2px 6px rgba(14,14,12,0.08);
+  box-shadow: 0 5px 16px rgba(14,14,12,0.12);
 }
 .watchdock-panel {
   width: 280px;
   max-height: 60vh;
-  border-radius: 10px;
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
