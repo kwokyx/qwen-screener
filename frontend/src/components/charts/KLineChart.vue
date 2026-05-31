@@ -247,6 +247,7 @@ watch(chartData, applyData, { deep: true })
 watch(() => props.indicator, syncIndicator)
 watch(() => props.fitContent, syncBarSpace)
 watch(() => props.visibleBars, syncBarSpace)
+watch(() => props.period, applyData)
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()

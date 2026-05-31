@@ -50,6 +50,7 @@ const code = computed(() => route.params.code || '600519.SH')
 const detail = ref(null)
 const quote = ref(null)
 const rawDailyKlineData = ref([])
+const rawPeriodKlineData = ref([])
 const rawKlineData = ref([])
 const loading = ref(true)
 const errorMsg = ref('')
@@ -103,6 +104,7 @@ const indicators = ['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']
 const activeIndicator = ref(0)
 const detailTabs = ['财务摘要', '估值', '同行对比', '基本信息']
 const detailTab = ref(0)
+const baselineDailyBars = 240
 
 const peers = ref([])
 const peersLoading = ref(false)
@@ -188,7 +190,7 @@ const activeKlineRanges = computed(() => {
 })
 const klineData = computed(() => isIntradayFrequency.value
   ? rawKlineData.value
-  : rawDailyKlineData.value)
+  : rawPeriodKlineData.value)
 const chartDisplayData = computed(() => klineData.value)
 const klineVisibleBars = computed(() => {
   const count = chartDisplayData.value.length
@@ -272,12 +274,16 @@ async function reloadKline() {
       rawKlineData.value = mapIntradayKline(kl)
     } else {
       const kl = await stockApi.kline(code.value, days, activeKlineFrequency.value.frequency)
-      rawDailyKlineData.value = mapKline(kl)
+      const mapped = mapKline(kl)
+      rawPeriodKlineData.value = mapped
+      if (klineFrequency.value === 'day' && (mapped.length >= baselineDailyBars || rawDailyKlineData.value.length < baselineDailyBars)) {
+        rawDailyKlineData.value = mapped
+      }
     }
   } catch (e) {
     klineError.value = friendlyError(e, { context: 'data' })
     if (isIntradayFrequency.value) rawKlineData.value = []
-    else rawDailyKlineData.value = []
+    else rawPeriodKlineData.value = []
   } finally {
     klineLoading.value = false
   }
@@ -317,16 +323,22 @@ async function load() {
   aiText.value = ''
   try {
     const days = activeKlineRanges.value[klineRange.value]?.days || 120
-    const [d, kl, q] = await Promise.all([
+    const [d, dailyKl, q] = await Promise.all([
       stockApi.detail(code.value),
-      stockApi.kline(code.value, days, activeKlineFrequency.value.frequency).catch(() => []),
+      stockApi.kline(code.value, Math.max(days, baselineDailyBars), 'd').catch(() => []),
       stockApi.quote(code.value).catch(() => null),
     ])
     detail.value = d
     quote.value = q
-    rawDailyKlineData.value = mapKline(kl)
+    rawDailyKlineData.value = mapKline(dailyKl)
     if (isIntradayFrequency.value) await reloadKline()
-    else rawKlineData.value = []
+    else if (klineFrequency.value === 'day') {
+      rawKlineData.value = []
+      rawPeriodKlineData.value = rawDailyKlineData.value.slice(-days)
+    } else {
+      rawKlineData.value = []
+      await reloadKline()
+    }
   } catch (e) {
     const status = e.response?.status
     if (status === 404) {
@@ -428,8 +440,9 @@ const headerMetrics = computed(() => {
 
   let high52 = null, low52 = null
   if (rawDailyKlineData.value && rawDailyKlineData.value.length) {
-    high52 = Math.max(...rawDailyKlineData.value.map((k) => k.h ?? k.high ?? -Infinity))
-    low52 = Math.min(...rawDailyKlineData.value.map((k) => k.l ?? k.low ?? Infinity))
+    const dailyWindow = rawDailyKlineData.value.slice(-baselineDailyBars)
+    high52 = Math.max(...dailyWindow.map((k) => k.h ?? k.high ?? -Infinity))
+    low52 = Math.min(...dailyWindow.map((k) => k.l ?? k.low ?? Infinity))
     if (!isFinite(high52)) high52 = null
     if (!isFinite(low52)) low52 = null
   }
@@ -659,50 +672,49 @@ function peerRowProps(row) {
                 </div>
               </div>
             </template>
-            <template #header-extra>
-              <NSpace size="small" align="center">
-                <div class="kline-control-group">
-                  <span>K线</span>
-                  <NButtonGroup size="tiny">
-                    <NButton
-                      v-for="t in klineFrequencies"
-                      :key="t.value"
-                      :type="klineFrequency === t.value ? 'primary' : 'default'"
-                      secondary
-                      @click="setKlineFrequency(t.value)"
-                    >
-                      {{ t.label }}
-                    </NButton>
-                  </NButtonGroup>
-                </div>
-                <div class="kline-control-group">
-                  <span>区间</span>
-                  <NButtonGroup size="tiny" class="range-buttons">
-                    <NButton
-                      v-for="(t, i) in activeKlineRanges"
-                      :key="t.label"
-                      :type="klineRange === i ? 'primary' : 'default'"
-                      secondary
-                      @click="setKlineRange(i)"
-                    >
-                      {{ t.short }}
-                    </NButton>
-                  </NButtonGroup>
-                </div>
-              </NSpace>
-            </template>
-            <div class="chart-indicators">
-              <NButtonGroup size="tiny">
-                <NButton
-                  v-for="(t, i) in indicators"
-                  :key="t"
-                  :type="activeIndicator === i ? 'primary' : 'default'"
-                  secondary
-                  @click="setIndicator(i)"
-                >
-                  {{ t }}
-                </NButton>
-              </NButtonGroup>
+            <div class="chart-toolbar">
+              <div class="kline-control-group">
+                <span>周期</span>
+                <NButtonGroup size="tiny">
+                  <NButton
+                    v-for="t in klineFrequencies"
+                    :key="t.value"
+                    :type="klineFrequency === t.value ? 'primary' : 'default'"
+                    secondary
+                    @click="setKlineFrequency(t.value)"
+                  >
+                    {{ t.label }}
+                  </NButton>
+                </NButtonGroup>
+              </div>
+              <div class="kline-control-group">
+                <span>区间</span>
+                <NButtonGroup size="tiny" class="range-buttons">
+                  <NButton
+                    v-for="(t, i) in activeKlineRanges"
+                    :key="t.label"
+                    :type="klineRange === i ? 'primary' : 'default'"
+                    secondary
+                    @click="setKlineRange(i)"
+                  >
+                    {{ t.short }}
+                  </NButton>
+                </NButtonGroup>
+              </div>
+              <div class="kline-control-group indicator-group">
+                <span>指标</span>
+                <NButtonGroup size="tiny">
+                  <NButton
+                    v-for="(t, i) in indicators"
+                    :key="t"
+                    :type="activeIndicator === i ? 'primary' : 'default'"
+                    secondary
+                    @click="setIndicator(i)"
+                  >
+                    {{ t }}
+                  </NButton>
+                </NButtonGroup>
+              </div>
             </div>
             <div class="kline-meta">
               <span class="kline-mode">{{ klineDataType }}</span>
@@ -960,7 +972,7 @@ function peerRowProps(row) {
   font-weight: 800;
   font-family: 'IBM Plex Mono', monospace;
   line-height: 0.95;
-  letter-spacing: -1.5px;
+  letter-spacing: 0;
 }
 
 .price-delta {
@@ -1030,10 +1042,21 @@ function peerRowProps(row) {
   margin-left: 10px;
 }
 
-.chart-indicators {
+.chart-toolbar {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  padding: 6px 0;
+  border-top: 1px solid #ECEFF3;
+  border-bottom: 1px solid #ECEFF3;
+}
+
+.chart-toolbar :deep(.n-button) {
+  --n-height: 24px !important;
+  border-radius: 4px;
 }
 
 .kline-meta {
@@ -1044,7 +1067,6 @@ function peerRowProps(row) {
   flex-wrap: wrap;
   margin-bottom: 6px;
   padding: 5px 0;
-  border-top: 1px solid #ECEFF3;
   border-bottom: 1px solid #ECEFF3;
 }
 
@@ -1108,6 +1130,10 @@ function peerRowProps(row) {
 
 .kline-control-group :deep(.n-button) {
   min-width: 36px;
+}
+
+.indicator-group {
+  margin-left: auto;
 }
 
 /* ---- Stats Ribbon ---- */
@@ -1271,17 +1297,6 @@ function peerRowProps(row) {
     flex-wrap: wrap;
   }
 
-  .chart-card :deep(.n-card-header__extra) {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .chart-card :deep(.n-card-header__extra .n-space) {
-    width: 100%;
-    row-gap: 6px !important;
-    flex-wrap: wrap !important;
-  }
-
   .kline-control-group {
     width: 100%;
     justify-content: flex-start;
@@ -1292,7 +1307,11 @@ function peerRowProps(row) {
     min-width: 0;
   }
 
-  .chart-indicators {
+  .indicator-group {
+    margin-left: 0;
+  }
+
+  .chart-toolbar {
     justify-content: flex-start;
     overflow-x: auto;
     padding-bottom: 2px;

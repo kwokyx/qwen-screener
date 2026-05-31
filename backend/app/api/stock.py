@@ -278,8 +278,8 @@ def intraday(
 ):
     """返回分钟 K 线。
 
-    目前分钟线优先走 baostock，失败或空数据时再尝试 AKShare；
-    数据按需拉取，不入库。日线/周线/月线仍走 stock_daily。
+    目前分钟线走 baostock，失败或空数据时返回 503；
+    数据按需拉取，不入库，也不会用日线伪装分钟线。
     """
     basic = db.get(StockBasic, code)
     if not basic:
