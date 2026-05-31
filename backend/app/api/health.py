@@ -13,6 +13,18 @@ from app.services import cache, db_backup, qwen_client, scheduler
 router = APIRouter(prefix="/health", tags=["health"])
 
 
+def _latest_expected_weekday(day=None):
+    """Return the latest weekday expected to have A-share closing data.
+
+    This intentionally handles weekends only. Public-holiday awareness needs a
+    maintained trading calendar and should not be guessed here.
+    """
+    current = day or datetime.utcnow().date()
+    while current.weekday() >= 5:
+        current -= timedelta(days=1)
+    return current
+
+
 def _covered_latest_trade_date(db: Session, basic_cnt: int):
     """Latest date with enough rows to represent the whole market.
 
@@ -64,13 +76,15 @@ def data_health(db: Session = Depends(get_db)):
 
     sync_meta = scheduler.get_meta()
 
-    # 简单"新鲜度"判断：今日有交易日数据 + 最近一次同步在 24h 内
+    # 简单"新鲜度"判断：覆盖全市场的最新日期已达到最近工作日。
+    expected_trade_date = _latest_expected_weekday()
     fresh = False
     if latest_trade_date:
-        fresh = latest_trade_date >= (datetime.utcnow().date() - timedelta(days=1))
+        fresh = latest_trade_date >= expected_trade_date
 
     return {
         "fresh": fresh,
+        "expected_trade_date": str(expected_trade_date),
         "latest_trade_date": str(latest_trade_date) if latest_trade_date else None,
         "newest_trade_date": str(newest_trade_date) if newest_trade_date else None,
         "data_provider": settings.data_provider,
