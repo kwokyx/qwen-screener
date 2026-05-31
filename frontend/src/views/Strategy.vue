@@ -69,6 +69,40 @@ const activeTool = computed(() => {
   return strategyTool.value || tools.value[0]
 })
 const visibleFields = computed(() => stockScreenTool.value?.fields?.slice(0, 9) || [])
+const activeToolNotes = computed(() => activeTool.value?.data_notes || [])
+const fieldLabelMap = computed(() => Object.fromEntries((stockScreenTool.value?.fields || []).map((field) => [field.key, field.label])))
+const agentConditionList = computed(() => {
+  if (!agentResult.value) return []
+  const labels = agentResult.value.plan?.condition_labels || []
+  if (labels.length) return labels
+  if (agentResult.value.plan?.tool === 'strategy_select') {
+    return activeTemplate.value?.rules || []
+  }
+  return ['未指定细分条件，使用默认股票池约束']
+})
+const agentSortText = computed(() => {
+  const plan = agentResult.value?.plan
+  if (!plan?.sort_by) return '默认排序'
+  const label = fieldLabelMap.value[plan.sort_by] || plan.sort_by
+  return `${label}${plan.sort_desc ? '从高到低' : '从低到高'}`
+})
+const agentTopHits = computed(() => rows.value.slice(0, 5).map((item) => ({
+  code: item.code,
+  name: item.name || item.code,
+  industry: item.industry || '-',
+  close: item.close,
+  change_pct: item.change_pct,
+})))
+const agentRiskNotes = computed(() => {
+  if (!agentResult.value) return []
+  const notes = [
+    ...(agentResult.value.warnings || []),
+    ...activeToolNotes.value,
+    '选股结果只表示当前数据命中条件，不构成买卖建议。',
+  ]
+  return [...new Set(notes)]
+})
+const agentToolTrace = computed(() => agentResult.value?.tool_trace || [])
 
 const summary = computed(() => {
   const list = rows.value
@@ -119,7 +153,7 @@ const columns = [
   },
   { title: '策略得分', key: 'score', width: 100, sorter: 'default', render: (row) => row.score?.toFixed?.(1) || '-' },
   {
-    title: '信号',
+    title: '命中原因',
     key: 'signals',
     render(row) {
       return h(NSpace, { size: 6 }, {
@@ -256,21 +290,72 @@ onMounted(bootstrap)
           {{ agentError }}
         </n-alert>
         <div v-if="agentResult" class="agent-result">
-          <div class="agent-answer">{{ agentResult.answer }}</div>
           <div class="agent-meta">
             <n-tag size="small" :bordered="false">{{ agentResult.plan.tool_label }}</n-tag>
             <n-tag size="small" :bordered="false" :type="agentResult.plan.ai_used ? 'success' : 'warning'">
               {{ agentResult.plan.ai_used ? 'AI 已参与规划' : '本地规则规划' }}
             </n-tag>
-            <span>{{ agentResult.plan.reasoning }}</span>
+            <span>命中 {{ displayTotal }} 只，当前展示 {{ rows.length }} 只</span>
           </div>
-          <n-alert v-if="agentResult.warnings?.length" type="warning" :bordered="false" class="notice compact">
-            <div v-for="warning in agentResult.warnings" :key="warning">{{ warning }}</div>
-          </n-alert>
-          <n-divider />
-          <div class="tool-trace">
-            <span>工具调用</span>
-            <code v-for="trace in agentResult.tool_trace" :key="trace">{{ trace }}</code>
+
+          <div class="agent-breakdown">
+            <div class="agent-panel agent-panel-wide">
+              <span class="panel-kicker">目标理解</span>
+              <strong>{{ agentResult.query }}</strong>
+              <p>{{ agentResult.plan.reasoning }}</p>
+              <div class="agent-answer">{{ agentResult.answer }}</div>
+            </div>
+
+            <div class="agent-panel">
+              <span class="panel-kicker">筛选条件</span>
+              <div class="condition-list">
+                <n-tag
+                  v-for="condition in agentConditionList"
+                  :key="condition"
+                  size="small"
+                  :bordered="false"
+                >
+                  {{ condition }}
+                </n-tag>
+              </div>
+              <small>排序：{{ agentSortText }}</small>
+            </div>
+
+            <div class="agent-panel">
+              <span class="panel-kicker">工具调用</span>
+              <div class="tool-trace">
+                <code v-for="trace in agentToolTrace" :key="trace">{{ trace }}</code>
+              </div>
+              <small>{{ activeTool?.description }}</small>
+            </div>
+
+            <div class="agent-panel">
+              <span class="panel-kicker">前排命中</span>
+              <div v-if="agentTopHits.length" class="hit-list">
+                <button
+                  v-for="hit in agentTopHits"
+                  :key="hit.code"
+                  type="button"
+                  @click="router.push(`/detail/${hit.code}`)"
+                >
+                  <span>
+                    <strong>{{ hit.name }}</strong>
+                    <small>{{ hit.code }} · {{ hit.industry }}</small>
+                  </span>
+                  <em :class="(hit.change_pct || 0) >= 0 ? 'up' : 'down'">
+                    {{ hit.change_pct == null ? '-' : `${hit.change_pct >= 0 ? '+' : ''}${hit.change_pct.toFixed(2)}%` }}
+                  </em>
+                </button>
+              </div>
+              <small v-else>当前没有命中股票。</small>
+            </div>
+
+            <div class="agent-panel agent-panel-wide">
+              <span class="panel-kicker">风险与数据说明</span>
+              <ul class="risk-list">
+                <li v-for="note in agentRiskNotes" :key="note">{{ note }}</li>
+              </ul>
+            </div>
           </div>
         </div>
       </n-card>
@@ -521,6 +606,102 @@ p {
   background: #FAFAFA;
 }
 
+.agent-breakdown {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr 0.85fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.agent-panel {
+  min-height: 112px;
+  padding: 10px;
+  border: 1px solid #E5E7EB;
+  border-radius: 5px;
+  background: #FFFFFF;
+}
+
+.agent-panel-wide {
+  grid-column: span 2;
+}
+
+.panel-kicker {
+  display: block;
+  margin-bottom: 7px;
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.agent-panel strong {
+  color: #111111;
+  font-size: 14px;
+}
+
+.agent-panel p,
+.agent-panel small {
+  display: block;
+  max-width: none;
+  margin: 6px 0 0;
+  color: #71717A;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.condition-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.hit-list {
+  display: grid;
+  gap: 5px;
+}
+
+.hit-list button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid #F4F4F5;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hit-list button:last-child {
+  border-bottom: 0;
+}
+
+.hit-list strong {
+  display: block;
+  font-size: 12px;
+}
+
+.hit-list small {
+  margin: 1px 0 0;
+  font-size: 11px;
+}
+
+.hit-list em {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.risk-list {
+  margin: 0;
+  padding-left: 16px;
+  color: #52525B;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
 .tool-workbench {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -640,6 +821,9 @@ p {
   color: #111111;
   line-height: 1.65;
   font-weight: 650;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #F4F4F5;
 }
 
 .agent-meta {
@@ -651,24 +835,20 @@ p {
 }
 
 .tool-trace {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 8px;
-  flex-wrap: wrap;
-}
-
-.tool-trace > span {
-  color: #111111;
-  font-weight: 700;
 }
 
 .tool-trace code {
-  padding: 3px 6px;
+  display: block;
+  padding: 5px 6px;
   border-radius: 4px;
-  background: #FFFFFF;
+  background: #FAFAFA;
   border: 1px solid #E5E7EB;
   color: #3F3F46;
   font-size: 11px;
+  white-space: normal;
+  word-break: break-all;
 }
 
 .summary-card {
@@ -817,8 +997,13 @@ p {
   }
 
   .tool-workbench,
-  .field-grid {
+  .field-grid,
+  .agent-breakdown {
     grid-template-columns: 1fr;
+  }
+
+  .agent-panel-wide {
+    grid-column: auto;
   }
 
   .agent-shell,
