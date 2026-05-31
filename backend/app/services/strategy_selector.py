@@ -489,7 +489,13 @@ def _load_histories(db: Session, days: int, max_codes: int = 1200) -> dict[str, 
                 amount=daily.amount,
             )
         )
-    return histories
+    expected_dates = set(dates)
+    return {
+        code: points
+        for code, points in histories.items()
+        if len(points) == len(expected_dates)
+        and {point.trade_date for point in points} == expected_dates
+    }
 
 
 def _pct(last: DailyPoint, prev: DailyPoint | None) -> float | None:
@@ -499,8 +505,8 @@ def _pct(last: DailyPoint, prev: DailyPoint | None) -> float | None:
 
 
 def _amount_yi(point: DailyPoint) -> float | None:
-    # stock_daily.amount 在现有同步里按“万元”存储。
-    return point.amount / 10000 if point.amount is not None else None
+    # stock_daily.amount 统一按“元”存储，策略层转换为亿元。
+    return point.amount / 1e8 if point.amount is not None else None
 
 
 def _avg(values: list[float | None]) -> float | None:
@@ -519,7 +525,7 @@ def _base_item(points: list[DailyPoint], score: float, signals: list[str], metri
         trade_date=last.trade_date,
         close=last.close,
         change_pct=_pct(last, prev),
-        score=round(score, 2),
+        score=round(max(0, min(100, score)), 2),
         signals=signals,
         metrics={k: round(v, 2) if isinstance(v, float) else v for k, v in metrics.items()},
     )
@@ -537,7 +543,7 @@ def _eval_turtle_breakout(histories: dict[str, list[DailyPoint]]) -> list[Strate
         amount_yi = _amount_yi(last) or 0
         if last.close > high20 and amount_yi >= 1 and last.close > last.open and last.close > prev.close:
             breakout_pct = (last.close / high20 - 1) * 100
-            score = breakout_pct * 20 + amount_yi
+            score = 20 + min(50, breakout_pct * 10) + min(30, amount_yi / 3)
             items.append(_base_item(points, score, ["20日新高突破", "成交额过亿", "阳线真涨"], {
                 "20日高点": high20,
                 "突破幅度%": breakout_pct,
@@ -594,7 +600,7 @@ def _eval_rps_breakout(histories: dict[str, list[DailyPoint]]) -> list[StrategyP
     for _code, points, pct120, high120, near_high in candidates:
         rank = sum(1 for v in sorted_pct if v <= pct120) / len(sorted_pct) * 100
         if rank >= 90 and near_high:
-            score = rank + max(0, pct120) / 2
+            score = rank * 0.8 + min(100, max(0, pct120)) * 0.2
             items.append(_base_item(points, score, ["120日相对强度前10%", "接近阶段高点"], {
                 "RPS": rank,
                 "120日涨幅%": pct120,

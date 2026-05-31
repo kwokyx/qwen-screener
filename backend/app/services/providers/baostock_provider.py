@@ -84,6 +84,14 @@ def _ensure_logout():
         logger.debug("baostock 登出")
 
 
+def _force_relogin():
+    """Reconnect an expired baostock socket while keeping the active context."""
+    global _session_refcount
+    _close_default_socket()
+    _session_refcount = 0
+    _ensure_login()
+
+
 @contextmanager
 def bs_session():
     """baostock session context manager — 自动 login/logout。"""
@@ -238,7 +246,7 @@ def fetch_kline(
                     if frequency == "d":
                         item.update({
                             "volume": _f(row[7]),
-                            "amount": _f(row[8], scale=10000),
+                            "amount": _f(row[8]),
                             "turnover": _f(row[10]),
                             "pe": _f(row[13]),
                             "pb": _f(row[14]),
@@ -246,7 +254,7 @@ def fetch_kline(
                     else:
                         item.update({
                             "volume": _f(row[6]),
-                            "amount": _f(row[7], scale=10000),
+                            "amount": _f(row[7]),
                             "turnover": _f(row[9]),
                             "pe": None,
                             "pb": None,
@@ -304,7 +312,7 @@ def fetch_intraday_kline(
                         "low": _f(row[5]),
                         "close": _f(row[6]),
                         "volume": _f(row[7]),
-                        "amount": _f(row[8], scale=10000),
+                        "amount": _f(row[8]),
                     })
                 return rows
         time.sleep(0.5 * (attempt + 1))
@@ -364,7 +372,7 @@ def fetch_kline_unsafe(
             "low": _f(row[4]),
             "close": _f(row[5]),
             "volume": _f(row[7]),
-            "amount": _f(row[8], scale=10000),
+            "amount": _f(row[8]),
             "turnover": _f(row[10]),
             "pe": _f(row[13]),
             "pb": _f(row[14]),
@@ -540,33 +548,85 @@ def _fetch_financial_unsafe(code: str, year: int | None, quarter: int | None) ->
 
 # ---- 分红数据 ----
 
-def fetch_dividend(code: str, year: str = "2024") -> list[dict]:
-    """拉取分红记录。返回 list[dict] 含 dividend_yield (%).
+def _parse_date(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
 
-    若当前年份无分红，退回到最近有数据的年份。
+
+def _parse_dividend_row(row: list[str]) -> dict | None:
+    """解析 query_dividend_data 的一行结果。
+
+    baostock 返回的 dividCashPsBeforeTax 已经是每股税前现金分红，不是
+    每 10 股分红。只保留已实施且可用于收益率计算的现金分红。
     """
-    bs_code = code_to_bs(code)
+    if len(row) < 10:
+        return None
+    operate_date = _parse_date(row[6])
+    cash_per_share = _f(row[9])
+    if operate_date is None or cash_per_share is None or cash_per_share <= 0:
+        return None
+    return {
+        "operate_date": operate_date,
+        "cash_per_share": cash_per_share,
+        "notice_date": _parse_date(row[3]),
+        "pay_date": _parse_date(row[7]),
+    }
+
+
+def _fetch_dividend_unsafe(code: str, year: str) -> list[dict]:
+    """在已有 baostock session 内拉取一个除权除息年份的分红记录。"""
+    rs = bs.query_dividend_data(code_to_bs(code), year=year, yearType="operate")
+    if rs.error_code != "0":
+        raise RuntimeError(f"{rs.error_code} {rs.error_msg}")
+    rows: list[dict] = []
+    while rs.next():
+        parsed = _parse_dividend_row(rs.get_row_data())
+        if parsed:
+            rows.append(parsed)
+    return rows
+
+
+def _fetch_dividend_with_retry_unsafe(code: str, year: str) -> list[dict]:
+    """Retry a dividend query after baostock invalidates the current login."""
+    for attempt in range(BAOSTOCK_RETRIES):
+        try:
+            return _fetch_dividend_unsafe(code, year)
+        except RuntimeError as exc:
+            if "10001001" not in str(exc) or attempt + 1 >= BAOSTOCK_RETRIES:
+                raise
+            logger.warning("fetch_dividend {} 登录失效，重新连接后重试", code)
+            _force_relogin()
+    return []
+
+
+def fetch_dividend(code: str, year: str | None = None) -> list[dict]:
+    """拉取一个除权除息年份的已实施现金分红记录。"""
     with bs_session():
-        rs = bs.query_dividend_data(bs_code, year=year, yearType="report")
-        if rs.error_code != "0":
-            return []
-        rows: list[dict] = []
-        while rs.next():
-            row = rs.get_row_data()
-            # row[0]=code, row[1]=div_notice_date, row[2]=div_date,
-            # row[3]=cash_div, row[4]=bonus_share_ratio, row[5]=right_issue_ratio
-            cash_per_10 = _f(row[3])  # 每 10 股派息
-            if cash_per_10 is not None:
-                # 粗略估算股息率 ≈ 每股分红 / 今日股价？不在此处计算
-                # 返回 raw 数据，由调用方结合价格计算
-                rows.append({
-                    "notice_date": row[1],
-                    "div_date": row[2],
-                    "cash_per_10": cash_per_10,
-                    "bonus_ratio": _f(row[4]),
-                    "right_ratio": _f(row[5]),
-                })
-        return rows
+        return _fetch_dividend_with_retry_unsafe(code, year or str(date.today().year))
+
+
+def fetch_dividend_batch(
+    codes: list[str],
+    years: list[str] | None = None,
+) -> dict[str, list[dict]]:
+    """复用一次登录批量拉分红记录；失败股票不写入结果，保留旧值。"""
+    years = years or [str(date.today().year - 1), str(date.today().year)]
+    results: dict[str, list[dict]] = {}
+    with bs_session():
+        for i, code in enumerate(codes, 1):
+            try:
+                rows: list[dict] = []
+                for year in years:
+                    rows.extend(_fetch_dividend_with_retry_unsafe(code, year))
+                results[code] = rows
+            except Exception as e:
+                logger.warning("fetch_dividend {} 失败: {}", code, str(e)[:80])
+            if i % 100 == 0:
+                logger.info("[BS-DIVIDEND] 拉取进度 {}/{}", i, len(codes))
+                time.sleep(0.2)
+    return results
 
 
 # ---- 健康检查 ----

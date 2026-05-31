@@ -7,7 +7,8 @@ baostock 命令：
     python -m scripts.sync_data daily [days_back]    拉取全市场日 K 线（默认最近 5 个自然日）
     python -m scripts.sync_data kline [code] [days]  拉取单只股票 K 线（code 如 600519.SH，days 默认 120）
     python -m scripts.sync_data financial [pool]     拉取财务指标（pool: csi300|csi500|all）
-    python -m scripts.sync_data full                 全量: basic + daily(10d) + financial(all)
+    python -m scripts.sync_data dividend [code]      拉取现金分红并计算 TTM 股息率（默认全市场）
+    python -m scripts.sync_data full                 全量: basic + daily(10d) + financial(all) + dividend(all)
 
 AKShare legacy 命令（DATA_PROVIDER=akshare 时可用）：
     python -m scripts.sync_data basic-ak              AKShare 全 A 股基本信息
@@ -67,6 +68,10 @@ def main():
             else:
                 data_sync.sync_pool_financial(db, pool=pool)
 
+        elif cmd == "dividend":
+            codes = [sys.argv[2]] if len(sys.argv) > 2 else None
+            data_sync.sync_dividend_yield_bs(db, codes=codes)
+
         elif cmd == "financial-ak":
             pool = sys.argv[2] if len(sys.argv) > 2 else "csi300"
             data_sync.sync_pool_financial(db, pool=pool)
@@ -81,10 +86,11 @@ def main():
 
         elif cmd == "full":
             if settings.data_provider == "baostock":
-                print("[BAOSTOCK] 全量同步：基本信息 → 日K线(10d) → 财务指标(all)")
+                print("[BAOSTOCK] 全量同步：基本信息 → 日K线(10d) → 财务指标(all) → 股息率(all)")
                 data_sync.sync_basic_bs(db)
                 data_sync.sync_daily_bs(db, days_back=10)
                 data_sync.sync_financial_bs(db, pool="all")
+                data_sync.sync_dividend_yield_bs(db)
             else:
                 pool = sys.argv[2] if len(sys.argv) > 2 else "csi300"
                 print("[AKShare] 全量同步：basic → pool → industry → financial")

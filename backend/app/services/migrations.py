@@ -15,6 +15,11 @@ _MIGRATIONS: list[str] = [
     # P0-3 watchlist 后端同步：alerts JSON + 加入时的基准价
     "ALTER TABLE watchlist ADD COLUMN alerts JSON",
     "ALTER TABLE watchlist ADD COLUMN ref_price FLOAT",
+    # 旧版 baostock K 线把原本单位为元的成交额错误除以 10000。
+    # 用成交额 / (收盘价 * 成交量) 比例识别并幂等修复，不影响正常行情。
+    "UPDATE stock_daily SET amount = amount * 10000 "
+    "WHERE amount IS NOT NULL AND close > 0 AND volume > 0 "
+    "AND amount / (close * volume) BETWEEN 0.000001 AND 0.001",
 ]
 
 

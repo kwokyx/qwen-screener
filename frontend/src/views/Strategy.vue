@@ -286,7 +286,7 @@ const columns = [
         bordered: false,
         type: missing.length ? 'warning' : 'success',
         title: missing.length ? `缺失：${missing.join('、')}` : '关键字段完整',
-      }, { default: () => missing.length ? `缺失 ${missing.length} 项` : '字段完整' })
+      }, { default: () => missing.length === 1 ? `缺${missing[0]}` : missing.length ? `缺失 ${missing.length} 项` : '字段完整' })
     },
   },
 ]

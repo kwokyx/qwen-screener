@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
 from app.services import cache, db_backup, qwen_client, scheduler
 
 
@@ -61,6 +61,7 @@ def data_health(db: Session = Depends(get_db)):
     latest_trade_date = _covered_latest_trade_date(db, basic_cnt)
     latest_daily_cnt = 0
     valuation_cnt = 0
+    dividend_yield_cnt = 0
     if latest_trade_date:
         latest_daily_cnt = db.query(StockDaily).filter(
             StockDaily.trade_date == latest_trade_date,
@@ -72,6 +73,10 @@ def data_health(db: Session = Depends(get_db)):
                 | StockDaily.pb.isnot(None)
                 | StockDaily.market_cap.isnot(None)
             ),
+        ).count()
+        dividend_yield_cnt = db.query(StockDaily).filter(
+            StockDaily.trade_date == latest_trade_date,
+            StockDaily.dividend_yield.isnot(None),
         ).count()
 
     sync_meta = scheduler.get_meta()
@@ -95,12 +100,15 @@ def data_health(db: Session = Depends(get_db)):
             "with_industry": industry_cnt,
             "latest_daily": latest_daily_cnt,
             "latest_valuation": valuation_cnt,
+            "dividend_records": db.query(StockDividend).count(),
+            "latest_dividend_yield": dividend_yield_cnt,
         },
         "coverage": {
             "industry": round(industry_cnt / basic_cnt, 4) if basic_cnt else 0,
             "financial": round(fin_cnt / basic_cnt, 4) if basic_cnt else 0,
             "latest_daily": round(latest_daily_cnt / basic_cnt, 4) if basic_cnt else 0,
             "latest_valuation": round(valuation_cnt / latest_daily_cnt, 4) if latest_daily_cnt else 0,
+            "latest_dividend_yield": round(dividend_yield_cnt / latest_daily_cnt, 4) if latest_daily_cnt else 0,
         },
         "sync_meta": sync_meta,
     }
@@ -119,8 +127,8 @@ def trigger_sync(job_name: str, wait: bool = False):
     默认 async（守护线程后台跑，立即返回）。对全市场 60d K 线回填这种 45 分钟级别
     的任务必须 async，否则 HTTP 会超时。前端可隔几秒查 /health/data 看 sync_meta
     里该任务的状态。
-    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_basic
-                / weekly_kline_backfill / db_backup
+    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_dividend
+                / weekly_basic / weekly_kline_backfill / db_backup
     传 ?wait=true 退回同步模式（短任务用，比如 db_backup 几秒就完）。
     """
     try:

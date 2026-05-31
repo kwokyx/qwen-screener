@@ -19,13 +19,19 @@ baostock 入口（默认）：
 
 全部使用 upsert 模式，不 delete-then-insert，避免半路失败清空已有数据。
 """
+import os
 import time
 from datetime import date, datetime, timedelta
 
 from loguru import logger
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
+
+
+BAOSTOCK_SYNC_WORKERS = int(os.getenv("BAOSTOCK_SYNC_WORKERS", "4"))
+BAOSTOCK_BATCH_TIMEOUT = float(os.getenv("BAOSTOCK_BATCH_TIMEOUT", "90"))
 
 
 # ---------- akshare 全局超时补丁 ----------
@@ -1145,6 +1151,7 @@ from app.services.providers.baostock_provider import (
     fetch_kline_unsafe,
     fetch_financial,
     fetch_financial_batch,
+    fetch_dividend_batch,
     _ensure_login,
     _ensure_logout,
 )
@@ -1305,39 +1312,67 @@ def _sync_daily_bs_parallel(
     end_date: str | None,
     *,
     full_market_request: bool,
-    workers: int = 8,
+    workers: int = BAOSTOCK_SYNC_WORKERS,
 ) -> int:
-    """Sequoia-X-style multi-process baostock sync for large code lists."""
-    from multiprocessing import Pool
+    """Sequoia-X-style multi-process baostock sync for large code lists.
+
+    Use small chunks and commit each completed chunk immediately. A slow
+    upstream request must not hold all successfully fetched rows in memory
+    until the entire market finishes.
+    """
+    from multiprocessing import Pool, TimeoutError as MpTimeoutError
 
     if len(codes) < 100:
         return -1
 
     n_workers = max(1, min(workers, len(codes)))
-    chunks = [codes[i::n_workers] for i in range(n_workers)]
-    logger.info("[BS-DAILY-MP] {} 只, workers={}, 日期 {} → {}", len(codes), n_workers, start_date, end_date)
+    chunk_size = 100
+    chunks = [codes[i:i + chunk_size] for i in range(0, len(codes), chunk_size)]
+    logger.info(
+        "[BS-DAILY-MP] {} 只, workers={}, batches={}, 日期 {} → {}",
+        len(codes), n_workers, len(chunks), start_date, end_date,
+    )
 
-    results: list[dict] = []
-    try:
-        with Pool(n_workers) as pool:
-            results = pool.map(_fetch_kline_chunk_worker, [(chunk, start_date, end_date) for chunk in chunks])
-    except Exception as exc:
-        logger.warning("[BS-DAILY-MP] 多进程拉取异常: {}", str(exc)[:160])
-
-    all_rows: list[dict] = []
+    inserted = 0
+    updated = 0
+    raw_rows = 0
     failed = 0
     errors: list[str] = []
-    for result in results:
-        all_rows.extend(result.get("rows") or [])
-        failed += int(result.get("failed") or 0)
-        if result.get("error"):
-            errors.append(result["error"])
+    try:
+        with Pool(n_workers) as pool:
+            tasks = [(chunk, start_date, end_date) for chunk in chunks]
+            iterator = pool.imap_unordered(_fetch_kline_chunk_worker, tasks)
+            for index in range(1, len(tasks) + 1):
+                try:
+                    result = iterator.next(timeout=BAOSTOCK_BATCH_TIMEOUT)
+                except MpTimeoutError:
+                    logger.warning(
+                        "[BS-DAILY-MP] 等待批次超过 {} 秒，终止剩余 worker；已完成 {}/{} 批",
+                        BAOSTOCK_BATCH_TIMEOUT, index - 1, len(tasks),
+                    )
+                    pool.terminate()
+                    break
+                rows = result.get("rows") or []
+                raw_rows += len(rows)
+                failed += int(result.get("failed") or 0)
+                if result.get("error"):
+                    errors.append(result["error"])
+                chunk_inserted, chunk_updated = _upsert_daily_rows(db, rows)
+                inserted += chunk_inserted
+                updated += chunk_updated
+                if index % 5 == 0 or index == len(chunks):
+                    logger.info(
+                        "[BS-DAILY-MP] 进度 {}/{}: 新增 {} / 更新 {} / 失败股票 {}",
+                        index, len(chunks), inserted, updated, failed,
+                    )
+    except Exception as exc:
+        logger.warning("[BS-DAILY-MP] 多进程拉取异常: {}", str(exc)[:160])
 
     if errors:
         for msg in errors[:3]:
             logger.warning("[BS-DAILY-MP] worker 失败: {}", msg)
 
-    if not all_rows:
+    if raw_rows == 0:
         logger.warning("[BS-DAILY-MP] 未拉到任何行，失败股票数 {}", failed)
         if full_market_request:
             inserted = sync_daily_sina(db)
@@ -1352,10 +1387,9 @@ def _sync_daily_bs_parallel(
             return inserted
         return 0
 
-    inserted, updated = _upsert_daily_rows(db, all_rows)
     logger.info(
         "[BS-DAILY-MP] 完成: 新增 {} / 更新 {} / worker 失败股票 {} / 原始行 {}",
-        inserted, updated, failed, len(all_rows),
+        inserted, updated, failed, raw_rows,
     )
     return inserted + updated
 
@@ -1493,6 +1527,9 @@ def sync_daily_bs(
 def sync_kline_bs(db: Session, code: str, days: int) -> int:
     """baostock 单只股票 K 线回填（被 API 懒加载调用）。
     只拉最近 days*2 个自然日的数据，upsert 到 stock_daily。
+
+    前复权价格会随分红送转变化，因此不能只插入缺失行。已有行也必须覆盖，
+    否则同一窗口内会混入不同复权基准，造成 K 线断层和策略假突破。
     """
     from datetime import timedelta
     end = date.today()
@@ -1502,33 +1539,9 @@ def sync_kline_bs(db: Session, code: str, days: int) -> int:
     if not klines:
         return 0
 
-    have_dates = {
-        r[0] for r in db.query(StockDaily.trade_date)
-        .filter(StockDaily.code == code).all()
-    }
-    inserted = 0
-    for r in klines:
-        td = r["trade_date"]
-        if td in have_dates:
-            continue
-        try:
-            db.add(StockDaily(
-                code=code, trade_date=td,
-                open=r.get("open"), high=r.get("high"),
-                low=r.get("low"), close=r.get("close"),
-                volume=r.get("volume"), amount=r.get("amount"),
-                turnover=r.get("turnover"),
-                pe=r.get("pe"), pb=r.get("pb"),
-            ))
-            inserted += 1
-        except Exception:
-            db.rollback()
-            continue
-
-    if inserted:
-        db.commit()
-    logger.info("[BS-KLINE] {} 插入 {} 条", code, inserted)
-    return inserted
+    inserted, updated = _upsert_daily_rows(db, klines)
+    logger.info("[BS-KLINE] {} 新增 {} / 更新 {}", code, inserted, updated)
+    return inserted + updated
 
 
 def sync_financial_bs(
@@ -1595,6 +1608,160 @@ def sync_financial_bs(
 
     db.commit()
     logger.info("[BS-FIN] 完成: 新增 {} / 更新 {}", inserted, updated)
+    return inserted + updated
+
+
+def refresh_dividend_yield_bs(
+    db: Session,
+    as_of: date | None = None,
+    codes: list[str] | None = None,
+) -> int:
+    """用本地现金分红记录快速重算最新交易日的近 12 个月股息率。"""
+    trade_date = as_of or db.query(func.max(StockDaily.trade_date)).scalar()
+    if trade_date is None:
+        logger.warning("[BS-DIVIDEND] 没有日行情，跳过股息率重算")
+        return 0
+    if db.query(StockDividend.id).first() is None:
+        logger.warning("[BS-DIVIDEND] 本地分红记录为空，跳过股息率重算")
+        return 0
+
+    start_date = trade_date - timedelta(days=365)
+    cash_rows = (
+        db.query(StockDividend.code, func.sum(StockDividend.cash_per_share))
+        .filter(
+            StockDividend.operate_date > start_date,
+            StockDividend.operate_date <= trade_date,
+        )
+        .group_by(StockDividend.code)
+        .all()
+    )
+    cash_by_code = {code: float(cash or 0) for code, cash in cash_rows}
+    daily_query = db.query(StockDaily).filter(StockDaily.trade_date == trade_date)
+    if codes is not None:
+        daily_query = daily_query.filter(StockDaily.code.in_(codes))
+    daily_rows = daily_query.all()
+    updated = 0
+    for daily in daily_rows:
+        if daily.close is None or daily.close <= 0:
+            continue
+        value = round(cash_by_code.get(daily.code, 0.0) / daily.close * 100, 4)
+        if daily.dividend_yield != value:
+            daily.dividend_yield = value
+            updated += 1
+    db.commit()
+    logger.info("[BS-DIVIDEND] {} 本地重算完成: 更新 {}", trade_date, updated)
+    return updated
+
+
+def _fetch_dividend_chunk_worker(args: tuple[list[str], list[str]]) -> dict:
+    """Worker used by full-market dividend sync."""
+    codes, years = args
+    try:
+        from app.services.providers.baostock_provider import fetch_dividend_batch
+
+        records = fetch_dividend_batch(codes, years=years)
+        return {
+            "records": records,
+            "handled": len(codes),
+            "failed": len(codes) - len(records),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "records": {},
+            "handled": len(codes),
+            "failed": len(codes),
+            "error": str(exc)[:160],
+        }
+
+
+def _fetch_dividend_records_parallel(
+    codes: list[str],
+    years: list[str],
+    *,
+    workers: int = BAOSTOCK_SYNC_WORKERS,
+) -> dict[str, list[dict]]:
+    """Pull dividends with bounded process workers and keep partial results."""
+    from multiprocessing import Pool, TimeoutError as MpTimeoutError
+
+    if len(codes) < 100:
+        return fetch_dividend_batch(codes, years=years)
+
+    n_workers = max(1, min(workers, len(codes)))
+    chunk_size = 100
+    chunks = [codes[i:i + chunk_size] for i in range(0, len(codes), chunk_size)]
+    records: dict[str, list[dict]] = {}
+    failed = 0
+    logger.info("[BS-DIVIDEND-MP] {} 只, workers={}, batches={}", len(codes), n_workers, len(chunks))
+    with Pool(n_workers) as pool:
+        iterator = pool.imap_unordered(_fetch_dividend_chunk_worker, [(chunk, years) for chunk in chunks])
+        for index in range(1, len(chunks) + 1):
+            try:
+                result = iterator.next(timeout=BAOSTOCK_BATCH_TIMEOUT)
+            except MpTimeoutError:
+                logger.warning(
+                    "[BS-DIVIDEND-MP] 等待批次超过 {} 秒，终止剩余 worker；已完成 {}/{} 批",
+                    BAOSTOCK_BATCH_TIMEOUT, index - 1, len(chunks),
+                )
+                pool.terminate()
+                break
+            records.update(result.get("records") or {})
+            failed += int(result.get("failed") or 0)
+            if result.get("error"):
+                logger.warning("[BS-DIVIDEND-MP] worker 失败: {}", result["error"])
+            if index % 5 == 0 or index == len(chunks):
+                logger.info(
+                    "[BS-DIVIDEND-MP] 进度 {}/{}: 成功股票 {} / 失败股票 {}",
+                    index, len(chunks), len(records), failed,
+                )
+    return records
+
+
+def sync_dividend_yield_bs(
+    db: Session,
+    codes: list[str] | None = None,
+    as_of: date | None = None,
+) -> int:
+    """从 baostock 更新分红记录，再重算最新交易日的 TTM 股息率。
+
+    远程拉取适合每周运行。日行情同步后只调用 refresh_dividend_yield_bs，
+    避免每日重复遍历全市场远程接口。
+    """
+    trade_date = as_of or db.query(func.max(StockDaily.trade_date)).scalar()
+    if trade_date is None:
+        logger.warning("[BS-DIVIDEND] 没有日行情，跳过远程同步")
+        return 0
+    if codes is None:
+        codes = [code for (code,) in db.query(StockBasic.code).all()]
+    if not codes:
+        logger.warning("[BS-DIVIDEND] 没有可同步的股票代码")
+        return 0
+
+    years = [str(trade_date.year - 1), str(trade_date.year)]
+    logger.info("[BS-DIVIDEND] {} 只, 年份 {}", len(codes), years)
+    records = _fetch_dividend_records_parallel(codes, years=years)
+    existing = {
+        (row.code, row.operate_date, row.cash_per_share)
+        for row in db.query(StockDividend).filter(
+            StockDividend.operate_date > trade_date - timedelta(days=730),
+        ).all()
+    }
+    inserted = 0
+    last_committed = 0
+    for code, rows in records.items():
+        for row in rows:
+            key = (code, row["operate_date"], row["cash_per_share"])
+            if key in existing:
+                continue
+            db.add(StockDividend(code=code, **row))
+            existing.add(key)
+            inserted += 1
+        if inserted - last_committed >= 200:
+            db.commit()
+            last_committed = inserted
+    db.commit()
+    updated = refresh_dividend_yield_bs(db, as_of=trade_date, codes=list(records))
+    logger.info("[BS-DIVIDEND] 完成: 新增记录 {} / 更新股息率 {}", inserted, updated)
     return inserted + updated
 
 

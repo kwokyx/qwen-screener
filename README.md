@@ -109,6 +109,8 @@ npm run dev                                     # → http://localhost:5173
 | `REDIS_URL` | `redis://localhost:6379/0` | 留空则禁用缓存（业务不中断） |
 | `BAOSTOCK_INTRADAY_TIMEOUT` | `6` | 分钟 K 首次拉取的最长等待秒数 |
 | `BAOSTOCK_INTRADAY_BREAKER_SECONDS` | `300` | 分钟 K 拉取失败后的短路秒数，避免页面反复阻塞 |
+| `BAOSTOCK_SYNC_WORKERS` | `4` | 全市场日线回填并发数；过高会增加免费数据源抖动 |
+| `BAOSTOCK_BATCH_TIMEOUT` | `90` | 单批日线回填最长等待秒数，超时后保留已提交批次 |
 | `SECRET_KEY` | dev-secret | JWT 签名密钥，生产必须改 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | JWT 有效期 |
 | **`AI_BACKEND`** | `openai` | `openai` 或 `dashscope` |
@@ -127,18 +129,17 @@ npm run dev                                     # → http://localhost:5173
 ## 数据同步命令
 
 ```bash
-python -m scripts.sync_data <子命令> [pool]
+python -m scripts.sync_data <子命令> [参数]
 ```
 
 | 子命令 | 数据源 | 内容 | 耗时 |
 |---|---|---|---|
-| `basic` | 新浪 | 全 A 股 5500+ 代码 + 名称 | 几秒 |
-| `daily-em` | 东方财富 | 全市场实时行情（PE/PB/市值）—— **网络受限时易超时** | < 30s |
-| `daily-sina` | 新浪 | 全市场 5500 只 OHLC + 成交量（无 PE/市值） | ~40s |
-| `pool` | 沪深300 + 雪球 | 池内 PE/PB/股息率/流通值 | ~1 分钟 |
-| `industry` | 雪球 | 行业 + 上市时间 + 总股本 | ~1 分钟 |
-| `financial` | 东方财富 | ROE / 营收同比 / 净利同比 / 毛利率 / 负债率 | ~3 分钟 |
-| `full` | 全部 | 上面四步连跑（默认 csi300 池） | ~5 分钟 |
+| `basic` | Baostock | 全 A 股 5500+ 代码 + 名称 | 几秒 |
+| `daily [days]` | Baostock | 全市场日 K（OHLCV + PE/PB + 换手率） | 视回填天数而定 |
+| `kline [code] [days]` | Baostock | 单只股票日 K 回填 | 几秒 |
+| `financial [pool]` | Baostock | ROE / 营收同比 / 净利同比 / 毛利率 / 负债率 | 视股票池而定 |
+| `dividend [code]` | Baostock | 已实施现金分红 + 本地计算近 12 个月股息率 | 视股票池而定 |
+| `full` | Baostock | 基本信息 + 日 K + 全市场财务 + 全市场分红 | 较长任务 |
 
 支持的股票池：`csi300`（沪深300）、`csi500`（中证500）、`sse50`（上证50）。
 
@@ -161,7 +162,7 @@ qwen/               GET   /qwen/analysis/{code}            一次返回
 market/             指数 / 板块 / 涨跌幅榜 / Ticker
 chat/               对话历史 CRUD（登录后跨设备同步）
 notifications/      预警通知中心
-strategy/           策略回测（输入条件 + 时间窗 → 净值曲线 + 指标）
+strategy/           Agent 智能选股 / 条件筛选 / 内置策略选股
 health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发同步
 ```
 
@@ -184,9 +185,10 @@ health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发
 
 | Cron | 任务 | 内容 |
 |---|---|---|
-| 周一-周五 15:30 | `sync_daily_sina` | 全市场 5800 只 OHLC + 成交量 |
-| 周一-周五 16:00 | `sync_pool_xq` | csi300 + csi500 共 800 只价值面 |
+| 周一-周五 15:30 | `daily_market` | 全市场日 K（OHLCV + PE/PB + 换手率） |
+| 周一-周五 16:00 | `daily_value` | 全市场价值面补充 |
 | 周六 02:00 | `weekly_fundamentals` | 行业 + 财务摘要 |
+| 周六 03:00 | `weekly_dividend` | 已实施现金分红 + 本地计算近 12 个月股息率 |
 | 周日 02:00 | `sync_basic` | 全 A 股代码列表（新股 / 退市） |
 | 周日 03:00 | `weekly_kline_backfill` | 全市场 60d K 线回填 |
 | 每 6h | `db_backup` | SQLite 冷备份 → `/app/data/backups/` |

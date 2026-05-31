@@ -7,9 +7,11 @@
 """
 import pandas as pd
 import pytest
+from datetime import date
 
-from app.models.stock import StockBasic
-from app.services import data_sync
+from app.database import engine
+from app.models.stock import StockBasic, StockDaily
+from app.services import data_sync, migrations
 
 
 def _make_df(n: int) -> pd.DataFrame:
@@ -83,3 +85,47 @@ def test_sync_basic_empty_db_accepts_anything(db, monkeypatch):
     rv = data_sync.sync_basic(db)
     assert rv == 100
     assert db.query(StockBasic).count() == 100
+
+
+def test_migration_normalizes_legacy_baostock_amount_unit(db):
+    db.add(StockDaily(
+        code="600519.SH",
+        trade_date=date(2026, 5, 29),
+        close=10,
+        volume=10_000_000,
+        amount=10_000,
+    ))
+    db.commit()
+
+    migrations.apply_sqlite_migrations(engine)
+    db.expire_all()
+
+    assert db.query(StockDaily).one().amount == 100_000_000
+
+
+def test_sync_kline_bs_refreshes_existing_front_adjusted_rows(db, monkeypatch):
+    trade_date = date(2026, 5, 29)
+    db.add(StockDaily(
+        code="600183.SH",
+        trade_date=trade_date,
+        close=89.95,
+        volume=100,
+        amount=1_000,
+    ))
+    db.commit()
+
+    monkeypatch.setattr(data_sync, "fetch_kline", lambda *args, **kwargs: [{
+        "code": "600183.SH",
+        "trade_date": trade_date,
+        "open": 135.64,
+        "high": 145.55,
+        "low": 133.88,
+        "close": 140.62,
+        "volume": 100_840_530,
+        "amount": 14_185_705_002,
+    }])
+
+    assert data_sync.sync_kline_bs(db, "600183.SH", days=60) == 1
+    row = db.query(StockDaily).one()
+    assert row.close == 140.62
+    assert row.amount == 14_185_705_002

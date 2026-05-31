@@ -8,6 +8,7 @@
     周一-周五 15:30   sync_daily       全市场日K线（OHLCV + PE/PB/换手率）
     周一-周五 16:00   sync_daily_value  估值面（bs: 同 daily 已有 PE/PB；ak: 东财+雪球 PE/股息率）
     周六     02:00   sync_fundamentals  财务指标
+    周六     03:00   weekly_dividend    已实施现金分红 + 本地 TTM 股息率
     周日     02:00   sync_basic        全 A 股代码列表（新股 / 退市更新）
     周日     03:00   weekly_kline_backfill  全市场 60 天历史 K 线回填
     每 6h            db_backup         冷备份 stock.db → /app/data/backups/
@@ -124,6 +125,11 @@ def job_daily_market():
             affected = data_sync.sync_daily_sina(db)
         if not affected:
             raise RuntimeError("daily_market 未写入任何行情数据")
+        if USE_BAOSTOCK:
+            try:
+                data_sync.refresh_dividend_yield_bs(db)
+            except Exception as e:
+                logger.warning("[SCHED] daily_market 本地股息率重算失败: {}", str(e)[:120])
         return affected
     finally:
         db.close()
@@ -240,6 +246,18 @@ def job_weekly_basic():
         db.close()
 
 
+def job_weekly_dividend():
+    """从 baostock 更新已实施现金分红，并重算最新 TTM 股息率。"""
+    logger.info("[SCHED] weekly_dividend 开始 (provider={})", settings.data_provider)
+    if not USE_BAOSTOCK:
+        return 0
+    db = SessionLocal()
+    try:
+        return data_sync.sync_dividend_yield_bs(db)
+    finally:
+        db.close()
+
+
 def job_db_backup():
     """冷备份 stock.db → /app/data/backups/。每 6h 触发一次。"""
     logger.info("[SCHED] db_backup 开始")
@@ -268,6 +286,7 @@ JOBS = {
     "daily_market":           job_daily_market,
     "daily_value":            job_daily_value,
     "weekly_fundamentals":    job_weekly_fundamentals,
+    "weekly_dividend":        job_weekly_dividend,
     "weekly_basic":           job_weekly_basic,
     "weekly_kline_backfill":  job_weekly_kline_backfill,
     "db_backup":              job_db_backup,
@@ -326,6 +345,12 @@ def start():
         lambda: _run_with_meta("weekly_fundamentals", job_weekly_fundamentals),
         CronTrigger(day_of_week="sat", hour=2, minute=0),
         id="weekly_fundamentals",
+    )
+    # 周六 03:00：现金分红记录 + 本地 TTM 股息率
+    _scheduler.add_job(
+        lambda: _run_with_meta("weekly_dividend", job_weekly_dividend),
+        CronTrigger(day_of_week="sat", hour=3, minute=0),
+        id="weekly_dividend",
     )
     # 周日 02:00：代码列表刷新
     _scheduler.add_job(

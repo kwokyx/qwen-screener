@@ -57,3 +57,19 @@ class StockFinancial(Base):
     debt_ratio: Mapped[float | None] = mapped_column(Float)     # 资产负债率
 
     __table_args__ = (Index("ix_code_report", "code", "report_date", unique=True),)
+
+
+class StockDividend(Base):
+    """已实施的现金分红记录，用于本地计算最近 12 个月股息率。"""
+    __tablename__ = "stock_dividend"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(16), index=True)
+    operate_date: Mapped[date] = mapped_column(Date, index=True)  # 除权除息日
+    cash_per_share: Mapped[float] = mapped_column(Float)  # 税前每股现金分红
+    notice_date: Mapped[date | None] = mapped_column(Date)
+    pay_date: Mapped[date | None] = mapped_column(Date)
+
+    __table_args__ = (
+        Index("ix_dividend_code_operate_cash", "code", "operate_date", "cash_per_share", unique=True),
+    )
