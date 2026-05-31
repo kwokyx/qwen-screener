@@ -209,6 +209,58 @@ const klineCaption = computed(() => {
   const freq = activeKlineFrequency.value?.label || '日K'
   return `${freq} · ${range} · ${isIntradayFrequency.value ? '不复权' : '前复权'}`
 })
+const klineDataType = computed(() => {
+  if (isIntradayFrequency.value) return '分钟K：盘中分时蜡烛，来自 baostock 分钟线，不用日线替代。'
+  if (klineFrequency.value === 'week') return '周K：每根蜡烛代表一个交易周，直接请求周线数据。'
+  if (klineFrequency.value === 'month') return '月K：每根蜡烛代表一个交易月，直接请求月线数据。'
+  return '日K：每根蜡烛代表一个交易日，不是 24 小时分时。'
+})
+const klineEmptyText = computed(() => {
+  if (klineLoading.value) return ''
+  if (klineError.value) return '当前周期数据加载失败'
+  if (isIntradayFrequency.value) return '当前分钟 K 暂无数据；系统不会用日线伪装分钟线。'
+  return '当前周期暂无 K 线数据'
+})
+const klineStats = computed(() => {
+  const data = chartDisplayData.value || []
+  if (!data.length) return []
+  const first = data[0]
+  const last = data[data.length - 1]
+  const highs = data.map((item) => Number(item.h)).filter(Number.isFinite)
+  const lows = data.map((item) => Number(item.l)).filter(Number.isFinite)
+  const volumes = data.map((item) => Number(item.v)).filter(Number.isFinite)
+  const high = highs.length ? Math.max(...highs) : null
+  const low = lows.length ? Math.min(...lows) : null
+  const volume = volumes.length ? volumes[volumes.length - 1] : null
+  const timeKey = isIntradayFrequency.value ? 'datetime' : 'day'
+  return [
+    { label: '样本', value: `${data.length}根` },
+    { label: '起始', value: formatKlineTime(first?.[timeKey]) },
+    { label: '结束', value: formatKlineTime(last?.[timeKey]) },
+    { label: '最新收盘', value: last?.c != null ? Number(last.c).toFixed(2) : '—' },
+    { label: '区间高点', value: high != null ? high.toFixed(2) : '—' },
+    { label: '区间低点', value: low != null ? low.toFixed(2) : '—' },
+    { label: '末根成交量', value: volume != null ? formatCompactVolume(volume) : '—' },
+  ]
+})
+
+function formatKlineTime(value) {
+  if (!value) return '—'
+  const raw = String(value)
+  if (!raw.includes('T') && !raw.includes(' ')) return raw
+  const date = new Date(raw)
+  if (!Number.isFinite(date.getTime())) return raw
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function formatCompactVolume(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  if (Math.abs(n) >= 1e8) return `${(n / 1e8).toFixed(2)}亿`
+  if (Math.abs(n) >= 1e4) return `${(n / 1e4).toFixed(2)}万`
+  return n.toFixed(0)
+}
 
 async function reloadKline() {
   const days = activeKlineRanges.value[klineRange.value]?.days || activeKlineRanges.value[0].days
@@ -652,16 +704,31 @@ function peerRowProps(row) {
                 </NButton>
               </NButtonGroup>
             </div>
+            <div class="kline-meta">
+              <span class="kline-mode">{{ klineDataType }}</span>
+              <span
+                v-for="item in klineStats"
+                :key="item.label"
+                class="kline-stat"
+              >
+                {{ item.label }} <strong>{{ item.value }}</strong>
+              </span>
+            </div>
             <NAlert v-if="klineError" type="warning" :bordered="false" class="kline-error">
               {{ klineError }}
             </NAlert>
             <NSpin :show="klineLoading">
               <KLineChart
+                v-if="chartDisplayData.length"
                 :data="chartDisplayData"
                 :height="390"
                 :indicator="indicators[activeIndicator]"
                 :visible-bars="klineVisibleBars"
+                :period="klineFrequency"
               />
+              <div v-else class="kline-empty">
+                <EmptyState icon="chart" title="暂无 K 线数据" :subtitle="klineEmptyText" compact />
+              </div>
             </NSpin>
           </NCard>
 
@@ -969,9 +1036,56 @@ function peerRowProps(row) {
   margin-bottom: 4px;
 }
 
+.kline-meta {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  padding: 5px 0;
+  border-top: 1px solid #ECEFF3;
+  border-bottom: 1px solid #ECEFF3;
+}
+
+.kline-mode,
+.kline-stat {
+  font-size: 10.5px;
+  color: #71717A;
+  line-height: 1.4;
+}
+
+.kline-mode {
+  flex-basis: 100%;
+  color: #52525B;
+}
+
+.kline-stat {
+  padding: 2px 6px;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+  background: #FFFFFF;
+}
+
+.kline-stat strong {
+  margin-left: 3px;
+  color: #111111;
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+}
+
 .kline-error {
   margin-bottom: 8px;
   font-size: 12px;
+}
+
+.kline-empty {
+  height: 390px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
 }
 
 .kline-control-group {

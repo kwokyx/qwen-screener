@@ -8,6 +8,7 @@ const props = defineProps({
   indicator: { type: String, default: 'MA' },
   fitContent: { type: Boolean, default: true },
   visibleBars: { type: Number, default: 90 },
+  period: { type: String, default: 'day' },
 })
 
 const chartEl = ref(null)
@@ -30,6 +31,7 @@ function formatDateLabel(timestamp) {
   const pad = (v) => String(v).padStart(2, '0')
   const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (props.period === 'month') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
   return d.getHours() || d.getMinutes() ? `${date} ${time}` : date
 }
 
