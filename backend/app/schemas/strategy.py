@@ -54,6 +54,7 @@ class StrategyAgentPlan(BaseModel):
     reasoning: str
     strategy_id: str | None = None
     conditions: list[FilterCondition] = Field(default_factory=list)
+    condition_labels: list[str] = Field(default_factory=list)
     logic: str = "AND"
     sort_by: str | None = None
     sort_desc: bool = True

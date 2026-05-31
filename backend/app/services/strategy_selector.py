@@ -169,6 +169,7 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
             tool_trace=tool_trace,
         )
 
+    plan.condition_labels = _condition_labels(plan.conditions)
     req = ScreenRequest(
         conditions=plan.conditions,
         logic=plan.logic if plan.logic in ("AND", "OR") else "AND",
@@ -325,6 +326,48 @@ def _summarize_strategy_agent(query: str, plan: StrategyAgentPlan, total: int, n
 def _summarize_screen_agent(query: str, plan: StrategyAgentPlan, total: int, names: list[str]) -> str:
     picked = "、".join(names) if names else "暂无命中"
     return f"我将「{query}」转换为 {len(plan.conditions)} 个结构化条件，并调用本地筛选引擎。当前命中 {total} 只，前排结果：{picked}。"
+
+
+def _condition_labels(conditions: list[FilterCondition]) -> list[str]:
+    labels = [_format_condition(cond) for cond in conditions]
+    return [label for label in labels if label]
+
+
+def _format_condition(cond: FilterCondition) -> str:
+    field_names = {
+        "pe": "市盈率",
+        "pb": "市净率",
+        "roe": "ROE",
+        "market_cap": "总市值",
+        "dividend_yield": "股息率",
+        "revenue_yoy": "营收同比",
+        "profit_yoy": "净利润同比",
+        "gross_margin": "毛利率",
+        "debt_ratio": "资产负债率",
+        "industry": "行业",
+        "market": "市场",
+        "close": "收盘价",
+        "turnover": "换手率",
+    }
+    op_names = {
+        "gt": "大于",
+        "gte": "不低于",
+        "lt": "低于",
+        "lte": "不高于",
+        "eq": "等于",
+        "between": "介于",
+        "in": "包含",
+    }
+    field = field_names.get(cond.field, cond.field)
+    op = op_names.get(cond.op, cond.op)
+    value = _format_condition_value(cond.value)
+    return f"{field}{op}{value}"
+
+
+def _format_condition_value(value) -> str:
+    if isinstance(value, list):
+        return "、".join(str(item) for item in value)
+    return str(value)
 
 
 def _load_histories(db: Session, days: int, max_codes: int = 1200) -> dict[str, list[DailyPoint]]:

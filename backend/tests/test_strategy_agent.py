@@ -18,6 +18,7 @@ def test_agent_uses_local_screen_when_ai_unavailable(db, seed_stocks, monkeypatc
     assert res.plan.tool == "stock_screen"
     assert res.plan.ai_configured is True
     assert res.plan.ai_used is False
+    assert res.plan.condition_labels == ["总市值大于500", "行业包含半导体"]
     assert res.screen_result is not None
     assert res.screen_result.total == 1
     assert res.screen_result.items[0].code == "688981.SH"
@@ -37,6 +38,7 @@ def test_agent_reports_unconfigured_ai_but_still_runs_tool(db, seed_stocks, monk
     assert res.plan.tool == "stock_screen"
     assert res.plan.ai_configured is False
     assert res.plan.ai_used is False
+    assert "市盈率低于15" in res.plan.condition_labels
     assert res.screen_result is not None
     assert res.screen_result.total == 1
     assert res.screen_result.items[0].code == "600036.SH"

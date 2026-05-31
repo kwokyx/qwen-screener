@@ -37,10 +37,13 @@ const activeTemplate = computed(() => templates.value.find((item) => item.id ===
 const rows = computed(() => {
   const screen = agentResult.value?.screen_result
   if (screen?.items?.length) {
+    const labels = agentResult.value?.plan?.condition_labels?.length
+      ? agentResult.value.plan.condition_labels
+      : ['条件筛选']
     return screen.items.map((item) => ({
       ...item,
       score: null,
-      signals: agentResult.value?.plan?.conditions?.map((cond) => `${cond.field} ${cond.op} ${Array.isArray(cond.value) ? cond.value.join('-') : cond.value}`) || ['条件筛选'],
+      signals: labels,
       metrics: {
         PE: item.pe,
         PB: item.pb,
@@ -121,10 +124,21 @@ const columns = [
     key: 'metrics',
     minWidth: 220,
     render(row) {
-      return h('div', { class: 'metrics-line' }, Object.entries(row.metrics || {}).map(([key, value]) => `${key}: ${value}`).join(' / ') || '-')
+      const metrics = Object.entries(row.metrics || {})
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([key, value]) => `${key}: ${formatMetric(key, value)}`)
+      return h('div', { class: 'metrics-line' }, metrics.join(' / ') || '-')
     },
   },
 ]
+
+function formatMetric(key, value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return value
+  if (key === '市值') return `${number.toFixed(0)}亿`
+  if (key === '股息率' || key === 'ROE') return `${number.toFixed(2)}%`
+  return number.toFixed(2)
+}
 
 async function runSelection(id = activeId.value) {
   if (!id) return
