@@ -107,6 +107,8 @@ npm run dev                                     # → http://localhost:5173
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./stock.db` | 改 MySQL：`mysql+pymysql://user:pass@host:3306/db?charset=utf8mb4` |
 | `REDIS_URL` | `redis://localhost:6379/0` | 留空则禁用缓存（业务不中断） |
+| `BAOSTOCK_INTRADAY_TIMEOUT` | `6` | 分钟 K 首次拉取的最长等待秒数 |
+| `BAOSTOCK_INTRADAY_BREAKER_SECONDS` | `300` | 分钟 K 拉取失败后的短路秒数，避免页面反复阻塞 |
 | `SECRET_KEY` | dev-secret | JWT 签名密钥，生产必须改 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | JWT 有效期 |
 | **`AI_BACKEND`** | `openai` | `openai` 或 `dashscope` |

@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 
+from app.api import stock as stock_api
 from app.main import app
 from app.models.stock import StockBasic, StockDaily
 
@@ -44,3 +45,26 @@ def test_stock_not_found(db):
     with TestClient(app) as c:
         r = c.get("/api/v1/stock/000000.XX")
         assert r.status_code == 404
+
+
+def test_intraday_timeout_opens_short_circuit(seed_stocks, monkeypatch):
+    """分钟线超时后短时间内直接降级，避免用户反复等待。"""
+    calls = []
+    monkeypatch.setattr(stock_api, "_baostock_intraday_disabled_until", 0.0)
+    monkeypatch.setattr(stock_api, "_intraday_cache", {})
+
+    def fail(*_args, **_kwargs):
+        calls.append("called")
+        raise TimeoutError("baostock 分钟线查询超时")
+
+    monkeypatch.setattr(stock_api, "_fetch_intraday_with_timeout", fail)
+
+    with TestClient(app) as c:
+        first = c.get("/api/v1/stock/600519.SH/intraday?frequency=5&days=1")
+        second = c.get("/api/v1/stock/600519.SH/intraday?frequency=15&days=1")
+
+    assert first.status_code == 503
+    assert "查询超时" in first.json()["detail"]
+    assert second.status_code == 503
+    assert "已临时停用拉取" in second.json()["detail"]
+    assert calls == ["called"]

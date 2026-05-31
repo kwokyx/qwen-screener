@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from multiprocessing import Process, Queue
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,13 +28,15 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 _baostock_intraday_disabled_until = 0.0
 _intraday_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
 _INTRADAY_CACHE_TTL = 300
+_INTRADAY_FETCH_TIMEOUT = float(os.getenv("BAOSTOCK_INTRADAY_TIMEOUT", "6"))
+_INTRADAY_BREAKER_SECONDS = int(os.getenv("BAOSTOCK_INTRADAY_BREAKER_SECONDS", "300"))
 
 
 def _baostock_intraday_available() -> bool:
     return time.monotonic() >= _baostock_intraday_disabled_until
 
 
-def _disable_baostock_intraday(seconds: int = 30):
+def _disable_baostock_intraday(seconds: int = _INTRADAY_BREAKER_SECONDS):
     global _baostock_intraday_disabled_until
     _baostock_intraday_disabled_until = time.monotonic() + seconds
 
@@ -103,7 +106,7 @@ def _fetch_intraday_worker(queue: Queue, code: str, start_date: str, end_date: s
         queue.put(("error", str(exc)))
 
 
-def _fetch_intraday_with_timeout(code: str, start_date: str, end_date: str, frequency: str, timeout: int = 25):
+def _fetch_intraday_with_timeout(code: str, start_date: str, end_date: str, frequency: str, timeout: float = 25):
     queue: Queue = Queue(maxsize=1)
     proc = Process(
         target=_fetch_intraday_worker,
@@ -298,14 +301,20 @@ def intraday(
     bs_error: Exception | None = None
     if _baostock_intraday_available():
         try:
-            rows = _fetch_intraday_with_timeout(code, start_date, end_date, frequency, timeout=15)
+            rows = _fetch_intraday_with_timeout(
+                code,
+                start_date,
+                end_date,
+                frequency,
+                timeout=_INTRADAY_FETCH_TIMEOUT,
+            )
         except (TimeoutError, RuntimeError) as exc:
             bs_error = exc
             _disable_baostock_intraday()
         if not rows:
             _disable_baostock_intraday()
     else:
-        bs_error = RuntimeError("baostock 刚刚失败，短时间内跳过重试")
+        bs_error = RuntimeError("baostock 分钟线刚刚失败，已临时停用拉取，请稍后重试")
 
     if not rows:
         bs_msg = str(bs_error)[:80] if bs_error else "返回空数据"
