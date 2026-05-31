@@ -55,6 +55,8 @@ TEMPLATES = [
 TEMPLATE_MAP = {tpl.id: tpl for tpl in TEMPLATES}
 _RESULT_CACHE: dict[tuple[str, int], tuple[float, StrategySelectResponse]] = {}
 _RESULT_CACHE_TTL = 300
+_AI_STATUS_CACHE: tuple[float, dict] | None = None
+_AI_STATUS_TTL = 120
 
 
 @dataclass
@@ -123,12 +125,17 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     project-owned tools. If AI is unavailable, a deterministic local planner is
     used and the response clearly says so instead of fabricating AI results.
     """
-    ai_configured = _ai_configured()
+    ai_status = _ai_status()
+    ai_configured = bool(ai_status.get("configured"))
+    ai_available = bool(ai_status.get("ok"))
     warnings: list[str] = []
     tool_trace: list[str] = []
     plan = _plan_agent_locally(query, limit, ai_configured)
 
-    if ai_configured and plan.tool == "stock_screen":
+    if ai_configured and not ai_available:
+        reason = ai_status.get("reason") or "AI 服务不可用"
+        warnings.append(f"AI 服务已配置但当前不可用：{reason}。已使用本地规则 Agent 规划。")
+    elif ai_available and plan.tool == "stock_screen":
         try:
             parsed = qwen_client.parse_nl_query(query)
             plan = StrategyAgentPlan(
@@ -187,6 +194,24 @@ def _ai_configured() -> bool:
     if (settings.ai_backend or "openai").lower() == "dashscope":
         return bool(settings.dashscope_api_key)
     return bool(settings.openai_api_key)
+
+
+def _ai_status() -> dict:
+    global _AI_STATUS_CACHE
+    configured = _ai_configured()
+    if not configured:
+        return {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"}
+
+    now = time.monotonic()
+    if _AI_STATUS_CACHE and now < _AI_STATUS_CACHE[0]:
+        cached = dict(_AI_STATUS_CACHE[1])
+        cached["configured"] = True
+        return cached
+
+    status = qwen_client.probe_health()
+    status["configured"] = True
+    _AI_STATUS_CACHE = (now + _AI_STATUS_TTL, status)
+    return status
 
 
 def _plan_agent_locally(query: str, limit: int, ai_configured: bool) -> StrategyAgentPlan:
