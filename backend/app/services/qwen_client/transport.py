@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+from threading import Lock
 from typing import Any
 
 from loguru import logger
@@ -17,11 +18,29 @@ from app.config import settings
 # 上游中转网络偶发抖动（Connection reset / Timeout），自动重试可消除大部分用户感知
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 0.8  # 第 N 次失败后等 0.8、1.6、3.2 秒
+_RESPONSES_TIMEOUT = 8.0
+_RESPONSES_BREAKER_SECONDS = 300.0
+_responses_unavailable_until = 0.0
+_HEALTH_CACHE_SECONDS = 60.0
+_HEALTH_FAILURE_CACHE_SECONDS = 5.0
+_HEALTH_OK_GRACE_SECONDS = 300.0
+_health_probe_lock = Lock()
+_health_cache: tuple[float, dict] | None = None
+_last_health_ok: tuple[float, dict] | None = None
 _TRANSIENT_KEYWORDS = (
     "connection reset", "connection aborted", "remotedisconnect",
     "timeout", "timed out", "broken pipe", "errno 54", "errno 60",
     "max retries exceeded", "apiconnection",
 )
+
+
+def _responses_api_enabled() -> bool:
+    return time.monotonic() >= _responses_unavailable_until
+
+
+def _mark_responses_api_unavailable() -> None:
+    global _responses_unavailable_until
+    _responses_unavailable_until = time.monotonic() + _RESPONSES_BREAKER_SECONDS
 
 
 def _openai_base_url() -> str:
@@ -53,54 +72,102 @@ def _user_friendly_error(exc: Exception) -> str:
 
 def probe_health(timeout: float = 4.0) -> dict:
     """轻量探测当前配置的 AI 后端是否真的可用。"""
-    backend = (settings.ai_backend or "openai").lower()
+    global _health_cache, _last_health_ok
+    with _health_probe_lock:
+        now = time.monotonic()
+        if _health_cache and now < _health_cache[0]:
+            return dict(_health_cache[1])
+
+        backend = (settings.ai_backend or "openai").lower()
+        status = _probe_backend_health(backend, timeout)
+
+        if status.get("ok"):
+            _last_health_ok = (now + _HEALTH_OK_GRACE_SECONDS, dict(status))
+        elif _is_transient_health_status(status):
+            if _last_health_ok and now < _last_health_ok[0]:
+                status = dict(_last_health_ok[1])
+                status["stale"] = True
+            else:
+                time.sleep(0.25)
+                status = _probe_backend_health(backend, timeout)
+                if status.get("ok"):
+                    _last_health_ok = (now + _HEALTH_OK_GRACE_SECONDS, dict(status))
+
+        cache_seconds = _HEALTH_FAILURE_CACHE_SECONDS if _is_transient_health_status(status) else _HEALTH_CACHE_SECONDS
+        _health_cache = (now + cache_seconds, dict(status))
+        return status
+
+
+def _probe_backend_health(backend: str, timeout: float) -> dict:
     if backend == "dashscope":
         return _probe_dashscope_health(timeout)
     return _probe_openai_health(timeout)
+
+
+def _is_transient_health_status(status: dict) -> bool:
+    return status.get("reason") in {
+        "上游网络不可达",
+        "服务暂时不可用",
+        "千问服务网络不可达",
+        "千问服务暂时不可用",
+    }
 
 
 def _probe_openai_health(timeout: float) -> dict:
     """按真实调用顺序探测 Responses API，再回退 Chat Completions。"""
     if not settings.openai_api_key:
         return {"ok": False, "latency_ms": None, "reason": "未配置 OPENAI_API_KEY"}
+    import httpx
+    base_url = _openai_base_url()
+    headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+    responses_payload = {
+        "model": settings.openai_model,
+        "input": "ping",
+        "max_output_tokens": 1,
+    }
+    chat_payload = {
+        "model": settings.openai_model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+    }
+    client_timeout = httpx.Timeout(timeout, connect=min(2.0, timeout))
+    t0 = time.time()
+    responses_result = None
+    responses_error = None
+    if _responses_api_enabled():
+        try:
+            with httpx.Client(timeout=client_timeout) as c:
+                responses_result = c.post(f"{base_url}/responses", headers=headers, json=responses_payload)
+        except Exception as exc:
+            responses_error = exc
+            _mark_responses_api_unavailable()
+
+    latency_ms = int((time.time() - t0) * 1000)
+    if responses_result is not None:
+        if responses_result.status_code == 200:
+            return {"ok": True, "latency_ms": latency_ms, "reason": None}
+        if responses_result.status_code in (401, 403):
+            return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
+        _mark_responses_api_unavailable()
+
     try:
-        import httpx
-        base_url = _openai_base_url()
-        headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
-        responses_payload = {
-            "model": settings.openai_model,
-            "input": "ping",
-            "max_output_tokens": 1,
-        }
-        chat_payload = {
-            "model": settings.openai_model,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-        t0 = time.time()
-        with httpx.Client(timeout=httpx.Timeout(timeout, connect=min(2.0, timeout))) as c:
-            responses_result = c.post(f"{base_url}/responses", headers=headers, json=responses_payload)
-            if responses_result.status_code == 200:
-                latency_ms = int((time.time() - t0) * 1000)
-                return {"ok": True, "latency_ms": latency_ms, "reason": None}
-            if responses_result.status_code in (401, 403):
-                latency_ms = int((time.time() - t0) * 1000)
-                return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
+        with httpx.Client(timeout=client_timeout) as c:
             chat_result = c.post(f"{base_url}/chat/completions", headers=headers, json=chat_payload)
         latency_ms = int((time.time() - t0) * 1000)
         if chat_result.status_code == 200:
             return {"ok": True, "latency_ms": latency_ms, "reason": None}
         if chat_result.status_code in (401, 403):
             return {"ok": False, "latency_ms": latency_ms, "reason": "鉴权失败"}
-        body = f"{responses_result.text[:220]} {chat_result.text[:220]}".lower()
+        responses_text = responses_result.text[:220] if responses_result is not None else ""
+        body = f"{responses_text} {chat_result.text[:220]}".lower()
         if "not supported" in body:
             return {"ok": False, "latency_ms": latency_ms, "reason": f"模型或网关不兼容: {settings.openai_model}"}
-        if responses_result.status_code >= 500:
-            return {"ok": False, "latency_ms": latency_ms, "reason": f"上游网关不可用: HTTP {responses_result.status_code}"}
+        response_status = responses_result.status_code if responses_result is not None else 0
+        if max(response_status, chat_result.status_code) >= 500:
+            return {"ok": False, "latency_ms": latency_ms, "reason": f"上游网关不可用: HTTP {max(response_status, chat_result.status_code)}"}
         return {"ok": False, "latency_ms": latency_ms, "reason": f"HTTP {chat_result.status_code}"}
     except Exception as e:
-        msg = str(e).lower()
-        if "reset" in msg or "refused" in msg or "timed out" in msg or "timeout" in msg:
+        if _is_transient(e) or (responses_error is not None and _is_transient(responses_error)):
             return {"ok": False, "latency_ms": None, "reason": "上游网络不可达"}
         return {"ok": False, "latency_ms": None, "reason": "服务暂时不可用"}
 
@@ -166,30 +233,33 @@ def _openai_call_once(prompt: str, *, json_mode: bool = False) -> str:
     model = settings.openai_model
     effort = settings.openai_reasoning or "high"
 
-    # 1. 优先 Responses API
-    try:
-        kwargs: dict[str, Any] = {"model": model, "input": prompt}
-        if effort:
-            kwargs["reasoning"] = {"effort": effort}
-        if json_mode:
-            kwargs["text"] = {"format": {"type": "json_object"}}
-        resp = client.responses.create(**kwargs, timeout=60.0)
-        text = getattr(resp, "output_text", None)
-        if not text and getattr(resp, "output", None):
-            chunks = []
-            for item in resp.output:
-                for c in getattr(item, "content", []) or []:
-                    t = getattr(c, "text", None)
-                    if t:
-                        chunks.append(t)
-            text = "\n".join(chunks)
-        if text:
-            return text
-        logger.warning("Responses API 返回空文本，回退 chat.completions")
-    except Exception as e:
-        if "401" in str(e) or "Unauthorized" in str(e):
-            raise
-        logger.warning("Responses API 失败，回退 chat.completions: {}", e)
+    # 1. 优先 Responses API；兼容网关不支持时短路一段时间，避免每次额外等待。
+    if _responses_api_enabled():
+        try:
+            kwargs: dict[str, Any] = {"model": model, "input": prompt}
+            if effort:
+                kwargs["reasoning"] = {"effort": effort}
+            if json_mode:
+                kwargs["text"] = {"format": {"type": "json_object"}}
+            resp = client.responses.create(**kwargs, timeout=_RESPONSES_TIMEOUT)
+            text = getattr(resp, "output_text", None)
+            if not text and getattr(resp, "output", None):
+                chunks = []
+                for item in resp.output:
+                    for c in getattr(item, "content", []) or []:
+                        t = getattr(c, "text", None)
+                        if t:
+                            chunks.append(t)
+                text = "\n".join(chunks)
+            if text:
+                return text
+            _mark_responses_api_unavailable()
+            logger.warning("Responses API 返回空文本，回退 chat.completions")
+        except Exception as e:
+            if "401" in str(e) or "Unauthorized" in str(e):
+                raise
+            _mark_responses_api_unavailable()
+            logger.warning("Responses API 失败，回退 chat.completions: {}", e)
 
     # 2. 回退 Chat Completions
     cc_kwargs: dict[str, Any] = {

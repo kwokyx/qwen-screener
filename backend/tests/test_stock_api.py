@@ -81,6 +81,30 @@ def test_kline_returns_chronological_daily_rows(db):
     assert [row["close"] for row in payload] == [2.0, 3.0, 4.0]
 
 
+def test_kline_returns_partial_local_rows_while_backfill_runs(db, monkeypatch):
+    """已有快照时先返回本地数据，不让详情页同步等待免费数据源补线。"""
+    queued = []
+    db.add(StockBasic(code="123456.SH", name="测试股", industry="测试"))
+    db.add(StockDaily(
+        code="123456.SH",
+        trade_date=date(2026, 5, 29),
+        open=10,
+        high=11,
+        low=9,
+        close=10.5,
+        volume=1000,
+    ))
+    db.commit()
+    monkeypatch.setattr(stock_api, "_queue_daily_backfill", lambda code, days, provider: queued.append((code, days, provider)))
+
+    with TestClient(app) as c:
+        r = c.get("/api/v1/stock/123456.SH/kline?days=120&frequency=d")
+
+    assert r.status_code == 200
+    assert [row["trade_date"] for row in r.json()] == ["2026-05-29"]
+    assert queued == [("123456.SH", 120, "baostock")]
+
+
 def test_intraday_timeout_opens_short_circuit(seed_stocks, monkeypatch):
     """分钟线超时后短时间内直接降级，避免用户反复等待。"""
     calls = []

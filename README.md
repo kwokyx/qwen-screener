@@ -14,7 +14,7 @@ FastAPI 后端 + Vue 3 前端，集成大模型实现「自然语言筛选 + 基
    ▼
 FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自选 / 对话历史）
                 ├──  Redis 缓存（千问解析结果、个股分析）
-                ├──  AKShare（沪深300/500 + 雪球 + 新浪 + 东方财富）
+                ├──  Baostock（全 A 基础信息、K 线、财务、分红）+ AKShare 少量兜底
                 └──  AI 后端：OpenAI 兼容（默认） / 阿里云百炼千问（备用）
 ```
 
@@ -29,7 +29,7 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 | 因子筛选器 | `/results` | 13 字段 × 7 操作符的可组合筛选 |
 | 个股详情 | `/detail/:code` | K 线 + 关键指标 + 千问基本面分析（流式） |
 | 自选监控 | `/portfolio` | 自选股 + 价格预警，登录后跨设备同步 |
-| 策略回测 | `/strategy` | 给定筛选条件 → 月度调仓 → 净值曲线 + 关键指标 |
+| 智能选股工作台 | `/strategy` | 自然语言 Agent → 本地筛选工具；支持结构化条件与内置策略 |
 
 > 完整 API 接口文档见 [`docs/API.md`](docs/API.md)，含所有端点的 curl 示例与响应样本。
 
@@ -116,7 +116,7 @@ npm run dev                                     # → http://localhost:5173
 | **`AI_BACKEND`** | `openai` | `openai` 或 `dashscope` |
 | `OPENAI_API_KEY` | — | OpenAI 或兼容网关的 Key |
 | `OPENAI_BASE_URL` | `https://api2.up.railway.app` | 中转网关地址；填 `https://api.openai.com` 走官方 |
-| `OPENAI_MODEL` | `gpt-5.4` | 模型名；走官方时建议改 `gpt-4o-mini` 等 |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | 模型名；当前示例中转网关已实测可用，走官方或自建网关时按账号权限调整 |
 | `OPENAI_REASONING` | `high` | Responses API reasoning effort（不支持则自动忽略） |
 | `DASHSCOPE_API_KEY` | — | 阿里云百炼 Key（[控制台](https://bailian.console.aliyun.com)） |
 | `QWEN_MODEL` | `qwen-plus` | dashscope 模型 |
@@ -227,7 +227,7 @@ qwen-stock-screener/
 │   │   │   │   ├── __init__.py
 │   │   │   │   └── transport.py
 │   │   │   ├── screener_engine.py
-│   │   │   ├── data_sync.py    # AKShare 多通路同步
+│   │   │   ├── data_sync.py    # Baostock-first 同步 + AKShare 少量兜底
 │   │   │   ├── scheduler.py    # APScheduler 任务
 │   │   │   ├── backtest_engine.py
 │   │   │   ├── cache.py        # Redis（静默回退）
@@ -276,8 +276,8 @@ qwen-stock-screener/
 | **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
 | **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
 | **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
-| **策略回测** [`services/backtest_engine.py`](backend/app/services/backtest_engine.py) | 等权调仓 / 净值曲线 / 关键指标（夏普 / 回撤 / 胜率 / 盈亏比）/ 月度收益 / 交易日志 | — |
-| **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | 多通路（雪球 + 新浪 + 东方财富）；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
+| **智能选股 Agent** [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | 自然语言规划 → 结构化筛选工具 / 内置策略工具；AI 不可用时本地降级 | ✅ `test_strategy_agent.py` |
+| **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | Baostock-first；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
 | **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
 | **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |
 | **冷备份** [`services/db_backup.py`](backend/app/services/db_backup.py) | SQLite 每 6h 物理备份；启动时立即一份；备份列表查询 | — |
@@ -318,7 +318,7 @@ qwen-stock-screener/
 | 后端 Dockerfile 多阶段 + healthcheck | ✅ | [`backend/Dockerfile`](backend/Dockerfile) |
 | 前端 Dockerfile (node builder + nginx runtime) | ✅ | [`frontend/Dockerfile`](frontend/Dockerfile) |
 | nginx SSE 反代（buffering off + 30 分钟超时） | ✅ | [`frontend/nginx.conf`](frontend/nginx.conf) |
-| pytest 38 个用例全通过 | ✅ | [`backend/tests/`](backend/tests/) |
+| pytest 70 个用例全通过 | ✅ | [`backend/tests/`](backend/tests/) |
 | 接口文档 | ✅ | [`docs/API.md`](docs/API.md) |
 | 学年设计 docx | ✅ | [`docs/`](docs/) |
 
@@ -349,9 +349,11 @@ pytest tests/ -v
 
 | 场景 | 处理 |
 |---|---|
-| 东方财富批量接口受限 | 回退「沪深300 + 雪球逐只」稳定通路 |
+| 免费数据源偶发网络抖动 | Baostock-first；同步批次限时并保留已提交数据；分钟 K 失败后短期熔断 |
+| 详情页首次历史 K 线不足 | 先返回已有日线，后台补充历史；前端自动刷新图表，不阻塞详情页 |
+| OpenAI 兼容网关不支持 Responses API | 自动回退 Chat Completions，并在短期熔断窗口内跳过不兼容接口 |
 | 千问输出不是合法 JSON | 三层降级：FC → JSON 模式 → 容错 regex 抠 JSON |
-| 上游 AI 瞬时网络错误 | 指数退避重试 3 次；流式中途断开不重试（避免重复 token） |
+| 上游 AI 瞬时网络错误 | 探活立即复查 + 短缓存 + 最近成功保护；前端降级后自动复测；业务调用指数退避重试 3 次 |
 | 全市场同步上游返回异常少 | `< DB 80%` 直接跳过该次任务（防止部分快照 wipe） |
 | Redis 不可达 | 静默回退到无缓存模式，业务不中断 |
 | 千问 Key 未配置 | 千问相关功能给出明确错误，其他功能正常 |
@@ -366,7 +368,7 @@ pytest tests/ -v
 - Baostock 分红接口不支持北交所 `.BJ`，这类股票股息率会明确显示缺失，不用假数据补 0
 - 分钟 K 依赖 Baostock 实时查询，失败时返回 503；前端明确提示，不会静默切到日线
 - 日 K 接口按旧到新返回；周 K/月 K 直接请求 Baostock 对应周期，不由前端临时聚合
-- 流通市值字段当前用总市值代替（雪球未直接提供）
+- 流通市值字段当前用总市值代替
 
 > 完整清单见 [`docs/STATUS.md`](docs/STATUS.md)，含「未完成 / 后续工作」的优先级分级。
 
@@ -387,7 +389,8 @@ pytest tests/ -v
 
 ## 致谢
 
-- [AKShare](https://github.com/akfamily/akshare) — A 股数据
+- [Baostock](https://baostock.com/) — A 股数据主链路
+- [AKShare](https://github.com/akfamily/akshare) — 少量实时行情与兼容兜底
 - [FastAPI](https://github.com/tiangolo/fastapi) / [Vue 3](https://github.com/vuejs/core)
 - [阿里云百炼](https://bailian.console.aliyun.com) / OpenAI 兼容生态
 

@@ -1,14 +1,16 @@
 from datetime import date, timedelta
 from multiprocessing import Process, Queue
 import os
+from threading import Lock, Thread
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models.stock import StockBasic, StockDaily, StockFinancial
 from app.models.user import User
 from app.models.watchlist import Watchlist
@@ -30,6 +32,8 @@ _intraday_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
 _INTRADAY_CACHE_TTL = 300
 _INTRADAY_FETCH_TIMEOUT = float(os.getenv("BAOSTOCK_INTRADAY_TIMEOUT", "6"))
 _INTRADAY_BREAKER_SECONDS = int(os.getenv("BAOSTOCK_INTRADAY_BREAKER_SECONDS", "300"))
+_daily_backfill_lock = Lock()
+_pending_daily_backfills: set[str] = set()
 
 
 def _baostock_intraday_available() -> bool:
@@ -39,6 +43,30 @@ def _baostock_intraday_available() -> bool:
 def _disable_baostock_intraday(seconds: int = _INTRADAY_BREAKER_SECONDS):
     global _baostock_intraday_disabled_until
     _baostock_intraday_disabled_until = time.monotonic() + seconds
+
+
+def _run_daily_backfill(code: str, days: int, provider: str):
+    try:
+        from app.services.data_sync import backfill_kline_single, backfill_kline_single_bs
+
+        with SessionLocal() as db:
+            if provider == "baostock":
+                backfill_kline_single_bs(db, code, days)
+            else:
+                backfill_kline_single(db, code, days)
+    except Exception as exc:
+        logger.warning("后台补充日 K 失败 {}: {}", code, exc)
+    finally:
+        with _daily_backfill_lock:
+            _pending_daily_backfills.discard(code)
+
+
+def _queue_daily_backfill(code: str, days: int, provider: str):
+    with _daily_backfill_lock:
+        if code in _pending_daily_backfills:
+            return
+        _pending_daily_backfills.add(code)
+    Thread(target=_run_daily_backfill, args=(code, days, provider), daemon=True).start()
 
 
 def _get_intraday_cache(code: str, frequency: str, days: int) -> list[dict] | None:
@@ -257,7 +285,11 @@ def kline(
 
     have_dates = db.query(StockDaily.trade_date).filter(StockDaily.code == code).all()
     have = sum(1 for (trade_date,) in have_dates if trade_date and trade_date.weekday() < 5)
-    if have < days:
+    if 0 < have < days:
+        # 详情页优先展示已有本地数据，缺失历史在后台补齐。免费数据源
+        # 偶发变慢时不应让页面同步等待几十秒。
+        _queue_daily_backfill(code, days, settings.data_provider)
+    elif have < days:
         if settings.data_provider == "baostock":
             backfill_kline_single_bs(db, code, days)
         else:

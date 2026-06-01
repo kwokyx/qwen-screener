@@ -11,6 +11,20 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
   const latencyMs = ref(null)
   const lastChecked = ref(0)
   let timer = null
+  let retryTimer = null
+
+  function clearRetry() {
+    if (retryTimer) clearTimeout(retryTimer)
+    retryTimer = null
+  }
+
+  function scheduleRetry() {
+    if (retryTimer) return
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      check()
+    }, 10_000)
+  }
 
   async function check() {
     try {
@@ -24,6 +38,8 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
       latencyMs.value = null
     } finally {
       lastChecked.value = Date.now()
+      if (isUp.value) clearRetry()
+      else scheduleRetry()
     }
   }
 
@@ -35,6 +51,7 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
 
   function stopAutoProbe() {
     if (timer) { clearInterval(timer); timer = null }
+    clearRetry()
   }
 
   // 每次发起 AI 调用前/后都可以手动让前端立刻重测

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # OpenAI 兼容（支持自建/中转：base_url 可换）
     openai_api_key: str = ""
     openai_base_url: str = "https://api2.up.railway.app"
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-5.4-mini"
     openai_reasoning: str = "high"
 
     # 阿里云百炼 dashscope（备用）

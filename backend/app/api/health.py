@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -19,7 +20,10 @@ def _latest_expected_weekday(day=None):
     This intentionally handles weekends only. Public-holiday awareness needs a
     maintained trading calendar and should not be guessed here.
     """
-    current = day or datetime.utcnow().date()
+    now = day or datetime.now(ZoneInfo("Asia/Shanghai"))
+    current = now.date() if isinstance(now, datetime) else now
+    if isinstance(now, datetime) and now.hour < 16:
+        current -= timedelta(days=1)
     while current.weekday() >= 5:
         current -= timedelta(days=1)
     return current

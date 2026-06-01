@@ -1,4 +1,36 @@
+from app.schemas.screener import FilterCondition, ScreenRequest
 from app.services import strategy_selector
+
+
+def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "parse_nl_query",
+        lambda _query: ScreenRequest(
+            conditions=[
+                FilterCondition(field="industry", op="in", value=["半导体"]),
+                FilterCondition(field="market_cap", op="gt", value=500),
+            ],
+            sort_by="market_cap",
+            sort_desc=True,
+        ),
+    )
+
+    res = strategy_selector.run_agent_selection(db, "找半导体行业里的大市值龙头", limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.ai_used is True
+    assert res.plan.condition_labels == ["行业包含半导体", "总市值大于500"]
+    assert res.screen_result is not None
+    assert res.screen_result.total == 1
+    assert res.screen_result.items[0].code == "688981.SH"
+    assert res.tool_trace == ["调用 screener_engine.screen(conditions=2, limit=10)"]
+    assert "中芯国际" in res.answer
 
 
 def test_agent_uses_local_screen_when_ai_unavailable(db, seed_stocks, monkeypatch):

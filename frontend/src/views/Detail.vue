@@ -61,6 +61,9 @@ const aiStreaming = ref(false)
 const aiError = ref('')
 let aiAbort = null
 let quoteTimer = null
+let klineRetryTimer = null
+let klineRetryAttempts = 0
+let klineRequestId = 0
 
 const dailyKlineRanges = [
   { label: '近1个月', short: '1月', days: 22 },
@@ -264,28 +267,86 @@ function formatCompactVolume(value) {
   return n.toFixed(0)
 }
 
+function clearKlineRetry() {
+  if (klineRetryTimer) clearTimeout(klineRetryTimer)
+  klineRetryTimer = null
+  klineRetryAttempts = 0
+}
+
+function scheduleDailyKlineRefresh(displayDays, targetDays) {
+  if (klineRetryTimer || klineRetryAttempts >= 6) return
+  const requestedCode = code.value
+  klineRetryTimer = setTimeout(async () => {
+    klineRetryTimer = null
+    klineRetryAttempts += 1
+    try {
+      const kl = await stockApi.kline(requestedCode, targetDays, 'd')
+      if (requestedCode !== code.value) return
+      const mapped = mapKline(kl)
+      if (mapped.length) {
+        rawDailyKlineData.value = mapped
+        if (klineFrequency.value === 'day') rawPeriodKlineData.value = mapped.slice(-displayDays)
+      }
+      if (mapped.length < targetDays) scheduleDailyKlineRefresh(displayDays, targetDays)
+    } catch {
+      scheduleDailyKlineRefresh(displayDays, targetDays)
+    }
+  }, 2500)
+}
+
 async function reloadKline() {
-  const days = activeKlineRanges.value[klineRange.value]?.days || activeKlineRanges.value[0].days
+  const requestId = ++klineRequestId
+  const requestedCode = code.value
+  const requestedFrequency = klineFrequency.value
+  const requestedActiveFrequency = activeKlineFrequency.value
+  const requestedIntraday = isIntradayFrequency.value
+  const requestedRanges = activeKlineRanges.value
+  const days = requestedRanges[klineRange.value]?.days || requestedRanges[0].days
+  const isCurrentRequest = () => (
+    requestId === klineRequestId
+    && requestedCode === code.value
+    && requestedFrequency === klineFrequency.value
+  )
+
   klineLoading.value = true
   klineError.value = ''
+  if (requestedIntraday) {
+    rawKlineData.value = []
+  } else {
+    rawKlineData.value = []
+    rawPeriodKlineData.value = requestedFrequency === 'day'
+      ? rawDailyKlineData.value.slice(-days)
+      : []
+  }
   try {
-    if (isIntradayFrequency.value) {
-      const kl = await stockApi.intraday(code.value, activeKlineFrequency.value.frequency, days)
+    if (requestedIntraday) {
+      const kl = await stockApi.intraday(requestedCode, requestedActiveFrequency.frequency, days)
+      if (!isCurrentRequest()) return
       rawKlineData.value = mapIntradayKline(kl)
     } else {
-      const kl = await stockApi.kline(code.value, days, activeKlineFrequency.value.frequency)
+      const kl = await stockApi.kline(requestedCode, days, requestedActiveFrequency.frequency)
+      if (!isCurrentRequest()) return
       const mapped = mapKline(kl)
       rawPeriodKlineData.value = mapped
-      if (klineFrequency.value === 'day' && (mapped.length >= baselineDailyBars || rawDailyKlineData.value.length < baselineDailyBars)) {
+      if (requestedFrequency === 'day' && (mapped.length >= baselineDailyBars || rawDailyKlineData.value.length < baselineDailyBars)) {
         rawDailyKlineData.value = mapped
+      }
+      if (requestedFrequency === 'day' && mapped.length < Math.max(days, baselineDailyBars)) {
+        scheduleDailyKlineRefresh(days, Math.max(days, baselineDailyBars))
       }
     }
   } catch (e) {
+    if (!isCurrentRequest()) return
     klineError.value = friendlyError(e, { context: 'data' })
-    if (isIntradayFrequency.value) rawKlineData.value = []
-    else rawPeriodKlineData.value = []
+    if (requestedIntraday) {
+      rawKlineData.value = []
+    } else if (requestedFrequency === 'day' && rawDailyKlineData.value.length) {
+      rawPeriodKlineData.value = rawDailyKlineData.value.slice(-days)
+    } else {
+      rawPeriodKlineData.value = []
+    }
   } finally {
-    klineLoading.value = false
+    if (isCurrentRequest()) klineLoading.value = false
   }
 }
 
@@ -321,11 +382,13 @@ async function load() {
   loading.value = true
   errorMsg.value = ''
   aiText.value = ''
+  clearKlineRetry()
   try {
     const days = activeKlineRanges.value[klineRange.value]?.days || 120
+    const baselineDays = Math.max(days, baselineDailyBars)
     const [d, dailyKl, q] = await Promise.all([
       stockApi.detail(code.value),
-      stockApi.kline(code.value, Math.max(days, baselineDailyBars), 'd').catch(() => []),
+      stockApi.kline(code.value, baselineDays, 'd').catch(() => []),
       stockApi.quote(code.value).catch(() => null),
     ])
     detail.value = d
@@ -339,6 +402,7 @@ async function load() {
       rawKlineData.value = []
       await reloadKline()
     }
+    if (rawDailyKlineData.value.length < baselineDays) scheduleDailyKlineRefresh(days, baselineDays)
   } catch (e) {
     const status = e.response?.status
     if (status === 404) {
@@ -388,6 +452,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (quoteTimer) clearInterval(quoteTimer)
+  clearKlineRetry()
   aiAbort?.abort()
 })
 watch(code, load)
