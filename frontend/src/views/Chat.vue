@@ -163,7 +163,7 @@ const stageColor = (s) => ({
 
 <template>
   <Shell>
-    <div :style="{ flex: 1, display: 'grid', gridTemplateColumns: '240px 1fr 320px', overflow: 'hidden' }">
+    <div class="chat-workbench">
       <!-- Sidebar -->
       <div :style="{ background: A2.surface, padding: '14px', fontSize: '12px', overflow: 'auto', borderRight: `1px solid ${A2.borderHair}` }">
         <button :style="{ width: '100%', padding: '10px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', borderRadius: '8px', marginBottom: '16px', boxShadow: '0 2px 8px rgba(14,14,12,0.10)' }"
@@ -171,8 +171,8 @@ const stageColor = (s) => ({
           <Icon name="plus" :size="12" /> 新建对话
         </button>
 
-        <div v-if="!history.items.length" :style="{ fontSize: '11px', color: A2.textMuted, padding: '12px 10px', lineHeight: 1.6, textAlign: 'center' }">
-          下方输入框试试看吧 ↓
+        <div v-if="!history.items.length" :style="{ fontSize: '11px', color: A2.textMuted, padding: '10px', lineHeight: 1.55, textAlign: 'center', border: `1px dashed ${A2.borderHair}`, borderRadius: '6px', background: A2.bg }">
+          在中间输入目标开始筛选
         </div>
 
         <!-- 分组：今天 / 昨天 / 本周 / 更早 -->
@@ -213,14 +213,43 @@ const stageColor = (s) => ({
       </div>
 
       <!-- Main chat -->
-      <div :style="{ background: A2.bg, display: 'flex', flexDirection: 'column', overflow: 'hidden' }">
-        <div :style="{ flex: 1, overflow: 'auto', padding: '24px 36px' }">
+      <div :style="{ background: A2.bg, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }">
+        <!-- Input -->
+        <div :style="{ borderBottom: `1px solid ${A2.borderHair}`, padding: '12px 16px', background: A2.surface }">
+          <div :style="{ border: `1px solid ${A2.borderHair}`, padding: '10px 12px', background: A2.surfaceElev, borderRadius: '8px', boxShadow: A2.shadowMd }">
+            <textarea v-model="input"
+                      @keydown.enter.exact.prevent="send"
+                      :disabled="isStreaming"
+                      placeholder="例如：找出 PE 低于 15、ROE > 15%、近三年净利润复合增速 > 20% 的消费股…"
+                      :style="{ width: '100%', height: '36px', border: 'none', outline: 'none', fontSize: '13px', fontFamily: 'IBM Plex Sans, Noto Sans SC, sans-serif', resize: 'none', background: 'transparent', opacity: isStreaming ? 0.6 : 1 }" />
+            <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
+              <span v-if="!aiStatus.isUp" :style="{ fontSize: '10px', color: A2.amber, display: 'flex', alignItems: 'center', gap: '4px' }">
+                <span :style="{ width: '6px', height: '6px', borderRadius: '50%', background: A2.amber }" />
+                AI 服务暂时不可用
+              </span>
+              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '解析中…' : phase === 'screening' ? '执行中…' : 'Stream · SSE' }}</span>
+              <div style="flex:1" />
+              <button v-if="isStreaming" @click="stop"
+                      :style="{ padding: '7px 14px', background: '#3F3D38', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
+                <Icon name="x" :size="12" /> 停止
+              </button>
+              <button v-else @click="send"
+                      :disabled="!aiStatus.isUp"
+                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}）` : ''"
+                      :style="{ padding: '7px 14px', background: !aiStatus.isUp ? '#B8B4A8' : A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: !aiStatus.isUp ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: !aiStatus.isUp ? 0.7 : 1 }">
+                发送 <Icon name="send" :size="12" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div :style="{ flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
           <!-- AI 离线时的状态条 -->
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
             <span style="flex:1">
               <strong>千问 AI 服务暂时不可达</strong>
-              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 你可以试试结构化筛选（左侧"因子"标签）</span>
+              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 可以切到「策略」页使用结构化条件筛选</span>
             </span>
             <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">
               <Icon name="refresh" :size="11" /> 重新检测
@@ -228,12 +257,40 @@ const stageColor = (s) => ({
           </div>
 
           <!-- 起始引导 -->
-          <div v-if="!lastQuery" :style="{ textAlign: 'center', padding: '60px 0', color: A2.textMuted }">
-            <div :style="{ display: 'inline-grid', placeItems: 'center', width: '52px', height: '52px', borderRadius: '50%', background: A2.qwenSoft, color: A2.qwen, marginBottom: '12px' }">
-              <Icon name="sparkle" :size="24" />
+          <div v-if="!lastQuery" class="starter-panel">
+            <div :style="{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: '12px', alignItems: 'center' }">
+              <div :style="{ display: 'grid', placeItems: 'center', width: '40px', height: '40px', borderRadius: '8px', background: A2.qwenSoft, color: A2.qwen }">
+                <Icon name="sparkle" :size="20" />
+              </div>
+              <div>
+                <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">用自然语言生成筛选条件</div>
+                <div :style="{ fontSize: '12px', color: A2.textMuted }">输入目标后，系统会解析条件、执行本地筛选，并返回真实股票池结果。</div>
+              </div>
             </div>
-            <div :style="{ fontSize: '14px', fontWeight: 600, color: A2.text, marginBottom: '4px' }">用自然语言筛选股票</div>
-            <div :style="{ fontSize: '12px' }">例如：找出 PE 低于 15、ROE 大于 15% 的消费股</div>
+            <div class="starter-grid">
+              <button v-for="t in presetPrompts" :key="t" type="button" @click="!isStreaming && pickPreset(t)">
+                {{ t }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="!lastQuery" class="empty-result-preview">
+            <div class="preview-head">
+              <strong>筛选结果区</strong>
+              <span>运行后展示真实股票池，不生成虚拟数据</span>
+            </div>
+            <div class="preview-table">
+              <div>代码 / 名称</div>
+              <div>行业</div>
+              <div>价格</div>
+              <div>PE</div>
+              <div>ROE</div>
+              <div>股息率</div>
+              <div>命中原因</div>
+            </div>
+            <div class="preview-empty">
+              等待输入筛选目标
+            </div>
           </div>
 
           <!-- User msg -->
@@ -357,35 +414,6 @@ const stageColor = (s) => ({
             </div>
           </template>
         </div>
-
-        <!-- Input -->
-        <div :style="{ borderTop: `1px solid ${A2.borderHair}`, padding: '20px', background: A2.surface }">
-          <div :style="{ border: `1px solid ${A2.borderHair}`, padding: '12px', background: A2.surface, borderRadius: '12px', boxShadow: A2.shadowMd }">
-            <textarea v-model="input"
-                      @keydown.enter.exact.prevent="send"
-                      :disabled="isStreaming"
-                      placeholder="例如：找出 PE 低于 15、ROE > 15%、近三年净利润复合增速 > 20% 的消费股…"
-                      :style="{ width: '100%', height: '40px', border: 'none', outline: 'none', fontSize: '13.5px', fontFamily: 'IBM Plex Sans, Noto Sans SC, sans-serif', resize: 'none', background: 'transparent', opacity: isStreaming ? 0.6 : 1 }" />
-            <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
-              <span v-if="!aiStatus.isUp" :style="{ fontSize: '10px', color: A2.amber, display: 'flex', alignItems: 'center', gap: '4px' }">
-                <span :style="{ width: '6px', height: '6px', borderRadius: '50%', background: A2.amber }" />
-                AI 服务暂时不可用
-              </span>
-              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '解析中…' : phase === 'screening' ? '执行中…' : 'Stream · SSE' }}</span>
-              <div style="flex:1" />
-              <button v-if="isStreaming" @click="stop"
-                      :style="{ padding: '7px 14px', background: '#3F3D38', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
-                <Icon name="x" :size="12" /> 停止
-              </button>
-              <button v-else @click="send"
-                      :disabled="!aiStatus.isUp"
-                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}）` : ''"
-                      :style="{ padding: '7px 14px', background: !aiStatus.isUp ? '#B8B4A8' : A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: !aiStatus.isUp ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '7px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: !aiStatus.isUp ? 0.7 : 1 }">
-                发送 <Icon name="send" :size="12" />
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- Right inspector：实时阶段时间轴 -->
@@ -431,6 +459,99 @@ const stageColor = (s) => ({
 </template>
 
 <style scoped>
+.chat-workbench {
+  height: calc(100vh - 114px);
+  min-height: 620px;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 320px;
+  overflow: hidden;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
+}
+
+.starter-panel {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #F7F7F7;
+}
+
+.starter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.starter-grid button {
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.starter-grid button:hover {
+  border-color: #D8D8D8;
+  color: #111111;
+  background: #F5F5F5;
+}
+
+.empty-result-preview {
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FFFFFF;
+  overflow: hidden;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #EDEDED;
+  background: #FBFBF9;
+}
+
+.preview-head strong {
+  font-size: 12.5px;
+  color: #111111;
+}
+
+.preview-head span {
+  font-size: 11px;
+  color: #71717A;
+}
+
+.preview-table {
+  display: grid;
+  grid-template-columns: minmax(130px, 1.4fr) 90px 72px 64px 64px 72px minmax(150px, 1.2fr);
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #EDEDED;
+  color: #71717A;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.preview-empty {
+  display: grid;
+  place-items: center;
+  min-height: 132px;
+  color: #A1A1AA;
+  font-size: 12px;
+  background:
+    linear-gradient(#F5F5F5 1px, transparent 1px) 0 0 / 100% 36px;
+}
+
 .history-item {
   position: relative;
   background: transparent;
@@ -462,6 +583,35 @@ const stageColor = (s) => ({
 }
 .history-item:hover .history-del { display: inline-flex; }
 .history-del:hover { background: rgba(200, 49, 42, 0.10); color: #C8312A; }
+
+@media (max-width: 1100px) {
+  .chat-workbench {
+    grid-template-columns: 210px minmax(0, 1fr) 260px;
+  }
+}
+
+@media (max-width: 900px) {
+  .chat-workbench {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+  .chat-workbench > :last-child {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .chat-workbench {
+    height: auto;
+    min-height: calc(100vh - 84px);
+    grid-template-columns: 1fr;
+  }
+  .chat-workbench > :first-child {
+    display: none;
+  }
+  .starter-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
 
 <style scoped>
