@@ -62,6 +62,11 @@ def test_chat_agent_explains_previous_result_without_rescreen(db, seed_stocks, m
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("explain_result should not execute screen")
 
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
     context = {
         "last_result": {
@@ -85,6 +90,11 @@ def test_chat_agent_asks_when_explain_has_no_previous_result(db, seed_stocks, mo
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("missing-context explanation should not execute screen")
 
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     res = strategy_selector.run_chat_agent(db, "为什么这些股票会被选出来？", context={}, limit=10)
@@ -98,6 +108,11 @@ def test_chat_agent_asks_when_confirmation_has_no_previous_conditions(db, seed_s
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("confirmation without context should not execute screen")
 
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     res = strategy_selector.run_chat_agent(db, "可以，做吧", context={}, limit=10)
@@ -107,7 +122,12 @@ def test_chat_agent_asks_when_confirmation_has_no_previous_conditions(db, seed_s
     assert "还没有可以直接执行的上一轮条件" in res.answer
 
 
-def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, seed_stocks):
+def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     context = {
         "last_plan": {
             "tool": "strategy_design",
@@ -209,7 +229,12 @@ def test_chat_agent_uses_model_strategy_design_copy(db, seed_stocks, monkeypatch
     assert "按行业调整阈值" in res.answer
 
 
-def test_chat_agent_tightens_previous_conditions(db, seed_stocks):
+def test_chat_agent_tightens_previous_conditions(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     context = {
         "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "roe", "sort_desc": True},
         "last_conditions": [
@@ -229,7 +254,12 @@ def test_chat_agent_tightens_previous_conditions(db, seed_stocks):
     assert any(call.name == "condition_parser" and call.params["mode"] == "收紧" for call in res.tool_calls)
 
 
-def test_chat_agent_relaxes_previous_conditions(db, seed_stocks):
+def test_chat_agent_relaxes_previous_conditions(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     context = {
         "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "roe", "sort_desc": True},
         "last_conditions": [
@@ -248,7 +278,12 @@ def test_chat_agent_relaxes_previous_conditions(db, seed_stocks):
     assert res.screen_result is not None
 
 
-def test_chat_agent_sorts_previous_conditions(db, seed_stocks):
+def test_chat_agent_sorts_previous_conditions(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     context = {
         "last_plan": {"tool": "stock_screen", "logic": "AND"},
         "last_conditions": [{"field": "pe", "op": "lt", "value": 500}],
@@ -263,7 +298,12 @@ def test_chat_agent_sorts_previous_conditions(db, seed_stocks):
     assert any(call.name == "result_sort" for call in res.tool_calls)
 
 
-def test_chat_agent_next_page_uses_previous_offset(db, seed_stocks):
+def test_chat_agent_next_page_uses_previous_offset(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     context = {
         "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "score", "sort_desc": True},
         "last_conditions": [{"field": "pe", "op": "lt", "value": 500}],
@@ -288,6 +328,11 @@ def test_chat_agent_adjustment_without_context_asks_first(db, seed_stocks, monke
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("adjustment without context must not execute screen")
 
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     res = strategy_selector.run_chat_agent(db, "再严格一点", context={}, limit=10)

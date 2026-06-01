@@ -151,7 +151,7 @@ const filterGroups = computed(() => {
   }
   const map = {
     balanced: [
-      { cat: '基础', items: [{ l: '股票池', v: '全市场' }, { l: '数据', v: '最近交易日' }] },
+      { cat: '数据范围', items: [{ l: '股票池', v: '全市场' }, { l: '数据日期', v: '最近交易日' }] },
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '0 — 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '不限制' }] },
     ],
@@ -165,7 +165,7 @@ const filterGroups = computed(() => {
       { cat: '规模', items: [{ l: '总市值', v: '> 100 亿' }] },
     ],
     all: [
-      { cat: '基础', items: [{ l: '条件', v: '全部放宽' }] },
+      { cat: '查询范围', items: [{ l: '条件', v: '用户明确要求查看全部股票' }] },
       { cat: '排序', items: [{ l: '字段', v: '现价 / 代码' }] },
     ],
   }
@@ -212,10 +212,10 @@ const resultSubtitle = computed(() => {
     return agentContext.value?.query || '本轮智能筛选'
   }
   const map = {
-    balanced: '全市场基础视图',
-    value: '价值因子 · PE + ROE',
-    sized: '大市值 · 按市值排序',
-    all: '全部股票 · 已放宽条件',
+    balanced: 'PE 0—500 的全市场筛选',
+    value: 'PE 0—80 且 ROE > 5%',
+    sized: '总市值 > 100 亿，按市值排序',
+    all: '用户明确要求查看全部股票',
   }
   return map[filterMode.value] || '等待筛选条件'
 })
@@ -694,7 +694,9 @@ watch(
                   <span class="empty-extra">当前条件可能依赖缺失字段，建议先放宽规模或估值条件</span>
                 </template>
               </NEmpty>
-              <NButton size="small" type="primary" secondary @click="applyMode('all')">放宽全部条件</NButton>
+              <NButton size="small" type="primary" secondary @click="filterMode === 'agent' ? backToAgentChat() : router.push('/chat')">
+                回到智能筛选
+              </NButton>
             </div>
           </template>
         </NDataTable>

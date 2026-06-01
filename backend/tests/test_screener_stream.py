@@ -20,6 +20,11 @@ def test_nl_stream_design_request_skips_ai_and_screening(db, seed_stocks, monkey
     def fail_stream_call(_prompt):
         raise AssertionError("strategy design should not stream nl_to_filter")
 
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     monkeypatch.setattr(qwen_client, "stream_call", fail_stream_call)
 
     client = TestClient(app)
@@ -43,7 +48,12 @@ def test_nl_stream_design_request_skips_ai_and_screening(db, seed_stocks, monkey
     assert "先不执行筛选" in design["answer"]
 
 
-def test_nl_stream_clarification_request_skips_screening(db, seed_stocks):
+def test_nl_stream_clarification_request_skips_screening(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -64,7 +74,12 @@ def test_nl_stream_clarification_request_skips_screening(db, seed_stocks):
     assert "我先不筛股票" in agent["answer"]
 
 
-def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks):
+def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -85,7 +100,12 @@ def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks)
     assert "还没有可以直接执行的上一轮条件" in agent["answer"]
 
 
-def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks):
+def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -119,7 +139,12 @@ def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stock
     assert any(call["name"] == "stock_screen" for call in result["tool_calls"])
 
 
-def test_nl_stream_adjusts_previous_conditions(db, seed_stocks):
+def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -149,7 +174,12 @@ def test_nl_stream_adjusts_previous_conditions(db, seed_stocks):
     assert any(event.get("tool_call", {}).get("name") == "condition_parser" for event in events)
 
 
-def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks):
+def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -169,7 +199,12 @@ def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks):
     assert "没有上一轮条件" in agent["answer"]
 
 
-def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks):
+def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -420,8 +455,13 @@ def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
     assert agent["plan"]["ai_used"] is True
 
 
-def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks):
+def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypatch):
     """Verify truthful SSE stage text even with local fallback."""
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
     client = TestClient(app)
     with client.stream(
         "POST",

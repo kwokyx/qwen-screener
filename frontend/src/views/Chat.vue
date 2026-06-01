@@ -644,6 +644,11 @@ const stageColor = (s) => ({
           工具：{{ screenMeta.tool_label || screenMeta.tool || 'Agent' }}<br />
           状态：{{ result ? `命中 ${result.total} 只` : (isTextOnlyAgent ? '未执行筛选' : '已完成') }}
         </div>
+
+        <div class="risk-note">
+          <Icon name="shield" :size="12" :color="A2.textMuted" />
+          <span>仅供研究参考，不构成投资建议。</span>
+        </div>
       </div>
     </div>
   </Shell>
@@ -1183,6 +1188,20 @@ const stageColor = (s) => ({
   word-break: break-word;
 }
 
+.risk-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #71717A;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 @media (max-width: 1100px) {
   .chat-workbench {
     grid-template-columns: 210px minmax(0, 1fr) 260px;
@@ -1200,7 +1219,7 @@ const stageColor = (s) => ({
 
 @media (max-width: 768px) {
   .chat-workbench {
-    height: auto;
+    height: calc(100vh - 84px);
     min-height: calc(100vh - 84px);
     grid-template-columns: 1fr;
   }
