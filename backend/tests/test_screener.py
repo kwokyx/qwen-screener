@@ -162,6 +162,27 @@ def test_unknown_field_raises(db, seed_stocks):
         _screen(db, conditions=[FilterCondition(field="bogus", op="eq", value=1)])
 
 
+def test_unknown_sort_field_raises(db, seed_stocks):
+    """未知排序字段不能静默回退，避免模型参数错误被掩盖。"""
+    import pytest
+    with pytest.raises(ValueError, match="不支持的排序字段"):
+        _screen(db, conditions=[], sort_by="not_exists")
+
+
+def test_string_field_rejects_numeric_operator(db, seed_stocks):
+    """行业字段仅允许字符串 eq/in。"""
+    import pytest
+    with pytest.raises(ValueError, match="industry 仅支持"):
+        _screen(db, conditions=[FilterCondition(field="industry", op="gt", value=1)])
+
+
+def test_numeric_field_rejects_string_threshold(db, seed_stocks):
+    """数值字段不能接收字符串阈值。"""
+    import pytest
+    with pytest.raises(ValueError, match="pe 需要数字阈值"):
+        _screen(db, conditions=[FilterCondition(field="pe", op="lt", value="15")])
+
+
 def test_result_includes_latest_data_context(db, seed_stocks):
     """结果携带最新交易日、上一日收盘和可展示字段，前端不用再猜数据时间。"""
     res = _screen(db, conditions=[FilterCondition(field="industry", op="eq", value="银行")])

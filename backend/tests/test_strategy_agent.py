@@ -1,16 +1,18 @@
 from app.schemas.screener import FilterCondition, ScreenRequest
 from app.schemas.strategy import StrategyAgentPlan, StrategyAgentResponse
 from app.services import strategy_selector
+from app.services.qwen_client.agent_planner import AgentPlanResult
 
 
 def test_agent_design_request_does_not_execute_screen(db, seed_stocks, monkeypatch):
-    def fail_ai_status():
-        raise AssertionError("design-only request should not probe AI health")
-
     def fail_parse(_query):
         raise AssertionError("design-only request should not parse filters")
 
-    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
     monkeypatch.setattr(strategy_selector.qwen_client, "parse_nl_query", fail_parse)
 
     res = strategy_selector.run_agent_selection(db, "帮我设计一个稳健的选股策略，列出量化条件", limit=10)
@@ -37,13 +39,14 @@ def test_agent_design_request_does_not_execute_screen(db, seed_stocks, monkeypat
 
 
 def test_agent_clarifies_vague_query(db, seed_stocks, monkeypatch):
-    def fail_ai_status():
-        raise AssertionError("vague query should not probe AI health")
-
     def fail_parse(_query):
         raise AssertionError("vague query should not parse filters")
 
-    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
     monkeypatch.setattr(strategy_selector.qwen_client, "parse_nl_query", fail_parse)
 
     res = strategy_selector.run_agent_selection(db, "帮我选点好股票", limit=10)
@@ -128,6 +131,82 @@ def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, s
     assert "沿用上一轮结构化条件" in res.tool_trace
     assert "上一轮策略条件" in res.answer
     assert any(call.name == "stock_screen" and call.result["total"] == 2 for call in res.tool_calls)
+
+
+def test_chat_agent_prefers_model_fc_for_confirmation_when_available(db, seed_stocks, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    def plan_agent_turn(query, context=None):
+        captured["query"] = query
+        captured["context"] = context
+        return AgentPlanResult(
+            tool="stock_screen",
+            tool_label="结构化股票筛选",
+            reasoning="AI 沿用上一轮策略条件",
+            conditions=[
+                FilterCondition(field="pe", op="lt", value=20),
+                FilterCondition(field="roe", op="gt", value=20),
+            ],
+            sort_by="roe",
+            sort_desc=True,
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", plan_agent_turn)
+    context = {
+        "last_plan": {"tool": "strategy_design", "logic": "AND"},
+        "last_conditions": [
+            {"field": "pe", "op": "lt", "value": 20},
+            {"field": "roe", "op": "gt", "value": 20},
+        ],
+    }
+
+    res = strategy_selector.run_chat_agent(db, "可以，做吧", context=context, limit=10)
+
+    assert captured == {"query": "可以，做吧", "context": context}
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.ai_used is True
+    assert res.screen_result is not None
+    assert {item.code for item in res.screen_result.items} == {"000333.SZ", "000596.SZ"}
+
+
+def test_chat_agent_uses_model_strategy_design_copy(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("strategy_design should not execute screen")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="strategy_design",
+            tool_label="策略设计",
+            reasoning="AI 先设计策略",
+            extra={
+                "quantitative_conditions": ["ROE 不低于 18%", "PE 低于 20"],
+                "framework": "质量与估值并重",
+                "notes": "按行业调整阈值",
+            },
+        ),
+    )
+
+    res = strategy_selector.run_chat_agent(db, "帮我设计一个稳健策略", context={}, limit=10)
+
+    assert res.plan.tool == "strategy_design"
+    assert res.plan.ai_used is True
+    assert res.screen_result is None
+    assert "ROE 不低于 18%" in res.answer
+    assert "质量与估值并重" in res.answer
+    assert "按行业调整阈值" in res.answer
 
 
 def test_chat_agent_tightens_previous_conditions(db, seed_stocks):
@@ -218,7 +297,7 @@ def test_chat_agent_adjustment_without_context_asks_first(db, seed_stocks, monke
     assert "没有上一轮条件" in res.answer
 
 
-def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkeypatch):
+def test_agent_uses_model_planner_then_executes_local_screen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -226,8 +305,11 @@ def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkey
     )
     monkeypatch.setattr(
         strategy_selector.qwen_client,
-        "parse_nl_query",
-        lambda _query: ScreenRequest(
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="stock_screen",
+            tool_label="结构化股票筛选",
+            reasoning="AI 解析测试",
             conditions=[
                 FilterCondition(field="industry", op="in", value=["半导体"]),
                 FilterCondition(field="market_cap", op="gt", value=500),
@@ -245,11 +327,11 @@ def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkey
     assert res.screen_result is not None
     assert res.screen_result.total == 1
     assert res.screen_result.items[0].code == "688981.SH"
-    assert res.tool_trace == ["调用 screener_engine.screen(conditions=2, limit=10)"]
+    assert res.tool_trace == ["模型 FC Agent 已选择工具并校验通过", "调用 screener_engine.screen(conditions=2, limit=10)"]
     assert "中芯国际" in res.answer
 
 
-def test_agent_keeps_local_plan_when_ai_returns_empty_conditions(db, seed_stocks, monkeypatch):
+def test_agent_keeps_local_plan_when_model_returns_empty_conditions(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -257,8 +339,13 @@ def test_agent_keeps_local_plan_when_ai_returns_empty_conditions(db, seed_stocks
     )
     monkeypatch.setattr(
         strategy_selector.qwen_client,
-        "parse_nl_query",
-        lambda _query: ScreenRequest(conditions=[]),
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="stock_screen",
+            tool_label="结构化股票筛选",
+            reasoning="empty test",
+            conditions=[],
+        ),
     )
 
     res = strategy_selector.run_agent_selection(db, "低估值银行", limit=10)
@@ -268,7 +355,7 @@ def test_agent_keeps_local_plan_when_ai_returns_empty_conditions(db, seed_stocks
     assert res.plan.condition_labels == ["市盈率低于15", "市净率低于2", "行业包含银行"]
     assert res.screen_result is not None
     assert res.screen_result.total == 1
-    assert "AI 未返回有效筛选条件" in res.warnings[0]
+    assert "模型未返回有效筛选条件" in res.warnings[0]
 
 
 def test_agent_allows_explicit_all_stocks_query(db, seed_stocks, monkeypatch):
@@ -426,3 +513,205 @@ def test_list_agent_tools_documents_screen_fields():
     assert "收益回测" in " ".join(by_id["strategy_select"].data_notes)
     assert "上一轮结果" in by_id["explain_result"].description
     assert "不调用 screener_engine" in " ".join(by_id["ask_clarification"].data_notes)
+
+
+# ---------------------------------------------------------------------------
+# Model FC Agent planner integration tests
+# ---------------------------------------------------------------------------
+
+class TestModelPlannerIntegration:
+    """Tests for model-first routing via plan_agent_turn in plan_agent_selection."""
+
+    def test_model_chooses_strategy_design_does_not_screen(self, db, seed_stocks, monkeypatch):
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="strategy_design",
+                tool_label="策略设计",
+                reasoning="设计请求",
+                extra={"quantitative_conditions": ["ROE>15", "PE<25"]},
+            ),
+        )
+
+        res = strategy_selector.run_agent_selection(db, "帮我设计一个稳健的选股策略", limit=10)
+
+        assert res.plan.tool == "strategy_design"
+        assert res.plan.ai_used is True
+        assert res.screen_result is None
+        assert res.strategy_result is None
+
+    def test_model_chooses_strategy_select_executes_strategy(self, db, seed_stocks, monkeypatch):
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="strategy_select",
+                tool_label="策略选股",
+                reasoning="突破策略",
+                strategy_id="turtle_breakout",
+                limit=10,
+            ),
+        )
+
+        res = strategy_selector.run_agent_selection(db, "找最近强势突破的股票", limit=10)
+
+        assert res.plan.tool == "strategy_select"
+        assert res.plan.ai_used is True
+        assert res.plan.strategy_id == "turtle_breakout"
+        assert res.strategy_result is not None
+
+    def test_model_explain_without_context_downgrades_to_clarification(self, db, seed_stocks, monkeypatch):
+        def fail_screen(*_args, **_kwargs):
+            raise AssertionError("explain_result should not execute screen")
+
+        monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="explain_result",
+                tool_label="结果解释",
+                reasoning="解释上一轮",
+            ),
+        )
+
+        res = strategy_selector.run_agent_selection(db, "为什么这些股票会被选出来？", limit=10)
+
+        assert res.plan.tool == "ask_clarification"
+        assert res.plan.ai_used is True
+        assert res.screen_result is None
+        assert "还没有可解释的上一轮股票结果" in res.answer
+
+    def test_model_chooses_ask_clarification_does_not_screen(self, db, seed_stocks, monkeypatch):
+        def fail_screen(*_args, **_kwargs):
+            raise AssertionError("ask_clarification should not execute screen")
+
+        monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="ask_clarification",
+                tool_label="补充追问",
+                reasoning="需求模糊",
+            ),
+        )
+
+        res = strategy_selector.run_agent_selection(db, "帮我选点好股票", limit=10)
+
+        assert res.plan.tool == "ask_clarification"
+        assert res.plan.ai_used is True
+        assert res.screen_result is None
+        assert res.strategy_result is None
+        assert "我先不筛股票" in res.answer
+
+    def test_model_fallback_on_invalid_tool_name(self, db, seed_stocks, monkeypatch):
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: None,  # simulate failure
+        )
+
+        res = strategy_selector.run_agent_selection(db, "低估值银行", limit=10)
+
+        assert res.plan.tool == "stock_screen"
+        assert res.plan.ai_used is False
+        assert "模型未生成有效规划" in res.warnings[0]
+        assert res.screen_result is not None
+
+    def test_model_fallback_when_unavailable(self, db, seed_stocks, monkeypatch):
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": False, "reason": "模型不可用: test"},
+        )
+
+        def fail_plan(_query, _context=None):
+            raise AssertionError("plan_agent_turn should not be called when AI unavailable")
+
+        monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+
+        res = strategy_selector.run_agent_selection(db, "半导体行业里的大市值龙头", limit=10)
+
+        assert res.plan.tool == "stock_screen"
+        assert res.plan.ai_used is False
+        assert res.plan.condition_labels == ["总市值大于500", "行业包含半导体"]
+        assert res.screen_result is not None
+        assert "AI 服务已配置但当前不可用" in res.warnings[0]
+
+    def test_model_allows_explicit_all_stocks_empty_conditions(self, db, seed_stocks, monkeypatch):
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="全市场查询",
+                conditions=[],
+                sort_by="market_cap",
+                sort_desc=True,
+            ),
+        )
+
+        res = strategy_selector.run_agent_selection(db, "查看全市场股票", limit=10)
+
+        assert res.plan.tool == "stock_screen"
+        assert res.plan.ai_used is True
+        assert res.plan.conditions == []
+        assert res.screen_result is not None
+        assert res.screen_result.total == 5
+
+    def test_model_blocked_implicit_empty_conditions(self, db, seed_stocks, monkeypatch):
+        """Model returns empty conditions for non-explicit query → guard blocks."""
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="empty",
+                conditions=[],
+            ),
+        )
+
+        res = strategy_selector.run_agent_selection(db, "随便看看", limit=10)
+
+        assert res.plan.tool == "ask_clarification"
+        assert res.screen_result is None
+        assert any("已阻止无条件全市场筛选" in w for w in res.warnings)

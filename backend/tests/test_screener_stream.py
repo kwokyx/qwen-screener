@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from app.schemas.screener import FilterCondition, ScreenRequest
 from app.main import app
 from app.services import qwen_client, strategy_selector
+from app.services.qwen_client.agent_planner import AgentPlanResult
 
 
 def _events(body: str) -> list[dict]:
@@ -235,7 +236,7 @@ def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):
     assert agent["result"]["total"] >= 0
 
 
-def test_nl_stream_stock_screen_uses_agent_parser(db, seed_stocks, monkeypatch):
+def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -243,8 +244,11 @@ def test_nl_stream_stock_screen_uses_agent_parser(db, seed_stocks, monkeypatch):
     )
     monkeypatch.setattr(
         strategy_selector.qwen_client,
-        "parse_nl_query",
-        lambda _query: ScreenRequest(
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="stock_screen",
+            tool_label="结构化股票筛选",
+            reasoning="AI 解析测试",
             conditions=[
                 FilterCondition(field="industry", op="in", value=["银行"]),
                 FilterCondition(field="pe", op="lt", value=15),
@@ -271,10 +275,168 @@ def test_nl_stream_stock_screen_uses_agent_parser(db, seed_stocks, monkeypatch):
     assert "tool_call" in event_types
     assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
 
+    thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
+    assert any("已选择工具" in t for t in thinking_texts)
+    assert any("参数校验已完成" in t for t in thinking_texts)
+    assert any("正在执行筛选" in t for t in thinking_texts)
+    assert any("已生成结果" in t for t in thinking_texts)
+
     parsed = next(event for event in events if event["type"] == "parsed")
     result = next(event for event in events if event["type"] == "result")
     assert parsed["plan"]["tool"] == "stock_screen"
+    assert parsed["plan"]["ai_used"] is True
     assert parsed["tool_calls"]
     assert result["total"] == 1
     assert result["items"][0]["code"] == "600036.SH"
     assert any(call["name"] == "stock_screen" and call["result"]["total"] == 1 for call in result["tool_calls"])
+
+
+def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="strategy_design",
+            tool_label="策略设计",
+            reasoning="设计请求",
+            extra={"quantitative_conditions": ["ROE>15", "PE<25"]},
+        ),
+    )
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={"query": "帮我设计一个稳健的选股策略"},
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert "design" in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+
+    thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
+    assert any("已选择工具" in t for t in thinking_texts)
+    assert any("参数校验已完成" in t for t in thinking_texts)
+    assert any("正在生成策略" in t for t in thinking_texts)
+
+    design = next(event for event in events if event["type"] == "design")
+    assert design["plan"]["tool"] == "strategy_design"
+    assert design["plan"]["ai_used"] is True
+
+
+def test_nl_stream_model_chooses_explain_result_skips_screening(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="explain_result",
+            tool_label="结果解释",
+            reasoning="解释上一轮",
+        ),
+    )
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={
+            "query": "为什么这些股票会被选出来？",
+            "context": {
+                "last_result": {
+                    "total": 2,
+                    "items": [{"code": "600036.SH", "name": "招行"}],
+                    "parsed_conditions": [{"field": "pe", "op": "lt", "value": 15}],
+                }
+            },
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert "agent" in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+
+    thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
+    assert any("正在解释结果" in t for t in thinking_texts)
+
+    agent = next(event for event in events if event["type"] == "agent")
+    assert agent["plan"]["tool"] == "explain_result"
+    assert agent["plan"]["ai_used"] is True
+
+
+def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_agent_turn",
+        lambda _query, _context=None: AgentPlanResult(
+            tool="strategy_select",
+            tool_label="策略选股",
+            reasoning="突破策略",
+            strategy_id="turtle_breakout",
+            limit=5,
+        ),
+    )
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={"query": "找最近强势突破的股票"},
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert "planned" in event_types
+    assert "screening" in event_types
+    assert "agent" in event_types
+    assert event_types.index("planned") < event_types.index("screening") < event_types.index("agent")
+
+    agent = next(event for event in events if event["type"] == "agent")
+    assert agent["plan"]["tool"] == "strategy_select"
+    assert agent["plan"]["ai_used"] is True
+
+
+def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks):
+    """Verify truthful SSE stage text even with local fallback."""
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={"query": "低估值银行"},
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
+    assert any("正在判断需求" in t for t in thinking_texts)
+    assert any("已选择工具" in t for t in thinking_texts)
+    assert any("参数校验已完成" in t for t in thinking_texts)
+    assert any("正在执行筛选" in t for t in thinking_texts)
+    assert any("已生成结果" in t for t in thinking_texts)
+    # Should mention local rule source
+    assert any("本地规则" in t for t in thinking_texts)
