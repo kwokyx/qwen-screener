@@ -183,32 +183,14 @@ const toolStatusColor = (status) => ({
   skipped: A2.textMuted,
   failed: A2.down,
 }[status] || A2.textDim)
-function fmtToolValue(value) {
-  if (value == null || value === '') return ''
-  if (Array.isArray(value)) return value.join('、')
-  if (typeof value === 'boolean') return value ? '是' : '否'
-  if (typeof value === 'object') {
-    const entries = Object.entries(value).filter(([, v]) => v != null && v !== '')
-    return entries.slice(0, 3).map(([k, v]) => `${k}:${fmtToolValue(v)}`).join(' · ')
-  }
-  return String(value)
-}
 function toolParamText(call) {
-  const params = call?.params || {}
   const result = call?.result || {}
-  const parts = []
-  if (params.conditions != null) parts.push(`条件 ${params.conditions}`)
-  if (result.conditions != null) parts.push(`条件 ${result.conditions}`)
-  if (params.sort_by) parts.push(`排序 ${params.sort_by}`)
-  if (params.offset != null) parts.push(`offset ${params.offset}`)
-  if (result.total != null) parts.push(`命中 ${result.total}`)
-  if (result.returned != null) parts.push(`返回 ${result.returned}`)
-  if (!parts.length && call?.message) parts.push(call.message)
-  if (!parts.length) {
-    const raw = fmtToolValue(params) || fmtToolValue(result)
-    if (raw) parts.push(raw)
-  }
-  return parts.join(' · ')
+  if (call?.name === 'stock_screen' && result.total != null) return `命中 ${result.total} 只`
+  if (call?.name === 'strategy_select' && result.total != null) return `命中 ${result.total} 只`
+  if (call?.name === 'condition_parser') return call.message || '已生成筛选条件'
+  if (call?.name === 'result_sort') return call.message || '已调整结果范围'
+  if (call?.message) return call.message.length > 42 ? `${call.message.slice(0, 42)}…` : call.message
+  return ''
 }
 
 async function send() {
@@ -656,17 +638,8 @@ const stageColor = (s) => ({
 
         <div v-if="screenMeta" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
           <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">本轮信息</div>
-          <template v-if="screenMeta.mode !== 'stock_screen'">
-            工具：{{ screenMeta.tool_label || screenMeta.tool }}<br />
-            筛选：{{ result ? '已返回结果' : '未执行' }}
-          </template>
-          <template v-else>
-            工具：{{ screenMeta.tool_label || '股票筛选' }}<br />
-            条件：{{ parsedConditions.length }} 个<br />
-            排序：{{ screenMeta.sort_by || '默认' }}<br />
-            偏移：{{ screenMeta.offset || 0 }}<br />
-            上限：{{ screenMeta.limit }}
-          </template>
+          工具：{{ screenMeta.tool_label || screenMeta.tool || 'Agent' }}<br />
+          状态：{{ result ? `命中 ${result.total} 只` : (isTextOnlyAgent ? '未执行筛选' : '已完成') }}
         </div>
       </div>
     </div>
