@@ -39,6 +39,31 @@ def test_chat_sessions_crud(db):
         assert lst[0]["items"][0]["code"] == "600036.SH"
         assert lst[0]["screen_meta"] == {"runtime_ms": 38}
 
+        # PUT 覆盖同一条会话，screen_meta.thread 用于保存多轮对话
+        update_payload = {
+            "query": "低估值高分红的银行股，继续执行",
+            "parsed_conditions": [{"field": "dividend_yield", "op": "gte", "value": 5}],
+            "items": [{"code": "000001.SZ", "name": "平安银行"}],
+            "total": 35,
+            "screen_meta": {
+                "session_title": "低估值高分红银行",
+                "thread": [
+                    {"query": "帮我设计低估值高分红银行策略", "agentAnswer": "先看估值和股息"},
+                    {"query": "可以，做吧", "result": {"items": [], "total": 35}},
+                ],
+            },
+        }
+        r = c.put(f"/api/v1/chat/sessions/{sid}", headers=h, json=update_payload)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["id"] == sid
+        assert data["query"] == update_payload["query"]
+        assert data["total"] == 35
+        assert len(data["screen_meta"]["thread"]) == 2
+
+        # PUT 不存在的 → 404
+        assert c.put("/api/v1/chat/sessions/999999", headers=h, json=payload).status_code == 404
+
         # DELETE 单条
         r = c.delete(f"/api/v1/chat/sessions/{sid}", headers=h)
         assert r.status_code == 204

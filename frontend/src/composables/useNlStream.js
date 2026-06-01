@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { streamNL } from '../api/screener'
 import { friendlyError } from '../shared/errors.js'
 
@@ -52,6 +52,17 @@ function loadCurrentThread() {
   }
 }
 
+function loadSessionThread(historyStore) {
+  const session = historyStore?.activeSession
+  if (!session?.turns?.length) return []
+  return session.turns.slice(-MAX_THREAD_TURNS).map(normalizeTurn)
+}
+
+function loadInitialThread(historyStore) {
+  const sessionThread = loadSessionThread(historyStore)
+  return sessionThread.length ? sessionThread : loadCurrentThread()
+}
+
 function persistCurrentThread(turns) {
   const payload = JSON.stringify(turns.slice(-MAX_THREAD_TURNS))
   try { sessionStorage.setItem(CURRENT_THREAD_KEY, payload) } catch { /* ignore storage quota */ }
@@ -79,7 +90,7 @@ function turnToContext(turn) {
  * NL 筛选 SSE 状态机：把 Chat.vue 的流式逻辑抽出来，便于测试和复用。
  *
  * 状态：idle → thinking → parsed → screening → done | error
- * @param {{add: function, get: function}} historyStore  pinia chatHistory store
+ * @param {{saveThread: function, get: function, activate: function, activeSession: object}} historyStore  pinia chatHistory store
  * @param {{onResult?: (codes: string[]) => void}} hooks  事件钩子（如懒加载 sparkline）
  */
 export function useNlStream(historyStore, hooks = {}) {
@@ -94,7 +105,7 @@ export function useNlStream(historyStore, hooks = {}) {
   const agentPlan = ref(null)
   const toolTrace = ref([])
   const errorMsg = ref('')
-  const thread = ref(loadCurrentThread())
+  const thread = ref(loadInitialThread(historyStore))
 
   // 各阶段时间戳，inspector 显示用时
   const tStart = ref(0)
@@ -152,6 +163,21 @@ export function useNlStream(historyStore, hooks = {}) {
     }
   }
 
+  function restoreSession(session) {
+    if (!session?.turns?.length) return false
+    const turns = session.turns.slice(-MAX_THREAD_TURNS).map(normalizeTurn)
+    if (!turns.length) return false
+    reset()
+    thread.value = turns
+    persistCurrentThread(thread.value)
+    applyTurnToCurrent(turns[turns.length - 1])
+    if (hooks.onResult) {
+      const codes = [...new Set(turns.flatMap((turn) => (turn.result?.items || []).map((s) => s.code)))]
+      if (codes.length) hooks.onResult(codes)
+    }
+    return true
+  }
+
   function snapshotCurrentTurn(turnPhase = phase.value) {
     return normalizeTurn({
       query: lastQuery.value,
@@ -193,6 +219,7 @@ export function useNlStream(historyStore, hooks = {}) {
     if (!turn.query) return null
     thread.value = [...thread.value, turn].slice(-MAX_THREAD_TURNS)
     persistCurrentThread(thread.value)
+    historyStore.saveThread?.(thread.value)
     return turn
   }
 
@@ -200,6 +227,7 @@ export function useNlStream(historyStore, hooks = {}) {
     thread.value = []
     persistCurrentThread(thread.value)
     reset()
+    historyStore.newSession?.()
   }
 
   function applyAgentMeta(ev) {
@@ -301,18 +329,7 @@ export function useNlStream(historyStore, hooks = {}) {
       }
 
       if (phase.value === 'done') {
-        const turn = commitCurrentTurn()
-        historyStore.add({
-          query: q,
-          parsedConditions: parsedConditions.value,
-          items: result.value?.items || [],
-          total: result.value?.total || 0,
-          screenMeta: screenMeta.value,
-          agentAnswer: agentAnswer.value,
-          agentPlan: agentPlan.value,
-          toolTrace: toolTrace.value,
-          threadTurnId: turn?.id,
-        })
+        commitCurrentTurn()
       }
     } catch (e) {
       if (e.name === 'AbortError') {
@@ -335,32 +352,22 @@ export function useNlStream(historyStore, hooks = {}) {
     if (isStreaming.value) return false
     const it = historyStore.get(id)
     if (!it) return false
-    reset()
-    lastQuery.value = it.query
-    parsedConditions.value = it.parsedConditions || []
-    screenMeta.value = it.screenMeta || null
-    agentAnswer.value = it.agentAnswer || it.screenMeta?.agent_answer || ''
-    agentPlan.value = it.agentPlan || it.screenMeta?.agent_plan || null
-    toolTrace.value = it.toolTrace || it.screenMeta?.tool_trace || []
-    if (['strategy_design', 'ask_clarification', 'explain_result'].includes(agentPlan.value?.tool)) {
-      result.value = null
-    } else {
-      result.value = {
-        items: it.items || [],
-        total: it.total || 0,
-        parsed_conditions: it.parsedConditions || [],
-      }
-      if (hooks.onResult) hooks.onResult((it.items || []).map((s) => s.code))
-    }
-    phase.value = 'done'
-    tStart.value = it.ts * 1000
-    tDone.value = it.ts * 1000
-    thread.value = [snapshotCurrentTurn('done')]
-    persistCurrentThread(thread.value)
-    return true
+    const ok = restoreSession(it)
+    if (ok) historyStore.activate?.(id)
+    return ok
   }
 
   restoreLatestThreadState()
+
+  watch(
+    () => historyStore.activeId,
+    (id) => {
+      if (!id || isStreaming.value || thread.value.length || lastQuery.value) return
+      const session = historyStore.get?.(id)
+      if (session) restoreSession(session)
+    },
+    { flush: 'post' }
+  )
 
   return {
     // state

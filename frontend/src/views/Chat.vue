@@ -13,6 +13,7 @@ import { useChatHistoryStore } from '../stores/chatHistory'
 
 const aiStatus = useAiStatusStore()
 const history = useChatHistoryStore()
+const AGENT_RESULTS_KEY = 'qwen.results.agent.v1'
 
 const router = useRouter()
 const route = useRoute()
@@ -139,11 +140,19 @@ const conditionIntro = computed(() => {
 })
 const resultTitle = computed(() => agentPlan.value?.tool === 'strategy_select' ? '策略选股结果' : '筛选结果')
 function historyBadge(c) {
+  if (c.status) return c.status
   const tool = c.agentPlan?.tool
   if (tool === 'strategy_design') return '策略'
   if (tool === 'ask_clarification') return '追问'
   if (tool === 'explain_result') return '解释'
   return `${c.total} 只`
+}
+function historyTitle(c) {
+  return c.title || c.query || '新建对话'
+}
+function historyMeta(c) {
+  const ts = c.updatedAt || c.ts
+  return [ts ? fmtRelTime(ts) : '', `${c.turnCount || 1}轮`].filter(Boolean).join(' · ')
 }
 function traceDisplay(trace) {
   return String(trace || '')
@@ -181,12 +190,14 @@ function openFullResults(turn = latestTurn.value) {
     router.push('/strategy')
     return
   }
-  sessionStorage.setItem('qwen.results.agent.v1', JSON.stringify({
+  const payload = JSON.stringify({
     query: turn?.query || lastQuery.value,
     conditions: turn?.parsedConditions || parsedConditions.value,
     sort_by: turn?.screenMeta?.sort_by || screenMeta.value?.sort_by || null,
     sort_desc: (turn?.screenMeta?.sort_desc ?? screenMeta.value?.sort_desc) !== false,
-  }))
+  })
+  try { sessionStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
+  try { localStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
   router.push({ path: '/results', query: { source: 'agent' } })
 }
 
@@ -333,10 +344,13 @@ const stageColor = (s) => ({
                class="history-item"
                :class="{ active: c.id === history.activeId }"
                @click="restoreFromHistory(c.id)"
-               :title="isStreaming ? '当前对话进行中，请先停止' : c.query"
-               :style="{ padding: '8px 10px', borderRadius: '7px', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '6px', cursor: isStreaming ? 'wait' : 'pointer' }">
-            <span :style="{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11.5px' }">{{ c.query }}</span>
-            <span :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ historyBadge(c) }}</span>
+               :title="isStreaming ? '当前对话进行中，请先停止' : historyTitle(c)"
+               :style="{ padding: '8px 10px', borderRadius: '7px', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '8px', cursor: isStreaming ? 'wait' : 'pointer' }">
+            <span class="history-main">
+              <span class="history-title">{{ historyTitle(c) }}</span>
+              <span class="history-sub">{{ historyMeta(c) }}</span>
+            </span>
+            <span class="history-badge">{{ historyBadge(c) }}</span>
             <button class="history-del" @click="deleteHistory(c.id, $event)" title="删除">
               <Icon name="x" :size="10" />
             </button>
@@ -604,7 +618,7 @@ const stageColor = (s) => ({
 }
 
 .chat-scroll:not(.has-thread) .starter-panel {
-  margin: auto;
+  margin: 24px auto 0;
 }
 
 .starter-grid {
@@ -1014,6 +1028,46 @@ const stageColor = (s) => ({
   color: #1E3FA8;
   font-weight: 600;
   border-left-color: #2456D8;
+}
+.history-main {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+.history-title {
+  overflow: hidden;
+  color: inherit;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-sub {
+  overflow: hidden;
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-badge {
+  min-width: 30px;
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(14, 14, 12, 0.05);
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 600;
+  text-align: center;
+}
+.history-item.active .history-badge {
+  background: rgba(36, 86, 216, 0.10);
+  color: #2456D8;
 }
 .history-del {
   background: transparent;

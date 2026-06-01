@@ -24,17 +24,25 @@ import { useKlineCache } from '../composables/useKlineCache.js'
 
 const router = useRouter()
 const route = useRoute()
+const AGENT_RESULTS_KEY = 'qwen.results.agent.v1'
 
 function readAgentContext() {
   if (route.query.source !== 'agent') return null
   try {
-    const context = JSON.parse(sessionStorage.getItem('qwen.results.agent.v1') || 'null')
+    const raw = sessionStorage.getItem(AGENT_RESULTS_KEY) || localStorage.getItem(AGENT_RESULTS_KEY)
+    const context = JSON.parse(raw || 'null')
     return context && Array.isArray(context.conditions)
       ? context
       : null
   } catch {
     return null
   }
+}
+
+function persistAgentContext(context) {
+  const payload = JSON.stringify(context)
+  try { sessionStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
+  try { localStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
 }
 
 const agentContext = ref(readAgentContext())
@@ -372,7 +380,7 @@ function syncRouteState() {
     if (agentContext.value) {
       agentContext.value.sort_by = sortBy.value
       agentContext.value.sort_desc = sortDesc.value
-      sessionStorage.setItem('qwen.results.agent.v1', JSON.stringify(agentContext.value))
+      persistAgentContext(agentContext.value)
     }
   }
   router.replace({ path: '/results', query })

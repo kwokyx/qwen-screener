@@ -11,6 +11,11 @@ export async function createSession(payload) {
   return data
 }
 
+export async function updateSession(id, payload) {
+  const { data } = await client.put(`/chat/sessions/${id}`, payload)
+  return data
+}
+
 export async function deleteSession(id) {
   await client.delete(`/chat/sessions/${id}`)
 }

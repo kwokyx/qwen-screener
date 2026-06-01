@@ -73,6 +73,36 @@ def create_session(
     return item
 
 
+@router.put("/sessions/{session_id}", response_model=ChatSessionOut)
+def update_session(
+    session_id: int,
+    payload: ChatSessionIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """覆盖更新一条会话快照。
+
+    前端把多轮 thread 放在 screen_meta.thread 中；这里保持 JSON 透传，
+    兼容旧的单轮快照结构。
+    """
+    item = (
+        db.query(ChatSession)
+        .filter(ChatSession.id == session_id, ChatSession.user_id == user.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(404, "会话不存在")
+
+    item.query = payload.query
+    item.parsed_conditions = payload.parsed_conditions
+    item.items = payload.items
+    item.total = payload.total
+    item.screen_meta = payload.screen_meta
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 @router.delete("/sessions/{session_id}", status_code=204)
 def delete_session(
     session_id: int,
