@@ -40,13 +40,13 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 ### 后端（Python 3.10+）
 - **FastAPI 0.115** + Uvicorn + SQLAlchemy 2.0 + Pydantic v2
 - **APScheduler** 定时任务（每日收盘后行情、周末财务回填、6h 一次 SQLite 冷备份）
-- **AKShare** 数据源（沪深300 成分股 + 雪球 / 新浪 / 东方财富多通路）
+- **Baostock 优先** 数据源（全 A 基础信息、日 K、周/月 K、分钟 K、财务与分红；AKShare 仅保留少量兜底）
 - **OpenAI SDK + dashscope** 双 AI 后端，可一键切换
 - **Redis**（可选）缓存千问解析结果
 
 ### 前端（Node 20+）
 - **Vue 3.5** + Vite + Vue Router 4 + Pinia 2
-- 自定义主题（A2 调色板 + IBM Plex 字体）+ 自渲染 SVG 图表（Sparkline / FullCandle / Donut）
+- Naive UI 浅色金融终端主题 + IBM Plex 字体 + klinecharts K 线图（Sparkline 保留用于小趋势图）
 - Axios（普通请求） + fetch + ReadableStream（SSE 流式）
 - `marked` 渲染千问输出的 Markdown
 
@@ -291,9 +291,9 @@ qwen-stock-screener/
 | **行情 Dashboard** [`Dashboard.vue`](frontend/src/views/Dashboard.vue) | `/market/*` | 4 指数 + 30 日 sparkline + 板块涨跌 + 涨跌榜（4 个 tab） |
 | **千问对话筛选** [`Chat.vue`](frontend/src/views/Chat.vue) | `/screener/nl/stream` | SSE 流式三阶段；历史持久化 + 跨设备同步；0 命中智能建议；预设提示 |
 | **因子筛选器** [`Results.vue`](frontend/src/views/Results.vue) | `/screener` | 默认条件可视化 + 实时 sparkline + 价值分排序 |
-| **个股详情** [`Detail.vue`](frontend/src/views/Detail.vue) | `/stock/{code}` + `/qwen/analysis/{code}/stream` | K 线 6 个周期切换；16 个关键指标头部；千问流式分析（含 Markdown 渲染）；自动同行业对比 |
+| **个股详情** [`Detail.vue`](frontend/src/views/Detail.vue) | `/stock/{code}` + `/stock/{code}/kline` + `/stock/{code}/intraday` | klinecharts K 线；5/15/30/60 分钟 K + 日/周/月 K；MA/BOLL/MACD/KDJ/RSI 切换；分钟线失败时明确提示，不用日线伪装 |
 | **自选监控** [`Portfolio.vue`](frontend/src/views/Portfolio.vue) | `/stock/me/watchlist` + alertEngine 轮询 | 5 种预警类型（涨跌 % / 价格突破 / 当日 %）；跨设备同步 |
-| **策略回测** [`Strategy.vue`](frontend/src/views/Strategy.vue) | `/strategy/backtest` | 4 个预设策略 + 自定义参数 + 月度收益热力图 |
+| **智能选股工作台** [`Strategy.vue`](frontend/src/views/Strategy.vue) | `/strategy/agent` + `/strategy/select` + `/screener` | 自然语言 Agent 选股 + 结构化条件筛选 + 内置策略选股；结果可跳转详情页 |
 
 ### 前端基础设施
 
@@ -362,9 +362,10 @@ pytest tests/ -v
 
 ## 已知限制
 
-- 财务字段是「最新一期」快照，非「当时」——回测的基本面回看是近似
-- 沪深 300 是默认池；其他股票（如北交所）调用 `pool csi500` / `sse50` 切换
-- K 线为日级粒度（无分时）；UI 上的「5 日 / 30 日 / 一年」对应 `?days=` 参数
+- 财务字段是「最新一期」快照，适合当前选股，不适合严肃历史回测
+- Baostock 分红接口不支持北交所 `.BJ`，这类股票股息率会明确显示缺失，不用假数据补 0
+- 分钟 K 依赖 Baostock 实时查询，失败时返回 503；前端明确提示，不会静默切到日线
+- 日 K 接口按旧到新返回；周 K/月 K 直接请求 Baostock 对应周期，不由前端临时聚合
 - 流通市值字段当前用总市值代替（雪球未直接提供）
 
 > 完整清单见 [`docs/STATUS.md`](docs/STATUS.md)，含「未完成 / 后续工作」的优先级分级。

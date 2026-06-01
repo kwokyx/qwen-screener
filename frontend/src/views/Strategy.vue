@@ -124,6 +124,16 @@ const agentRiskNotes = computed(() => {
   return [...new Set(notes)]
 })
 const agentToolTrace = computed(() => agentResult.value?.tool_trace || [])
+const aiStatusText = computed(() => {
+  if (!aiStatus.lastChecked) return 'AI 检测中'
+  if (aiStatus.isUp) return 'AI 可用'
+  return aiStatus.reason ? `AI 降级：${aiStatus.reason}` : 'AI 降级运行'
+})
+const aiStatusType = computed(() => {
+  if (!aiStatus.lastChecked) return 'default'
+  return aiStatus.isUp ? 'success' : 'warning'
+})
+const agentSummary = computed(() => agentResult.value?.answer || '')
 
 const agentExamples = [
   '低估值高分红的银行股',
@@ -290,6 +300,10 @@ const columns = [
     },
   },
 ]
+const displayColumns = computed(() => {
+  const isConditionScreen = !!(agentResult.value?.screen_result || structuredResult.value)
+  return isConditionScreen ? columns.filter((column) => column.key !== 'score') : columns
+})
 
 function formatMetric(key, value) {
   const number = Number(value)
@@ -406,8 +420,8 @@ onMounted(bootstrap)
             <n-radio-button value="structured">条件筛选</n-radio-button>
             <n-radio-button value="strategy">策略库</n-radio-button>
           </n-radio-group>
-          <n-tag size="small" :bordered="false" :type="aiStatus.isUp ? 'success' : 'warning'">
-            AI {{ aiStatus.isUp ? '可用' : '降级运行' }}
+          <n-tag size="small" :bordered="false" :type="aiStatusType">
+            {{ aiStatusText }}
           </n-tag>
         </div>
 
@@ -428,6 +442,9 @@ onMounted(bootstrap)
           </div>
           <n-alert v-if="agentError" type="error" :bordered="false" class="notice compact">
             {{ agentError }}
+          </n-alert>
+          <n-alert v-else-if="agentResult?.warnings?.length" type="warning" :bordered="false" class="notice compact">
+            {{ agentResult.warnings[0] }}
           </n-alert>
         </div>
 
@@ -537,9 +554,13 @@ onMounted(bootstrap)
             </div>
           </template>
 
+          <div v-if="agentSummary" class="agent-summary">
+            {{ agentSummary }}
+          </div>
+
           <n-data-table
             v-if="rows.length"
-            :columns="columns"
+            :columns="displayColumns"
             :data="rows"
             :loading="tableLoading"
             :pagination="{ pageSize: 20 }"
@@ -708,6 +729,17 @@ onMounted(bootstrap)
 .detail-note {
   padding: 0 10px 8px;
   line-height: 1.6;
+}
+
+.agent-summary {
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  border: 1px solid #EDEDED;
+  border-radius: 4px;
+  background: #FAFAFA;
+  color: #3F3F46;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 h1 {

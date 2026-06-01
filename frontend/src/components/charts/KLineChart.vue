@@ -73,9 +73,9 @@ function syncBarSpace() {
   const target = (width - 92) / visibleCount
   const barSpace = Math.max(4.5, Math.min(18, target))
   chart.setBarSpace(barSpace)
-  chart.setOffsetRightDistance(8)
+  chart.setOffsetRightDistance(54)
   chart.setLeftMinVisibleBarCount(2)
-  chart.setRightMinVisibleBarCount(2)
+  chart.setRightMinVisibleBarCount(4)
 }
 
 function syncIndicator() {
@@ -175,9 +175,9 @@ function initChart() {
       },
       yAxis: {
         show: true,
-        size: 58,
+        size: 64,
         position: 'right',
-        inside: true,
+        inside: false,
         axisLine: { show: false, color: '#E5E7EB', size: 1 },
         tickText: { show: true, color: '#6B7280', size: 10, family: monoFont, weight: 500, marginStart: 4, marginEnd: 6 },
         tickLine: { show: false, color: '#E5E7EB', size: 1, length: 3 },

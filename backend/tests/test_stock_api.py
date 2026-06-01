@@ -47,6 +47,40 @@ def test_stock_not_found(db):
         assert r.status_code == 404
 
 
+def test_kline_returns_chronological_daily_rows(db):
+    """日 K 接口对外返回旧到新，避免前端小图趋势反向。"""
+    db.add(StockBasic(code="123456.SH", name="测试股", industry="测试"))
+    days = [
+        date(2026, 5, 26),
+        date(2026, 5, 27),
+        date(2026, 5, 28),
+        date(2026, 5, 29),
+    ]
+    for idx, day in enumerate(days, start=1):
+        db.add(StockDaily(
+            code="123456.SH",
+            trade_date=day,
+            open=idx,
+            high=idx + 0.5,
+            low=idx - 0.5,
+            close=idx,
+            volume=idx * 1000,
+        ))
+    db.commit()
+
+    with TestClient(app) as c:
+        r = c.get("/api/v1/stock/123456.SH/kline?days=3&frequency=d")
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert [row["trade_date"] for row in payload] == [
+        "2026-05-27",
+        "2026-05-28",
+        "2026-05-29",
+    ]
+    assert [row["close"] for row in payload] == [2.0, 3.0, 4.0]
+
+
 def test_intraday_timeout_opens_short_circuit(seed_stocks, monkeypatch):
     """分钟线超时后短时间内直接降级，避免用户反复等待。"""
     calls = []

@@ -19,7 +19,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-32-chars-long-xxxx")
 os.environ.setdefault("REDIS_URL", "")  # 关闭缓存，避免连真 redis
 
 import pytest
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from app.database import Base, SessionLocal, engine
@@ -43,7 +43,7 @@ def db():
 def seed_stocks(db: Session):
     """5 只代表性股票：覆盖银行 / 白酒 / 半导体 / 家电 / 食品。"""
     today = date.today()
-    yesterday = date(today.year, today.month, max(1, today.day - 1))
+    yesterday = today - timedelta(days=1)
     rows = [
         # (code, name, industry, pe, pb, roe, mc)
         ("600036.SH", "招商银行",   "银行",       6.5,  0.85,  16.5,  9000),

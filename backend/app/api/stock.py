@@ -269,7 +269,10 @@ def kline(
         .limit(max(days * 3, days + 20))
         .all()
     )
-    return [_stock_daily_out(row) for row in rows if _is_weekday_row(row)][:days]
+    # API consumers should receive chronological bars. The DB query uses DESC
+    # only to keep the latest `days` rows cheap.
+    latest_rows = [_stock_daily_out(row) for row in rows if _is_weekday_row(row)][:days]
+    return list(reversed(latest_rows))
 
 
 @router.get("/{code}/intraday", response_model=list[StockIntradayOut])

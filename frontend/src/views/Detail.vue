@@ -212,10 +212,10 @@ const klineCaption = computed(() => {
   return `${freq} · ${range} · ${isIntradayFrequency.value ? '不复权' : '前复权'}`
 })
 const klineDataType = computed(() => {
-  if (isIntradayFrequency.value) return '分钟K：盘中分时蜡烛，来自 baostock 分钟线，不用日线替代。'
-  if (klineFrequency.value === 'week') return '周K：每根蜡烛代表一个交易周，直接请求周线数据。'
-  if (klineFrequency.value === 'month') return '月K：每根蜡烛代表一个交易月，直接请求月线数据。'
-  return '日K：每根蜡烛代表一个交易日，不是 24 小时分时。'
+  if (isIntradayFrequency.value) return '分钟K · baostock 分钟线 · 不用日线替代'
+  if (klineFrequency.value === 'week') return '周K · 每根代表一个交易周'
+  if (klineFrequency.value === 'month') return '月K · 每根代表一个交易月'
+  return '日K · 每根代表一个交易日'
 })
 const klineEmptyText = computed(() => {
   if (klineLoading.value) return ''
