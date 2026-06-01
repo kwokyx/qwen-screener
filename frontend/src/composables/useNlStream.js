@@ -70,9 +70,30 @@ function persistCurrentThread(turns) {
   try { localStorage.setItem(CURRENT_THREAD_KEY, payload) } catch { /* ignore storage quota */ }
 }
 
-function turnToContext(turn) {
+function summarizeTurn(turn) {
   if (!turn) return null
   return {
+    query: (turn.query || '').slice(0, 180),
+    tool: turn.agentPlan?.tool || null,
+    answer: (turn.agentAnswer || '').slice(0, 240),
+    conditions: (turn.parsedConditions || []).slice(0, 8),
+    result: turn.result
+      ? {
+          total: turn.result.total || 0,
+          items: (turn.result.items || []).slice(0, 3).map((item) => ({
+            code: item.code,
+            name: item.name,
+          })),
+        }
+      : null,
+  }
+}
+
+function turnToContext(turn, recentTurns = [], sessionId = null) {
+  if (!turn) return null
+  return {
+    session_id: sessionId,
+    turn_id: turn.id || null,
     last_query: turn.query || '',
     last_plan: turn.agentPlan || null,
     last_answer: turn.agentAnswer || '',
@@ -90,6 +111,7 @@ function turnToContext(turn) {
           parsed_conditions: turn.result.parsed_conditions || turn.parsedConditions || [],
         }
       : null,
+    recent_turns: recentTurns.slice(-6).map(summarizeTurn).filter(Boolean),
   }
 }
 
@@ -216,12 +238,17 @@ export function useNlStream(historyStore, hooks = {}) {
   }
 
   function buildContext() {
-    return turnToContext(latestContextTurn()) || {
+    const sessionId = historyStore?.activeId && historyStore.activeId !== '__new__'
+      ? historyStore.activeId
+      : null
+    return turnToContext(latestContextTurn(), thread.value, sessionId) || {
+      session_id: sessionId,
       last_query: '',
       last_plan: null,
       last_answer: '',
       last_conditions: [],
       last_result: null,
+      recent_turns: [],
     }
   }
 

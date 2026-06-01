@@ -33,6 +33,7 @@ const {
 } = stream
 
 const chatScroll = ref(null)
+const canSubmit = computed(() => Boolean(input.value.trim()) && !isStreaming.value)
 
 const presetPrompts = [
   '低估值高分红的银行股',
@@ -156,6 +157,8 @@ function historyMeta(c) {
 }
 function traceDisplay(trace) {
   return String(trace || '')
+    .replace(/\([^)]*(?:conditions|limit|offset|strategy_id)=[^)]*\)/g, '')
+    .replace(/offset=\d+/g, '下一批结果')
     .replace(/^tool_router -> /, '选择工具：')
     .replace('选择工具：strategy_design', '选择工具：策略设计')
     .replace('选择工具：stock_screen', '选择工具：股票筛选')
@@ -438,7 +441,7 @@ const stageColor = (s) => ({
             <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
               <span v-if="!aiStatus.isUp" :style="{ fontSize: '10px', color: A2.amber, display: 'flex', alignItems: 'center', gap: '4px' }">
                 <span :style="{ width: '6px', height: '6px', borderRadius: '50%', background: A2.amber }" />
-                AI 服务暂时不可用
+                AI 不可用，使用本地规则
               </span>
               <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '判断中…' : phase === 'screening' ? '执行中…' : '就绪' }}</span>
               <div style="flex:1" />
@@ -447,9 +450,9 @@ const stageColor = (s) => ({
                 <Icon name="x" :size="12" /> 停止
               </button>
               <button v-else @click="send"
-                      :disabled="!aiStatus.isUp"
-                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}）` : ''"
-                      :style="{ padding: '7px 14px', background: !aiStatus.isUp ? '#B8B4A8' : A2.qwenGrad, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: !aiStatus.isUp ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: !aiStatus.isUp ? 0.7 : 1 }">
+                      :disabled="!canSubmit"
+                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}），将使用本地规则 Agent` : ''"
+                      :style="{ padding: '7px 14px', background: canSubmit ? A2.qwenGrad : '#B8B4A8', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: canSubmit ? 1 : 0.7 }">
                 发送 <Icon name="send" :size="12" />
               </button>
             </div>
@@ -461,8 +464,8 @@ const stageColor = (s) => ({
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
             <span style="flex:1">
-              <strong>千问 AI 服务暂时不可达</strong>
-              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 可以切到「策略」页使用结构化条件筛选</span>
+              <strong>AI 服务暂时不可达</strong>
+              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 当前将自动使用本地规则 Agent</span>
             </span>
             <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">
               <Icon name="refresh" :size="11" /> 重新检测
