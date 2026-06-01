@@ -82,12 +82,65 @@ def test_limit(db, seed_stocks):
     assert res.total == 5  # 全部 5 只都满足 pe<100
 
 
+def test_offset_paginates_without_changing_total(db, seed_stocks):
+    """offset 只切换当前页，total 始终是完整命中数。"""
+    first = _screen(db, conditions=[], sort_by="pe", sort_desc=False, offset=0, limit=2)
+    second = _screen(db, conditions=[], sort_by="pe", sort_desc=False, offset=2, limit=2)
+
+    assert first.total == second.total == 5
+    assert [item.code for item in first.items] == ["600036.SH", "000333.SZ"]
+    assert [item.code for item in second.items] == ["000596.SZ", "600519.SH"]
+
+
 def test_sort_desc(db, seed_stocks):
     """按 roe desc 排序：茅台(28) > 古井(24) > 美的(22) > 招商(16.5) > 中芯(8)。"""
     res = _screen(db, conditions=[FilterCondition(field="pe", op="lt", value=100)],
                   sort_by="roe", sort_desc=True, limit=3)
     codes = [it.code for it in res.items]
     assert codes == ["600519.SH", "000596.SZ", "000333.SZ"]
+
+
+def test_sort_keeps_null_values_last(db, seed_stocks):
+    """升序和降序都将空值放在最后，避免缺失数据占据列表前排。"""
+    from datetime import date
+
+    from app.models.stock import StockBasic, StockDaily
+
+    db.add(StockBasic(code="999999.SH", name="缺失估值", industry="测试"))
+    db.add(StockDaily(code="999999.SH", trade_date=date.today(), close=12, pe=None))
+    db.commit()
+
+    asc_result = _screen(db, conditions=[], sort_by="pe", sort_desc=False)
+    desc_result = _screen(db, conditions=[], sort_by="pe", sort_desc=True)
+
+    assert asc_result.items[-1].code == "999999.SH"
+    assert desc_result.items[-1].code == "999999.SH"
+
+
+def test_sort_change_pct_uses_server_expression(db, seed_stocks):
+    """涨跌幅排序由后端根据最新价和前收计算，而不是只排序当前页。"""
+    from app.models.stock import StockDaily
+
+    latest = (
+        db.query(StockDaily)
+        .filter(StockDaily.code == "600036.SH")
+        .order_by(StockDaily.trade_date.desc())
+        .first()
+    )
+    latest.close = 12
+    db.commit()
+
+    result = _screen(db, conditions=[], sort_by="change_pct", sort_desc=True)
+
+    assert result.items[0].code == "600036.SH"
+    assert result.items[0].change_pct == 20.0
+
+
+def test_sort_uses_code_as_stable_tiebreaker(db, seed_stocks):
+    """排序值相同时按代码升序兜底，保证翻页结果稳定。"""
+    result = _screen(db, conditions=[], sort_by="close", sort_desc=True)
+
+    assert [item.code for item in result.items] == sorted(item.code for item in result.items)
 
 
 def test_unknown_field_raises(db, seed_stocks):
@@ -108,6 +161,7 @@ def test_result_includes_latest_data_context(db, seed_stocks):
     assert item.change_pct == 10.0
     assert item.pe == 6.5
     assert item.roe == 16.5
+    assert res.trade_date == item.trade_date
 
 
 def test_result_change_pct_is_none_without_previous_close(db):

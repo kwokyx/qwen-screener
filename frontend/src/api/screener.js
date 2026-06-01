@@ -4,7 +4,7 @@ import { streamSSE } from './sse'
 /**
  * 结构化筛选
  * @param {Array<{field:string, op:string, value:any}>} conditions
- * @param {object} opts { logic, sort_by, sort_desc, limit }
+ * @param {object} opts { logic, sort_by, sort_desc, offset, limit }
  */
 export async function screen(conditions, opts = {}) {
   const { data } = await client.post('/screener', {
@@ -12,6 +12,7 @@ export async function screen(conditions, opts = {}) {
     logic: opts.logic || 'AND',
     sort_by: opts.sort_by,
     sort_desc: opts.sort_desc !== false,
+    offset: opts.offset || 0,
     limit: opts.limit || 50,
   })
   return data

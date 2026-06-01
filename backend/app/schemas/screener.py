@@ -27,6 +27,7 @@ class ScreenRequest(BaseModel):
     logic: Literal["AND", "OR"] = "AND"
     sort_by: str | None = None
     sort_desc: bool = True
+    offset: int = Field(default=0, ge=0)
     limit: int = Field(default=50, ge=1, le=500)
 
 
@@ -56,5 +57,8 @@ class ScreenResultItem(StockBasicOut):
 class ScreenResponse(BaseModel):
     total: int
     items: list[ScreenResultItem]
+    offset: int = 0
+    limit: int = 50
+    trade_date: date | None = None
     parsed_conditions: list[FilterCondition] | None = None  # NL 模式回显
     explanation: str | None = None  # 千问对结果的简短解读

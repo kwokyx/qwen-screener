@@ -9,6 +9,7 @@ import {
   NEmpty,
   NGi,
   NGrid,
+  NPagination,
   NSkeleton,
   NSpace,
   NStatistic,
@@ -28,7 +29,7 @@ function readAgentContext() {
   if (route.query.source !== 'agent') return null
   try {
     const context = JSON.parse(sessionStorage.getItem('qwen.results.agent.v1') || 'null')
-    return context && Array.isArray(context.conditions) && context.conditions.length
+    return context && Array.isArray(context.conditions)
       ? context
       : null
   } catch {
@@ -38,6 +39,32 @@ function readAgentContext() {
 
 const agentContext = ref(readAgentContext())
 const filterMode = ref(agentContext.value ? 'agent' : 'balanced')
+const sortableFields = new Set(['close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover'])
+const sortLabels = {
+  close: '现价',
+  change_pct: '涨跌幅',
+  pe: 'PE',
+  pb: 'PB',
+  roe: 'ROE',
+  dividend_yield: '股息率',
+  market_cap: '总市值',
+  turnover: '换手率',
+}
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const initialSort = typeof route.query.sort === 'string'
+  ? route.query.sort
+  : agentContext.value?.sort_by
+const page = ref(positiveInt(route.query.page, 1))
+const pageSize = ref([20, 50, 100].includes(positiveInt(route.query.size, 20)) ? positiveInt(route.query.size, 20) : 20)
+const sortBy = ref(sortableFields.has(initialSort) ? initialSort : (filterMode.value === 'agent' ? 'market_cap' : 'pe'))
+const sortDesc = ref(route.query.order === 'asc'
+  ? false
+  : (route.query.order === 'desc' ? true : (filterMode.value === 'agent' && agentContext.value?.sort_desc !== false)))
 const conditionSets = {
   balanced: [
     { field: 'pe', op: 'between', value: [0, 500] },
@@ -115,6 +142,7 @@ const filterGroups = computed(() => {
 
 const items = ref([])
 const total = ref(0)
+const tradeDate = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
 
@@ -131,10 +159,10 @@ const stats = computed(() => {
   const fmt = (v, d = 1) => v == null ? '—' : v.toFixed(d)
   return [
     { l: '命中数量', v: total.value, sub: `已展示 ${arr.length} 只`, unit: '只' },
-    { l: '平均 PE', v: fmt(avg('pe')), sub: '当前列表均值', unit: 'x' },
-    { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '当前列表均值', unit: '亿' },
-    { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '当前列表均值', unit: '%' },
-    { l: '平均 ROE', v: fmt(avg('roe')), sub: '当前列表均值', unit: '%' },
+    { l: '平均 PE', v: fmt(avg('pe')), sub: '当前页均值', unit: 'x' },
+    { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '当前页均值', unit: '亿' },
+    { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '当前页均值', unit: '%' },
+    { l: '平均 ROE', v: fmt(avg('roe')), sub: '当前页均值', unit: '%' },
   ]
 })
 
@@ -143,7 +171,7 @@ const resultSubtitle = computed(() => {
     return agentContext.value?.query || '本轮智能筛选'
   }
   const map = {
-    balanced: '全市场基础视图 · PE 由低到高',
+    balanced: '全市场基础视图',
     value: '价值因子 · PE + ROE',
     sized: '大市值 · 按市值排序',
     all: '全部股票 · 已放宽条件',
@@ -151,8 +179,19 @@ const resultSubtitle = computed(() => {
   return map[filterMode.value]
 })
 
+const activeSortLabel = computed(() => `${sortLabels[sortBy.value] || sortBy.value} ${sortDesc.value ? '降序' : '升序'}`)
+const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value + 1 : 0)
+const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
+
 const fmtNum = (v, d = 2) => v != null ? v.toFixed(d) : '—'
 const fmtPositive = (v, d = 2) => v != null && v > 0 ? v.toFixed(d) : '—'
+
+function remoteSort(key) {
+  return {
+    sorter: true,
+    sortOrder: sortBy.value === key ? (sortDesc.value ? 'descend' : 'ascend') : false,
+  }
+}
 
 function rightMonoCell(text, extra = {}) {
   return h('span', {
@@ -170,7 +209,7 @@ const columns = computed(() => [
     title: '#',
     key: 'index',
     width: 46,
-    render: (_, i) => h('span', { style: { color: Preview.textMuted, fontFamily: 'IBM Plex Mono, monospace', fontSize: '10px' } }, String(i + 1).padStart(2, '0')),
+    render: (_, i) => h('span', { style: { color: Preview.textMuted, fontFamily: 'IBM Plex Mono, monospace', fontSize: '10px' } }, String((page.value - 1) * pageSize.value + i + 1).padStart(2, '0')),
   },
   {
     title: '代码',
@@ -198,6 +237,7 @@ const columns = computed(() => [
     key: 'close',
     align: 'right',
     width: 76,
+    ...remoteSort('close'),
     render: (s) => rightMonoCell(fmtNum(s.close), { color: Preview.textMain, fontWeight: 700 }),
   },
   {
@@ -205,6 +245,7 @@ const columns = computed(() => [
     key: 'change_pct',
     align: 'right',
     width: 84,
+    ...remoteSort('change_pct'),
     render: (s) => rightMonoCell(
       s.change_pct == null ? '—' : `${s.change_pct >= 0 ? '+' : ''}${s.change_pct.toFixed(2)}%`,
       {
@@ -218,6 +259,7 @@ const columns = computed(() => [
     key: 'pe',
     align: 'right',
     width: 70,
+    ...remoteSort('pe'),
     render: (s) => rightMonoCell(fmtPositive(s.pe)),
   },
   {
@@ -225,6 +267,7 @@ const columns = computed(() => [
     key: 'pb',
     align: 'right',
     width: 70,
+    ...remoteSort('pb'),
     render: (s) => rightMonoCell(fmtNum(s.pb)),
   },
   {
@@ -232,6 +275,7 @@ const columns = computed(() => [
     key: 'roe',
     align: 'right',
     width: 76,
+    ...remoteSort('roe'),
     render: (s) => rightMonoCell(s.roe != null ? `${s.roe.toFixed(2)}%` : '—', {
       color: s.roe > 10 ? Preview.negative : Preview.textMuted,
       fontWeight: s.roe > 10 ? 600 : 500,
@@ -242,6 +286,7 @@ const columns = computed(() => [
     key: 'dividend_yield',
     align: 'right',
     width: 82,
+    ...remoteSort('dividend_yield'),
     render: (s) => rightMonoCell(s.dividend_yield != null ? `${s.dividend_yield.toFixed(2)}%` : '—', {
       color: s.dividend_yield > 4 ? Preview.negative : Preview.textMuted,
       fontWeight: s.dividend_yield > 4 ? 600 : 500,
@@ -252,12 +297,21 @@ const columns = computed(() => [
     key: 'market_cap',
     align: 'right',
     width: 96,
+    ...remoteSort('market_cap'),
     render: (s) => h('span', {
       style: { display: 'block', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace' },
     }, [
       s.market_cap != null ? Math.round(s.market_cap).toLocaleString() : '—',
       h('span', { style: { color: Preview.textMuted, fontSize: '9px' } }, '亿'),
     ]),
+  },
+  {
+    title: '换手率',
+    key: 'turnover',
+    align: 'right',
+    width: 82,
+    ...remoteSort('turnover'),
+    render: (s) => rightMonoCell(s.turnover != null ? `${s.turnover.toFixed(2)}%` : '—'),
   },
   {
     title: '30日走势',
@@ -285,12 +339,20 @@ async function load() {
   try {
     const usingAgentContext = filterMode.value === 'agent' && agentContext.value
     const data = await screen(usingAgentContext ? agentContext.value.conditions : conditionSets[filterMode.value], {
-      sort_by: usingAgentContext ? agentContext.value.sort_by : (filterMode.value === 'sized' ? 'market_cap' : 'pe'),
-      sort_desc: usingAgentContext ? agentContext.value.sort_desc !== false : filterMode.value === 'sized',
-      limit: 50,
+      sort_by: sortBy.value,
+      sort_desc: sortDesc.value,
+      offset: (page.value - 1) * pageSize.value,
+      limit: pageSize.value,
     })
+    const maxPage = Math.max(1, Math.ceil(data.total / pageSize.value))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      syncRouteState()
+      return await load()
+    }
     items.value = data.items
     total.value = data.total
+    tradeDate.value = data.trade_date || data.items?.[0]?.trade_date || null
   } catch (e) {
     errorMsg.value = e.response?.data?.detail || e.message
   } finally {
@@ -298,8 +360,52 @@ async function load() {
   }
 }
 
+function syncRouteState() {
+  const query = {
+    page: String(page.value),
+    size: String(pageSize.value),
+    sort: sortBy.value,
+    order: sortDesc.value ? 'desc' : 'asc',
+  }
+  if (filterMode.value === 'agent') {
+    query.source = 'agent'
+    if (agentContext.value) {
+      agentContext.value.sort_by = sortBy.value
+      agentContext.value.sort_desc = sortDesc.value
+      sessionStorage.setItem('qwen.results.agent.v1', JSON.stringify(agentContext.value))
+    }
+  }
+  router.replace({ path: '/results', query })
+}
+
 function applyMode(mode) {
   filterMode.value = mode
+  page.value = 1
+  sortBy.value = mode === 'sized' ? 'market_cap' : 'pe'
+  sortDesc.value = mode === 'sized'
+  syncRouteState()
+  load()
+}
+
+function handleSorterChange(sorter) {
+  if (!sorter?.columnKey || !sorter?.order || !sortableFields.has(sorter.columnKey)) return
+  sortBy.value = sorter.columnKey
+  sortDesc.value = sorter.order === 'descend'
+  page.value = 1
+  syncRouteState()
+  load()
+}
+
+function handlePageChange(nextPage) {
+  page.value = nextPage
+  syncRouteState()
+  load()
+}
+
+function handlePageSizeChange(nextSize) {
+  pageSize.value = nextSize
+  page.value = 1
+  syncRouteState()
   load()
 }
 
@@ -375,6 +481,10 @@ onMounted(load)
             </NTag>
           </template>
         </div>
+        <div class="result-meta">
+          <span>数据日期 {{ tradeDate || '—' }}</span>
+          <span>排序 {{ activeSortLabel }}</span>
+        </div>
       </NCard>
 
       <!-- Error -->
@@ -418,8 +528,10 @@ onMounted(load)
           :pagination="false"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1080"
+          :scroll-x="1160"
           size="small"
+          remote
+          @update:sorter="handleSorterChange"
         >
           <template #empty>
             <div class="empty-panel">
@@ -432,6 +544,19 @@ onMounted(load)
             </div>
           </template>
         </NDataTable>
+        <div class="table-footer">
+          <span class="pagination-summary">第 {{ pageStart }}–{{ pageEnd }} 条，共 {{ total }} 条</span>
+          <NPagination
+            :page="page"
+            :page-size="pageSize"
+            :item-count="total"
+            :page-sizes="[20, 50, 100]"
+            show-size-picker
+            :page-slot="5"
+            @update:page="handlePageChange"
+            @update:page-size="handlePageSizeChange"
+          />
+        </div>
       </NCard>
     </div>
   </Shell>
@@ -519,6 +644,14 @@ onMounted(load)
   flex-wrap: wrap;
 }
 
+.result-meta {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  color: #71717A;
+  font-size: 12px;
+}
+
 .filter-cat-name {
   font-size: 12px;
   font-weight: 700;
@@ -567,6 +700,20 @@ onMounted(load)
   padding: 0;
 }
 
+.table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid #EDEDED;
+}
+
+.pagination-summary {
+  color: #71717A;
+  font-size: 12px;
+}
+
 .table-card :deep(.n-data-table-th) {
   background: #FFFFFF;
   color: #71717A;
@@ -608,5 +755,17 @@ onMounted(load)
 .empty-extra {
   color: #71717a;
   font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .table-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .result-meta {
+    gap: 6px;
+    flex-direction: column;
+  }
 }
 </style>

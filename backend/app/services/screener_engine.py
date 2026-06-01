@@ -170,12 +170,24 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         clauses = [_build_clause(c) for c in req.conditions]
         q = q.filter(and_(*clauses) if req.logic == "AND" else or_(*clauses))
 
-    if req.sort_by and req.sort_by in FIELD_MAP:
-        col = FIELD_MAP[req.sort_by]
-        q = q.order_by(desc(col) if req.sort_desc else col)
+    change_pct = (
+        (StockDaily.close - previous_daily.close)
+        / func.nullif(previous_daily.close, 0)
+        * 100
+    )
+    sort_fields = {**FIELD_MAP, "change_pct": change_pct}
+    if req.sort_by and req.sort_by in sort_fields:
+        col = sort_fields[req.sort_by]
+        q = q.order_by(
+            col.is_(None).asc(),
+            desc(col) if req.sort_desc else col.asc(),
+            StockBasic.code.asc(),
+        )
+    else:
+        q = q.order_by(StockBasic.code.asc())
 
     total = q.count()
-    rows = q.limit(req.limit).all()
+    rows = q.offset(req.offset).limit(req.limit).all()
 
     items = [
         ScreenResultItem(
@@ -200,7 +212,14 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         )
         for basic, daily, previous, fin in rows
     ]
-    return ScreenResponse(total=total, items=items)
+    trade_date = db.query(func.max(StockDaily.trade_date)).scalar()
+    return ScreenResponse(
+        total=total,
+        items=items,
+        offset=req.offset,
+        limit=req.limit,
+        trade_date=trade_date,
+    )
 
 
 def _change_pct(close: float | None, previous_close: float | None) -> float | None:
