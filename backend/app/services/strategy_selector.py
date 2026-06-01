@@ -707,11 +707,6 @@ def _local_conditions(query: str) -> list[FilterCondition]:
     if matched:
         conditions.append(FilterCondition(field="industry", op="in", value=matched))
 
-    if not conditions:
-        conditions = [
-            FilterCondition(field="market_cap", op="gt", value=100),
-            FilterCondition(field="pe", op="lt", value=35),
-        ]
     return conditions
 
 

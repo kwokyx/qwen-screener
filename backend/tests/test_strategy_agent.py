@@ -219,6 +219,24 @@ def test_agent_execution_guard_blocks_implicit_empty_screen(db, seed_stocks, mon
     assert any("已阻止无条件全市场筛选" in warning for warning in result.warnings)
 
 
+def test_agent_does_not_apply_hidden_default_conditions(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("ambiguous query should ask before screening")
+
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    result = strategy_selector.run_agent_selection(db, "稳健一点", limit=10)
+
+    assert result.plan.tool == "ask_clarification"
+    assert result.screen_result is None
+    assert any("已阻止无条件全市场筛选" in warning for warning in result.warnings)
+
+
 def test_agent_planning_does_not_execute_screen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
