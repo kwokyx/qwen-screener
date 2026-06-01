@@ -50,7 +50,7 @@ function persistAgentContext(context) {
 
 function routeFilterMode(query = route.query, hasAgent = false) {
   if (hasAgent) return 'agent'
-  return typeof query.mode === 'string' && resultModes.has(query.mode) ? query.mode : 'balanced'
+  return typeof query.mode === 'string' && resultModes.has(query.mode) ? query.mode : null
 }
 
 const agentContext = ref(readAgentContext())
@@ -164,6 +164,11 @@ const loading = ref(true)
 const errorMsg = ref('')
 let loadRequestId = 0
 
+const hasRunnableFilter = computed(() => {
+  if (filterMode.value === 'agent') return Boolean(agentContext.value?.conditions?.length)
+  return Boolean(filterMode.value && conditionSets[filterMode.value])
+})
+
 const { load: loadResultKlines, get: resultSpark } = useKlineCache(30)
 watch(items, () => loadResultKlines(items.value.map((s) => s.code)))
 
@@ -194,7 +199,7 @@ const resultSubtitle = computed(() => {
     sized: '大市值 · 按市值排序',
     all: '全部股票 · 已放宽条件',
   }
-  return map[filterMode.value]
+  return map[filterMode.value] || '等待筛选条件'
 })
 
 const activeSortLabel = computed(() => `${sortLabels[sortBy.value] || sortBy.value} ${sortDesc.value ? '降序' : '升序'}`)
@@ -365,6 +370,14 @@ const columns = computed(() => [
 
 async function load() {
   const requestId = ++loadRequestId
+  if (!hasRunnableFilter.value) {
+    items.value = []
+    total.value = 0
+    tradeDate.value = null
+    errorMsg.value = ''
+    loading.value = false
+    return
+  }
   loading.value = true
   errorMsg.value = ''
   try {
@@ -543,34 +556,15 @@ watch(
             本轮智能筛选
           </NTag>
           <span class="results-total">
-            共 <strong>{{ total }}</strong> 只 · {{ resultSubtitle }}
+            <template v-if="hasRunnableFilter">
+              共 <strong>{{ total }}</strong> 只 · {{ resultSubtitle }}
+            </template>
+            <template v-else>
+              {{ resultSubtitle }}
+            </template>
           </span>
         </div>
         <NSpace size="small">
-          <NButton
-            :type="filterMode === 'balanced' ? 'primary' : 'default'"
-            size="small"
-            secondary
-            @click="applyMode('balanced')"
-          >
-            基础
-          </NButton>
-          <NButton
-            :type="filterMode === 'value' ? 'primary' : 'default'"
-            size="small"
-            secondary
-            @click="applyMode('value')"
-          >
-            价值
-          </NButton>
-          <NButton
-            :type="filterMode === 'sized' ? 'primary' : 'default'"
-            size="small"
-            secondary
-            @click="applyMode('sized')"
-          >
-            大市值
-          </NButton>
           <NButton text size="small" type="primary" @click="router.push('/chat')">
             自然语言筛选
           </NButton>
@@ -583,14 +577,25 @@ watch(
           >
             返回对话
           </NButton>
-          <NButton type="primary" size="small" :loading="loading" @click="load">
+          <NButton v-if="hasRunnableFilter" type="primary" size="small" :loading="loading" @click="load">
             重新筛选
           </NButton>
         </NSpace>
       </div>
 
+      <NCard v-if="!hasRunnableFilter" :bordered="false" class="results-card empty-results-card">
+        <NEmpty description="还没有筛选结果">
+          <template #extra>
+            <div class="empty-results-actions">
+              <span>先在智能筛选里输入条件，再进入这里查看完整列表、分页和排序。</span>
+              <NButton type="primary" size="small" @click="router.push('/chat')">去智能筛选</NButton>
+            </div>
+          </template>
+        </NEmpty>
+      </NCard>
+
       <!-- Filter Condition Tags -->
-      <NCard size="small" class="results-card filter-card">
+      <NCard v-if="hasRunnableFilter" size="small" class="results-card filter-card">
         <div class="filter-tags">
           <template v-for="g in filterGroups" :key="g.cat">
             <span class="filter-cat-name">{{ g.cat }}</span>
@@ -619,7 +624,7 @@ watch(
       </NCard>
 
       <!-- Error -->
-      <NAlert v-if="errorMsg" type="error" :bordered="false" class="error-alert">
+      <NAlert v-if="hasRunnableFilter && errorMsg" type="error" :bordered="false" class="error-alert">
         <div class="error-row">
           <span>{{ errorMsg }}</span>
           <NButton size="tiny" secondary :loading="loading" @click="load">重试</NButton>
@@ -627,7 +632,7 @@ watch(
       </NAlert>
 
       <!-- Stats -->
-      <NGrid cols="2 m:3 l:5" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
+      <NGrid v-if="hasRunnableFilter" cols="2 m:3 l:5" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
         <NGi v-for="s in stats" :key="s.l">
           <NCard size="small" :bordered="false" class="results-card stat-card">
             <NStatistic :label="s.l">
@@ -644,7 +649,7 @@ watch(
       </NGrid>
 
       <!-- Table -->
-      <NCard :bordered="false" class="results-card table-card">
+      <NCard v-if="hasRunnableFilter" :bordered="false" class="results-card table-card">
         <div v-if="loading" class="results-skeleton">
           <div v-for="n in 8" :key="'sk' + n" class="skeleton-row">
             <NSkeleton v-for="(_, ci) in 12" :key="ci" :height="12" :width="55" :sharp="false" />
@@ -738,6 +743,31 @@ watch(
   border: 0;
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.empty-results-card {
+  display: grid;
+  min-height: 360px;
+  place-items: center;
+  background: #FFFFFF;
+  border-radius: 0;
+  border-top: 1px solid #EDEDED;
+  box-shadow: none;
+}
+
+.empty-results-card :deep(.n-card__content) {
+  width: 100%;
+}
+
+.empty-results-actions {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  max-width: 420px;
+  color: #71717A;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
 }
 
 .filter-card {
