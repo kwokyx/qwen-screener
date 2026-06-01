@@ -48,6 +48,7 @@ const structuredSortDesc = ref(true)
 const workspaceMode = ref('agent')
 
 const activeTemplate = computed(() => templates.value.find((item) => item.id === activeId.value))
+const isAgentDesign = computed(() => agentResult.value?.plan?.tool === 'strategy_design')
 const rows = computed(() => {
   const screen = agentResult.value?.screen_result || structuredResult.value
   if (screen) {
@@ -116,6 +117,13 @@ const agentSortText = computed(() => {
 })
 const agentRiskNotes = computed(() => {
   if (!agentResult.value) return []
+  if (isAgentDesign.value) {
+    return [
+      ...(agentResult.value.warnings || []),
+      ...activeToolNotes.value,
+      '这是策略草案，不是已执行的股票池结果。',
+    ]
+  }
   const notes = [
     ...(agentResult.value.warnings || []),
     ...activeToolNotes.value,
@@ -546,7 +554,8 @@ onMounted(bootstrap)
             <div class="table-head">
               <div>
                 <strong>{{ displayTitle }}</strong>
-                <span>{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
+                <span v-if="isAgentDesign">未执行筛选 · 显示策略条件</span>
+                <span v-else>{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
               </div>
               <n-tag :bordered="false" size="small" :type="agentResult && !agentResult.plan.ai_used ? 'warning' : 'success'">
                 {{ agentResult ? (agentResult.plan.ai_used ? 'AI 规划' : '本地规划') : (structuredResult ? '条件筛选' : '内置策略') }}
@@ -567,14 +576,14 @@ onMounted(bootstrap)
             size="small"
             striped
           />
-          <n-empty v-else-if="!tableLoading" description="当前条件没有命中股票" />
+          <n-empty v-else-if="!tableLoading" :description="isAgentDesign ? '策略设计请求未执行筛选' : '当前条件没有命中股票'" />
           <div v-else class="table-loading">
             <n-skeleton text :repeat="8" />
           </div>
         </n-card>
 
         <details v-if="agentResult" class="details-panel">
-          <summary>查看筛选说明</summary>
+          <summary>{{ isAgentDesign ? '查看策略说明' : '查看筛选说明' }}</summary>
           <div class="details-grid">
             <div>
               <strong>筛选条件</strong>
@@ -583,7 +592,7 @@ onMounted(bootstrap)
                   {{ condition }}
                 </n-tag>
               </div>
-              <small>排序：{{ agentSortText }}</small>
+              <small v-if="!isAgentDesign">排序：{{ agentSortText }}</small>
             </div>
             <div>
               <strong>工具调用</strong>

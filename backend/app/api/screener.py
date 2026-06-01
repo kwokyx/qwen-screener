@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.screener import NLScreenRequest, ScreenRequest, ScreenResponse
-from app.services import qwen_client, screener_engine
+from app.services import qwen_client, screener_engine, strategy_selector
 
 
 router = APIRouter(prefix="/screener", tags=["screener"])
@@ -61,6 +61,24 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n".encode("utf-8")
 
     def gen():
+        # ---- 工具路由：策略设计请求不应无脑执行股票筛选 ----
+        if strategy_selector.is_strategy_design_query(req.query):
+            response = strategy_selector.build_strategy_design_response(
+                req.query,
+                ai_configured=strategy_selector.is_ai_configured(),
+            )
+            plan = response.plan
+            yield event({"type": "thinking", "text": "tool_router -> strategy_design；不调用 screen_stocks。\n"})
+            yield event({
+                "type": "design",
+                "plan": plan.model_dump(),
+                "conditions": [c.model_dump() for c in plan.conditions],
+                "answer": response.answer,
+                "tool_trace": response.tool_trace,
+            })
+            yield event({"type": "done"})
+            return
+
         # ---- 阶段 1：流式生成 JSON ----
         prompt = _load_prompt("nl_to_filter.md").replace("{user_query}", req.query)
         buf = []

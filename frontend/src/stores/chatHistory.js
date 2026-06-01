@@ -41,6 +41,7 @@ function uid() {
 /** 服务端行 → 本地 item。serverId 字段用于后续 DELETE。 */
 function fromServer(r) {
   const ts = r.created_at ? Math.floor(new Date(r.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)
+  const meta = r.screen_meta || null
   return {
     id: uid(),
     serverId: r.id,
@@ -49,18 +50,25 @@ function fromServer(r) {
     parsedConditions: r.parsed_conditions || [],
     items: (r.items || []).slice(0, MAX_RESULT_PRESERVE),
     total: r.total || 0,
-    screenMeta: r.screen_meta || null,
+    screenMeta: meta,
+    agentAnswer: meta?.agent_answer || '',
+    agentPlan: meta?.agent_plan || null,
+    toolTrace: meta?.tool_trace || [],
   }
 }
 
 /** 本地 item → POST payload。 */
 function toPayload(it) {
+  const screenMeta = { ...(it.screenMeta || {}) }
+  if (it.agentAnswer) screenMeta.agent_answer = it.agentAnswer
+  if (it.agentPlan) screenMeta.agent_plan = it.agentPlan
+  if (it.toolTrace?.length) screenMeta.tool_trace = it.toolTrace
   return {
     query: it.query,
     parsed_conditions: it.parsedConditions || [],
     items: it.items || [],
     total: it.total || 0,
-    screen_meta: it.screenMeta || null,
+    screen_meta: Object.keys(screenMeta).length ? screenMeta : null,
   }
 }
 
@@ -82,6 +90,9 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
       items: (snapshot.items || []).slice(0, MAX_RESULT_PRESERVE),
       total: snapshot.total || 0,
       screenMeta: snapshot.screenMeta || null,
+      agentAnswer: snapshot.agentAnswer || '',
+      agentPlan: snapshot.agentPlan || null,
+      toolTrace: snapshot.toolTrace || [],
     }
     items.value.unshift(it)
     if (items.value.length > MAX_ITEMS) items.value.length = MAX_ITEMS

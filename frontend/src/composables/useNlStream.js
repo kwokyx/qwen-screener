@@ -17,6 +17,9 @@ export function useNlStream(historyStore, hooks = {}) {
   const parsedConditions = ref([])
   const screenMeta = ref(null)
   const result = ref(null)
+  const agentAnswer = ref('')
+  const agentPlan = ref(null)
+  const toolTrace = ref([])
   const errorMsg = ref('')
 
   // 各阶段时间戳，inspector 显示用时
@@ -38,6 +41,9 @@ export function useNlStream(historyStore, hooks = {}) {
     parsedConditions.value = []
     screenMeta.value = null
     result.value = null
+    agentAnswer.value = ''
+    agentPlan.value = null
+    toolTrace.value = []
     errorMsg.value = ''
   }
 
@@ -62,6 +68,22 @@ export function useNlStream(historyStore, hooks = {}) {
           screenMeta.value = { logic: ev.logic, sort_by: ev.sort_by, sort_desc: ev.sort_desc, limit: ev.limit }
           phase.value = 'parsed'
           tParsed.value = Date.now()
+        } else if (ev.type === 'design') {
+          parsedConditions.value = ev.conditions || ev.plan?.conditions || []
+          agentAnswer.value = ev.answer || ''
+          agentPlan.value = ev.plan || null
+          toolTrace.value = ev.tool_trace || []
+          screenMeta.value = {
+            mode: 'strategy_design',
+            tool: ev.plan?.tool || 'strategy_design',
+            tool_label: ev.plan?.tool_label || '策略设计',
+            agent_plan: ev.plan || null,
+            agent_answer: ev.answer || '',
+            tool_trace: ev.tool_trace || [],
+          }
+          phase.value = 'done'
+          tParsed.value = Date.now()
+          tDone.value = Date.now()
         } else if (ev.type === 'screening') {
           phase.value = 'screening'
         } else if (ev.type === 'result') {
@@ -93,6 +115,9 @@ export function useNlStream(historyStore, hooks = {}) {
           items: result.value?.items || [],
           total: result.value?.total || 0,
           screenMeta: screenMeta.value,
+          agentAnswer: agentAnswer.value,
+          agentPlan: agentPlan.value,
+          toolTrace: toolTrace.value,
         })
       }
     } catch (e) {
@@ -120,12 +145,19 @@ export function useNlStream(historyStore, hooks = {}) {
     lastQuery.value = it.query
     parsedConditions.value = it.parsedConditions || []
     screenMeta.value = it.screenMeta || null
-    result.value = {
-      items: it.items || [],
-      total: it.total || 0,
-      parsed_conditions: it.parsedConditions || [],
+    agentAnswer.value = it.agentAnswer || it.screenMeta?.agent_answer || ''
+    agentPlan.value = it.agentPlan || it.screenMeta?.agent_plan || null
+    toolTrace.value = it.toolTrace || it.screenMeta?.tool_trace || []
+    if (agentPlan.value?.tool === 'strategy_design') {
+      result.value = null
+    } else {
+      result.value = {
+        items: it.items || [],
+        total: it.total || 0,
+        parsed_conditions: it.parsedConditions || [],
+      }
+      if (hooks.onResult) hooks.onResult((it.items || []).map((s) => s.code))
     }
-    if (hooks.onResult) hooks.onResult((it.items || []).map((s) => s.code))
     phase.value = 'done'
     tStart.value = it.ts * 1000
     tDone.value = it.ts * 1000
@@ -134,7 +166,7 @@ export function useNlStream(historyStore, hooks = {}) {
 
   return {
     // state
-    phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, errorMsg,
+    phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, errorMsg,
     tStart, tParsed, tDone,
     isStreaming,
     // actions

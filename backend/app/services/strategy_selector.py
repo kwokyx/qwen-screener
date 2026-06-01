@@ -83,6 +83,20 @@ def list_templates() -> list[StrategyTemplate]:
 def list_agent_tools() -> list[StrategyToolInfo]:
     return [
         StrategyToolInfo(
+            id="strategy_design",
+            label="策略设计",
+            category="规划工具",
+            description="当用户只要求设计选股思路、列出量化条件或解释策略框架时使用；只返回条件建议，不执行股票筛选。",
+            inputs=["query"],
+            outputs=["策略框架", "量化条件", "执行注意事项"],
+            examples=["帮我设计一个稳健的选股策略，列出量化条件", "只列一个低估值高质量策略，不要筛股票"],
+            fields=_tool_fields(),
+            data_notes=[
+                "该工具不调用 screener_engine，不返回股票池。",
+                "量化条件是策略草案，执行前需要根据行业和数据覆盖率调整阈值。",
+            ],
+        ),
+        StrategyToolInfo(
             id="stock_screen",
             label="结构化股票筛选",
             category="基础工具",
@@ -161,6 +175,9 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     project-owned tools. If AI is unavailable, a deterministic local planner is
     used and the response clearly says so instead of fabricating AI results.
     """
+    if is_strategy_design_query(query):
+        return build_strategy_design_response(query, ai_configured=_ai_configured())
+
     ai_status = _ai_status()
     ai_configured = bool(ai_status.get("configured"))
     ai_available = bool(ai_status.get("ok"))
@@ -225,6 +242,52 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
         warnings=warnings,
         tool_trace=tool_trace,
     )
+
+
+def is_strategy_design_query(query: str) -> bool:
+    """Return True when the user asks for a strategy plan rather than execution."""
+    q = query.strip().lower()
+    explicit_design_only = ("只列", "只设计", "不要筛", "不筛选", "不用筛", "不执行", "先别跑")
+    if any(k in q for k in explicit_design_only):
+        return True
+
+    design_terms = ("设计", "制定", "列出", "量化条件", "策略框架", "选股策略", "策略思路", "怎么选", "如何选")
+    strategy_terms = ("策略", "量化", "条件", "稳健", "选股")
+    execution_terms = ("筛选", "筛出", "选出", "找出", "找股票", "推荐股票", "股票池", "命中", "跑一下", "执行")
+    has_design_intent = any(k in q for k in design_terms)
+    has_strategy_topic = any(k in q for k in strategy_terms)
+    has_execution_intent = any(k in q for k in execution_terms)
+    return has_design_intent and has_strategy_topic and not has_execution_intent
+
+
+def build_strategy_design_response(query: str, ai_configured: bool = False) -> StrategyAgentResponse:
+    conditions = _strategy_design_conditions(query)
+    plan = StrategyAgentPlan(
+        tool="strategy_design",
+        tool_label="策略设计",
+        reasoning="用户请求是设计策略/列量化条件，不是筛出股票；因此只生成条件草案，不调用筛选引擎。",
+        conditions=conditions,
+        condition_labels=_condition_labels(conditions),
+        logic="AND",
+        sort_by="roe",
+        sort_desc=True,
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    answer = _summarize_strategy_design(query, plan)
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=answer,
+        tool_trace=[
+            "tool_router -> strategy_design",
+            "跳过 screener_engine.screen：当前请求是策略设计，不是执行选股",
+        ],
+    )
+
+
+def is_ai_configured() -> bool:
+    return _ai_configured()
 
 
 def _ai_configured() -> bool:
@@ -342,6 +405,29 @@ def _local_conditions(query: str) -> list[FilterCondition]:
     return conditions
 
 
+def _strategy_design_conditions(query: str) -> list[FilterCondition]:
+    """Draft quantitative conditions for strategy-design requests.
+
+    These are not executed directly. They are intentionally conservative and
+    use only fields the local screener already understands, so the user can run
+    them later after adjusting thresholds.
+    """
+    conditions = [
+        FilterCondition(field="roe", op="gte", value=15),
+        FilterCondition(field="debt_ratio", op="lte", value=60),
+        FilterCondition(field="gross_margin", op="gte", value=25),
+        FilterCondition(field="profit_yoy", op="gte", value=10),
+        FilterCondition(field="pe", op="between", value=[0, 25]),
+        FilterCondition(field="pb", op="between", value=[0, 3]),
+        FilterCondition(field="market_cap", op="gte", value=100),
+    ]
+    if any(k in query for k in ("分红", "股息", "股息率")):
+        conditions.append(FilterCondition(field="dividend_yield", op="gte", value=3))
+    if any(k in query for k in ("成长", "增长")):
+        conditions.append(FilterCondition(field="revenue_yoy", op="gte", value=10))
+    return conditions
+
+
 def _local_sort_by(query: str, conditions: list[FilterCondition]) -> str | None:
     if any(k in query for k in ("高分红", "股息", "分红")):
         return "dividend_yield"
@@ -362,6 +448,16 @@ def _summarize_strategy_agent(query: str, plan: StrategyAgentPlan, total: int, n
 def _summarize_screen_agent(query: str, plan: StrategyAgentPlan, total: int, names: list[str]) -> str:
     picked = "、".join(names) if names else "暂无命中"
     return f"我将「{query}」转换为 {len(plan.conditions)} 个结构化条件，并调用本地筛选引擎。当前命中 {total} 只，前排结果：{picked}。"
+
+
+def _summarize_strategy_design(query: str, plan: StrategyAgentPlan) -> str:
+    lines = [
+        f"我判断「{query}」是策略设计请求，先不执行筛选。",
+        "建议量化条件：",
+        *[f"{idx}. {label}" for idx, label in enumerate(plan.condition_labels, start=1)],
+        "执行建议：先用这些条件做初筛，再按行业放宽阈值；银行、保险等金融行业不适合直接套用毛利率和资产负债率。",
+    ]
+    return "\n".join(lines)
 
 
 def _condition_labels(conditions: list[FilterCondition]) -> list[str]:

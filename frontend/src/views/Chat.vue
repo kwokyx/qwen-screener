@@ -25,7 +25,7 @@ const { load: loadSparks, get: spark } = useKlineCache(30)
 // SSE 状态机：把流式逻辑都委托给 composable
 const stream = useNlStream(history, { onResult: loadSparks })
 const {
-  phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, errorMsg,
+  phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, errorMsg,
   tStart, tParsed, tDone, isStreaming,
   send: streamSend, stop, restoreFromHistory: streamRestore, reset,
 } = stream
@@ -69,6 +69,8 @@ const thinkingPreview = computed(() => {
   if (s.length <= 200) return s
   return '…' + s.slice(-200)
 })
+const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
+const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
 
 async function send() {
   const q = input.value.trim()
@@ -125,6 +127,22 @@ onMounted(() => {
 const stages = computed(() => {
   const items = []
   const elapsed = (a, b) => (b > a ? `${((b - a) / 1000).toFixed(1)}s` : '')
+  if (isDesignResponse.value) {
+    return [
+      {
+        t: 'tool_router',
+        state: 'success',
+        out: '判断为策略设计请求',
+        dur: tParsed.value && tStart.value ? elapsed(tStart.value, tParsed.value) : '',
+      },
+      {
+        t: 'strategy_design',
+        state: 'success',
+        out: `生成 ${parsedConditions.value.length} 个量化条件，未执行筛选`,
+        dur: tDone.value && tParsed.value ? elapsed(tParsed.value, tDone.value) : '',
+      },
+    ]
+  }
   // 1. 解析
   let s1State = 'pending'
   if (phase.value === 'thinking') s1State = 'running'
@@ -190,7 +208,7 @@ const stageColor = (s) => ({
                :title="isStreaming ? '当前对话进行中，请先停止' : c.query"
                :style="{ padding: '8px 10px', borderRadius: '7px', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '6px', cursor: isStreaming ? 'wait' : 'pointer' }">
             <span :style="{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11.5px' }">{{ c.query }}</span>
-            <span :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ c.total }} 只</span>
+            <span :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ c.agentPlan?.tool === 'strategy_design' ? '策略' : `${c.total} 只` }}</span>
             <button class="history-del" @click="deleteHistory(c.id, $event)" title="删除">
               <Icon name="x" :size="10" />
             </button>
@@ -263,8 +281,8 @@ const stageColor = (s) => ({
                 <Icon name="sparkle" :size="20" />
               </div>
               <div>
-                <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">用自然语言生成筛选条件</div>
-                <div :style="{ fontSize: '12px', color: A2.textMuted }">输入目标后，系统会解析条件、执行本地筛选，并返回真实股票池结果。</div>
+                <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">用自然语言筛选或设计策略</div>
+                <div :style="{ fontSize: '12px', color: A2.textMuted }">系统会先判断工具：需要股票池才执行筛选，只问策略时只列量化条件。</div>
               </div>
             </div>
             <div class="starter-grid">
@@ -306,7 +324,7 @@ const stageColor = (s) => ({
             <div :style="{ flex: 1, background: A2.surface, padding: '12px 14px', fontSize: '12px', color: A2.textMuted, borderRadius: '8px', border: `1px solid ${A2.borderHair}` }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', color: A2.text, fontWeight: 600 }">
                 <Icon name="brain" :size="11" :color="A2.qwen" />
-                <span>正在拆解你的需求…</span>
+                <span>正在判断工具调用…</span>
                 <span class="dot-flow"><i></i><i></i><i></i></span>
               </div>
               <pre v-if="thinkingBuf" :style="{ margin: '8px 0 0 0', fontSize: '10.5px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textDim, lineHeight: 1.55, whiteSpace: 'pre-wrap', background: A2.bgDeep, padding: '8px 10px', borderRadius: '5px', maxHeight: '120px', overflow: 'hidden' }">{{ thinkingPreview }}<span class="caret-mono" /></pre>
@@ -318,7 +336,12 @@ const stageColor = (s) => ({
             <div :style="{ display: 'flex', gap: '12px', marginBottom: '12px' }">
               <div :style="{ width: '28px', flexShrink: 0 }" />
               <div :style="{ flex: 1, fontSize: '13.5px', lineHeight: 1.75 }">
-                我已将你的需求拆解为结构化条件<span v-if="phase === 'screening'" :style="{ color: A2.textMuted, fontWeight: 500 }">，引擎执行中…</span><span v-else-if="result">，命中 <span :style="{ color: A2.qwenDeep, fontWeight: 800, fontSize: '16px' }">{{ result.total }}</span> 只</span>：
+                <template v-if="isDesignResponse">
+                  我判断这是策略设计请求，暂不执行筛选，先列出建议量化条件：
+                </template>
+                <template v-else>
+                  我已将你的需求拆解为结构化条件<span v-if="phase === 'screening'" :style="{ color: A2.textMuted, fontWeight: 500 }">，引擎执行中…</span><span v-else-if="result">，命中 <span :style="{ color: A2.qwenDeep, fontWeight: 800, fontSize: '16px' }">{{ result.total }}</span> 只</span>：
+                </template>
               </div>
             </div>
             <div :style="{ marginLeft: '40px', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '7px' }">
@@ -329,6 +352,13 @@ const stageColor = (s) => ({
               </div>
             </div>
           </template>
+
+          <div v-if="isDesignResponse && agentAnswerLines.length" class="agent-answer-panel">
+            <div class="agent-answer-title">策略设计</div>
+            <div v-for="(line, i) in agentAnswerLines" :key="i" class="agent-answer-line">
+              {{ line }}
+            </div>
+          </div>
 
           <!-- Screening 中的 Skeleton 占位 -->
           <div v-if="phase === 'screening'" :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
@@ -441,12 +471,24 @@ const stageColor = (s) => ({
           </div>
         </template>
 
+        <div v-if="toolTrace.length" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
+          <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">TOOL TRACE</div>
+          <div v-for="trace in toolTrace" :key="trace">{{ trace }}</div>
+        </div>
+
         <div v-if="screenMeta" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
           <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">QUERY META</div>
-          logic = {{ screenMeta.logic }}<br />
-          sort_by = {{ screenMeta.sort_by || '—' }}<br />
-          sort_desc = {{ screenMeta.sort_desc }}<br />
-          limit = {{ screenMeta.limit }}
+          <template v-if="screenMeta.mode === 'strategy_design'">
+            tool = {{ screenMeta.tool }}<br />
+            execute = skipped<br />
+            reason = design_only
+          </template>
+          <template v-else>
+            logic = {{ screenMeta.logic }}<br />
+            sort_by = {{ screenMeta.sort_by || '—' }}<br />
+            sort_desc = {{ screenMeta.sort_desc }}<br />
+            limit = {{ screenMeta.limit }}
+          </template>
         </div>
 
         <div :style="{ marginTop: '18px', padding: '12px', background: A2.qwenGradSoft, borderRadius: '8px', fontSize: '11px', lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
@@ -509,6 +551,30 @@ const stageColor = (s) => ({
   border-radius: 8px;
   background: #FFFFFF;
   overflow: hidden;
+}
+
+.agent-answer-panel {
+  margin-left: 40px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #2F3137;
+  font-size: 12.5px;
+  line-height: 1.75;
+  box-shadow: 0 2px 10px rgba(14, 14, 12, 0.04);
+}
+
+.agent-answer-title {
+  margin-bottom: 8px;
+  color: #111111;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.agent-answer-line + .agent-answer-line {
+  margin-top: 4px;
 }
 
 .preview-head {

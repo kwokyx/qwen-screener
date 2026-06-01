@@ -2,6 +2,39 @@ from app.schemas.screener import FilterCondition, ScreenRequest
 from app.services import strategy_selector
 
 
+def test_agent_design_request_does_not_execute_screen(db, seed_stocks, monkeypatch):
+    def fail_ai_status():
+        raise AssertionError("design-only request should not probe AI health")
+
+    def fail_parse(_query):
+        raise AssertionError("design-only request should not parse filters")
+
+    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(strategy_selector.qwen_client, "parse_nl_query", fail_parse)
+
+    res = strategy_selector.run_agent_selection(db, "帮我设计一个稳健的选股策略，列出量化条件", limit=10)
+
+    assert res.plan.tool == "strategy_design"
+    assert res.plan.tool_label == "策略设计"
+    assert res.screen_result is None
+    assert res.strategy_result is None
+    assert res.plan.condition_labels == [
+        "ROE不低于15",
+        "资产负债率不高于60",
+        "毛利率不低于25",
+        "净利润同比不低于10",
+        "市盈率介于0、25",
+        "市净率介于0、3",
+        "总市值不低于100",
+    ]
+    assert res.tool_trace == [
+        "tool_router -> strategy_design",
+        "跳过 screener_engine.screen：当前请求是策略设计，不是执行选股",
+    ]
+    assert "先不执行筛选" in res.answer
+    assert "命中 0 只" not in res.answer
+
+
 def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
@@ -99,7 +132,8 @@ def test_list_agent_tools_documents_screen_fields():
     tools = strategy_selector.list_agent_tools()
     by_id = {tool.id: tool for tool in tools}
 
-    assert {"stock_screen", "strategy_select"} <= set(by_id)
+    assert {"strategy_design", "stock_screen", "strategy_select"} <= set(by_id)
+    assert "不调用 screener_engine" in " ".join(by_id["strategy_design"].data_notes)
     assert by_id["stock_screen"].fields
     assert any(field.key == "pe" and field.label == "市盈率" for field in by_id["stock_screen"].fields)
     assert "字段缺失" in " ".join(by_id["stock_screen"].data_notes)
