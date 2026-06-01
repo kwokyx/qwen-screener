@@ -136,6 +136,18 @@ def test_sort_change_pct_uses_server_expression(db, seed_stocks):
     assert result.items[0].change_pct == 20.0
 
 
+def test_sort_score_uses_server_expression(db, seed_stocks):
+    """综合分由后端计算并支持全量排序，分页前就已经稳定排序。"""
+    result = _screen(db, conditions=[], sort_by="score", sort_desc=True, limit=5)
+
+    assert all(item.score is not None for item in result.items)
+    assert result.items[0].code == "600036.SH"
+    assert [item.score for item in result.items] == sorted(
+        [item.score for item in result.items],
+        reverse=True,
+    )
+
+
 def test_sort_uses_code_as_stable_tiebreaker(db, seed_stocks):
     """排序值相同时按代码升序兜底，保证翻页结果稳定。"""
     result = _screen(db, conditions=[], sort_by="close", sort_desc=True)

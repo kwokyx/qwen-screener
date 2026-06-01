@@ -48,6 +48,7 @@ class ScreenResultItem(StockBasicOut):
     prev_close: float | None = None
     change_pct: float | None = None
     turnover: float | None = None
+    score: float | None = None
     revenue_yoy: float | None = None
     profit_yoy: float | None = None
     gross_margin: float | None = None

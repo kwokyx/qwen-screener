@@ -10,6 +10,7 @@ import {
   NGi,
   NGrid,
   NPagination,
+  NSelect,
   NSkeleton,
   NSpace,
   NStatistic,
@@ -25,9 +26,11 @@ import { useKlineCache } from '../composables/useKlineCache.js'
 const router = useRouter()
 const route = useRoute()
 const AGENT_RESULTS_KEY = 'qwen.results.agent.v1'
+const resultModes = new Set(['balanced', 'value', 'sized', 'all'])
+let suppressNextRouteSync = false
 
-function readAgentContext() {
-  if (route.query.source !== 'agent') return null
+function readAgentContext(query = route.query) {
+  if (query.source !== 'agent') return null
   try {
     const raw = sessionStorage.getItem(AGENT_RESULTS_KEY) || localStorage.getItem(AGENT_RESULTS_KEY)
     const context = JSON.parse(raw || 'null')
@@ -45,10 +48,16 @@ function persistAgentContext(context) {
   try { localStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
 }
 
+function routeFilterMode(query = route.query, hasAgent = false) {
+  if (hasAgent) return 'agent'
+  return typeof query.mode === 'string' && resultModes.has(query.mode) ? query.mode : 'balanced'
+}
+
 const agentContext = ref(readAgentContext())
-const filterMode = ref(agentContext.value ? 'agent' : 'balanced')
-const sortableFields = new Set(['close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover'])
+const filterMode = ref(routeFilterMode(route.query, Boolean(agentContext.value)))
+const sortableFields = new Set(['score', 'close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover'])
 const sortLabels = {
+  score: '综合分',
   close: '现价',
   change_pct: '涨跌幅',
   pe: 'PE',
@@ -69,7 +78,7 @@ const initialSort = typeof route.query.sort === 'string'
   : agentContext.value?.sort_by
 const page = ref(positiveInt(route.query.page, 1))
 const pageSize = ref([20, 50, 100].includes(positiveInt(route.query.size, 20)) ? positiveInt(route.query.size, 20) : 20)
-const sortBy = ref(sortableFields.has(initialSort) ? initialSort : (filterMode.value === 'agent' ? 'market_cap' : 'pe'))
+const sortBy = ref(sortableFields.has(initialSort) ? initialSort : 'score')
 const sortDesc = ref(route.query.order === 'asc'
   ? false
   : (route.query.order === 'desc' ? true : (filterMode.value === 'agent' && agentContext.value?.sort_desc !== false)))
@@ -153,6 +162,7 @@ const total = ref(0)
 const tradeDate = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
+let loadRequestId = 0
 
 const { load: loadResultKlines, get: resultSpark } = useKlineCache(30)
 watch(items, () => loadResultKlines(items.value.map((s) => s.code)))
@@ -188,6 +198,7 @@ const resultSubtitle = computed(() => {
 })
 
 const activeSortLabel = computed(() => `${sortLabels[sortBy.value] || sortBy.value} ${sortDesc.value ? '降序' : '升序'}`)
+const sortOptions = Object.entries(sortLabels).map(([value, label]) => ({ value, label }))
 const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value + 1 : 0)
 const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
 
@@ -239,6 +250,17 @@ const columns = computed(() => [
     key: 'industry',
     minWidth: 90,
     render: (s) => h(NTag, { size: 'small', bordered: false, style: { maxWidth: '118px' } }, { default: () => s.industry || '—' }),
+  },
+  {
+    title: '综合分',
+    key: 'score',
+    align: 'right',
+    width: 82,
+    ...remoteSort('score'),
+    render: (s) => rightMonoCell(s.score != null ? s.score.toFixed(1) : '—', {
+      color: s.score >= 70 ? Preview.positive : Preview.textMuted,
+      fontWeight: s.score >= 70 ? 700 : 600,
+    }),
   },
   {
     title: '现价',
@@ -342,6 +364,7 @@ const columns = computed(() => [
 ])
 
 async function load() {
+  const requestId = ++loadRequestId
   loading.value = true
   errorMsg.value = ''
   try {
@@ -352,6 +375,7 @@ async function load() {
       offset: (page.value - 1) * pageSize.value,
       limit: pageSize.value,
     })
+    if (requestId !== loadRequestId) return
     const maxPage = Math.max(1, Math.ceil(data.total / pageSize.value))
     if (page.value > maxPage) {
       page.value = maxPage
@@ -362,9 +386,12 @@ async function load() {
     total.value = data.total
     tradeDate.value = data.trade_date || data.items?.[0]?.trade_date || null
   } catch (e) {
+    if (requestId !== loadRequestId) return
     errorMsg.value = e.response?.data?.detail || e.message
   } finally {
-    loading.value = false
+    if (requestId === loadRequestId) {
+      loading.value = false
+    }
   }
 }
 
@@ -382,15 +409,51 @@ function syncRouteState() {
       agentContext.value.sort_desc = sortDesc.value
       persistAgentContext(agentContext.value)
     }
+  } else {
+    query.mode = filterMode.value
   }
-  router.replace({ path: '/results', query })
+  suppressNextRouteSync = true
+  router.push({ path: '/results', query })
+    .catch(() => {})
+    .finally(() => {
+      suppressNextRouteSync = false
+    })
+}
+
+function applyRouteState(query = route.query) {
+  const nextAgent = readAgentContext(query)
+  agentContext.value = nextAgent
+  filterMode.value = routeFilterMode(query, Boolean(nextAgent))
+  page.value = positiveInt(query.page, 1)
+  const nextSize = positiveInt(query.size, 20)
+  pageSize.value = [20, 50, 100].includes(nextSize) ? nextSize : 20
+  const nextSort = typeof query.sort === 'string' ? query.sort : nextAgent?.sort_by
+  sortBy.value = sortableFields.has(nextSort) ? nextSort : 'score'
+  sortDesc.value = query.order === 'asc'
+    ? false
+    : (query.order === 'desc' ? true : (filterMode.value === 'agent' && nextAgent?.sort_desc !== false))
 }
 
 function applyMode(mode) {
   filterMode.value = mode
   page.value = 1
-  sortBy.value = mode === 'sized' ? 'market_cap' : 'pe'
-  sortDesc.value = mode === 'sized'
+  sortBy.value = mode === 'sized' ? 'market_cap' : 'score'
+  sortDesc.value = true
+  syncRouteState()
+  load()
+}
+
+function handleSortSelect(value) {
+  if (!sortableFields.has(value)) return
+  sortBy.value = value
+  page.value = 1
+  syncRouteState()
+  load()
+}
+
+function toggleSortOrder() {
+  sortDesc.value = !sortDesc.value
+  page.value = 1
   syncRouteState()
   load()
 }
@@ -429,6 +492,15 @@ function rowProps(row) {
 }
 
 onMounted(load)
+
+watch(
+  () => route.fullPath,
+  () => {
+    if (suppressNextRouteSync) return
+    applyRouteState(route.query)
+    load()
+  }
+)
 </script>
 
 <template>
@@ -493,6 +565,19 @@ onMounted(load)
           <span>数据日期 {{ tradeDate || '—' }}</span>
           <span>排序 {{ activeSortLabel }}</span>
         </div>
+        <div class="sort-controls">
+          <span>排序</span>
+          <NSelect
+            :value="sortBy"
+            :options="sortOptions"
+            size="small"
+            class="sort-select"
+            @update:value="handleSortSelect"
+          />
+          <NButton size="small" secondary class="sort-order-btn" @click="toggleSortOrder">
+            {{ sortDesc ? '降序' : '升序' }}
+          </NButton>
+        </div>
       </NCard>
 
       <!-- Error -->
@@ -536,7 +621,7 @@ onMounted(load)
           :pagination="false"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1160"
+          :scroll-x="1240"
           size="small"
           remote
           @update:sorter="handleSorterChange"
@@ -642,6 +727,10 @@ onMounted(load)
 }
 
 .filter-card :deep(.n-card__content) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 18px;
+  align-items: center;
   padding: 14px 0;
 }
 
@@ -650,14 +739,34 @@ onMounted(load)
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  grid-column: 1 / 2;
 }
 
 .result-meta {
   display: flex;
   gap: 16px;
-  margin-top: 10px;
   color: #71717A;
   font-size: 12px;
+  grid-column: 1 / 2;
+}
+
+.sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #71717A;
+  font-size: 12px;
+  grid-column: 2 / 3;
+  grid-row: 1 / span 2;
+  white-space: nowrap;
+}
+
+.sort-select {
+  width: 116px;
+}
+
+.sort-order-btn {
+  min-width: 58px;
 }
 
 .filter-cat-name {
@@ -766,6 +875,26 @@ onMounted(load)
 }
 
 @media (max-width: 640px) {
+  .filter-card :deep(.n-card__content) {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-tags,
+  .result-meta,
+  .sort-controls {
+    grid-column: 1;
+  }
+
+  .sort-controls {
+    grid-row: auto;
+    justify-content: space-between;
+  }
+
+  .sort-select {
+    flex: 1;
+    min-width: 0;
+  }
+
   .table-footer {
     align-items: flex-start;
     flex-direction: column;

@@ -3,7 +3,7 @@
 将 FilterCondition 列表翻译成 SQLAlchemy 查询。这一层不依赖千问，
 是系统的"基础筛选模块"，论文里独立成章。
 """
-from sqlalchemy import and_, desc, func, or_
+from sqlalchemy import and_, case, desc, func, or_
 from sqlalchemy.orm import Session, aliased
 
 from app.models.stock import StockBasic, StockDaily, StockFinancial
@@ -117,6 +117,136 @@ def _basic_clause(col, op, v):
     raise ValueError(f"不支持的操作符: {op}")
 
 
+def _quality_score_expr(change_pct):
+    """Composite score used by results page sorting.
+
+    It is intentionally simple and explainable: quality (ROE), shareholder
+    return (dividend yield), valuation (PE/PB), scale and short-term momentum.
+    The expression runs in SQL so pagination stays globally sorted.
+    """
+    roe_score = case(
+        (StockFinancial.roe.is_(None), 0.0),
+        (StockFinancial.roe < 0, 0.0),
+        (StockFinancial.roe > 30, 36.0),
+        else_=StockFinancial.roe * 1.2,
+    )
+    dividend_score = case(
+        (StockDaily.dividend_yield.is_(None), 0.0),
+        (StockDaily.dividend_yield < 0, 0.0),
+        (StockDaily.dividend_yield > 8, 17.6),
+        else_=StockDaily.dividend_yield * 2.2,
+    )
+    pe_score = case(
+        (StockDaily.pe.is_(None), 0.0),
+        (StockDaily.pe <= 0, 0.0),
+        (StockDaily.pe <= 10, 20.0),
+        (StockDaily.pe <= 20, 16.0),
+        (StockDaily.pe <= 35, 10.0),
+        (StockDaily.pe <= 60, 5.0),
+        else_=1.0,
+    )
+    pb_score = case(
+        (StockDaily.pb.is_(None), 0.0),
+        (StockDaily.pb <= 0, 0.0),
+        (StockDaily.pb <= 1.5, 12.0),
+        (StockDaily.pb <= 3, 8.0),
+        (StockDaily.pb <= 5, 4.0),
+        else_=1.0,
+    )
+    scale_score = case(
+        (StockDaily.market_cap.is_(None), 0.0),
+        (StockDaily.market_cap >= 1000, 10.0),
+        (StockDaily.market_cap >= 300, 7.0),
+        (StockDaily.market_cap >= 100, 5.0),
+        else_=2.0,
+    )
+    momentum_score = case(
+        (change_pct.is_(None), 0.0),
+        (change_pct < -8, 0.0),
+        (change_pct < 0, 2.0),
+        (change_pct < 3, 5.0),
+        (change_pct < 8, 7.0),
+        else_=4.0,
+    )
+    raw_score = roe_score + dividend_score + pe_score + pb_score + scale_score + momentum_score
+    return case((raw_score > 99, 99.0), else_=raw_score).label("score")
+
+
+def _bounded(value: float | None, low: float, high: float) -> float:
+    if value is None:
+        return 0.0
+    return min(max(value, low), high)
+
+
+def _quality_score(daily: StockDaily | None, previous: StockDaily | None, fin: StockFinancial | None) -> float | None:
+    if not daily and not fin:
+        return None
+    change_pct = _change_pct(daily.close if daily else None, previous.close if previous else None)
+    pe = daily.pe if daily else None
+    pb = daily.pb if daily else None
+    roe = fin.roe if fin else None
+    dividend_yield = daily.dividend_yield if daily else None
+    market_cap = daily.market_cap if daily else None
+
+    pe_score = 0.0
+    if pe is not None and pe > 0:
+        if pe <= 10:
+            pe_score = 20.0
+        elif pe <= 20:
+            pe_score = 16.0
+        elif pe <= 35:
+            pe_score = 10.0
+        elif pe <= 60:
+            pe_score = 5.0
+        else:
+            pe_score = 1.0
+
+    pb_score = 0.0
+    if pb is not None and pb > 0:
+        if pb <= 1.5:
+            pb_score = 12.0
+        elif pb <= 3:
+            pb_score = 8.0
+        elif pb <= 5:
+            pb_score = 4.0
+        else:
+            pb_score = 1.0
+
+    scale_score = 0.0
+    if market_cap is not None:
+        if market_cap >= 1000:
+            scale_score = 10.0
+        elif market_cap >= 300:
+            scale_score = 7.0
+        elif market_cap >= 100:
+            scale_score = 5.0
+        else:
+            scale_score = 2.0
+
+    momentum_score = 0.0
+    if change_pct is not None:
+        if change_pct < -8:
+            momentum_score = 0.0
+        elif change_pct < 0:
+            momentum_score = 2.0
+        elif change_pct < 3:
+            momentum_score = 5.0
+        elif change_pct < 8:
+            momentum_score = 7.0
+        else:
+            momentum_score = 4.0
+
+    score = (
+        _bounded(roe, 0, 30) * 1.2
+        + _bounded(dividend_yield, 0, 8) * 2.2
+        + pe_score
+        + pb_score
+        + scale_score
+        + momentum_score
+    )
+    return round(min(score, 99.0), 1)
+
+
 def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     # 兼容 SQLite/MySQL：用 group by + max 找最新日期，再 join
     latest_daily_dates = (
@@ -175,7 +305,8 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         / func.nullif(previous_daily.close, 0)
         * 100
     )
-    sort_fields = {**FIELD_MAP, "change_pct": change_pct}
+    quality_score = _quality_score_expr(change_pct)
+    sort_fields = {**FIELD_MAP, "change_pct": change_pct, "score": quality_score}
     if req.sort_by and req.sort_by in sort_fields:
         col = sort_fields[req.sort_by]
         q = q.order_by(
@@ -186,7 +317,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     else:
         q = q.order_by(StockBasic.code.asc())
 
-    total = q.count()
+    total = q.order_by(None).count()
     rows = q.offset(req.offset).limit(req.limit).all()
 
     items = [
@@ -202,6 +333,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             market_cap=daily.market_cap if daily else None,
             dividend_yield=daily.dividend_yield if daily else None,
             turnover=daily.turnover if daily else None,
+            score=_quality_score(daily, previous, fin),
             prev_close=previous.close if previous else None,
             change_pct=_change_pct(daily.close if daily else None, previous.close if previous else None),
             roe=fin.roe if fin else None,
