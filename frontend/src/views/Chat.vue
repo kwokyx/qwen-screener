@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
@@ -26,9 +26,12 @@ const { load: loadSparks, get: spark } = useKlineCache(30)
 const stream = useNlStream(history, { onResult: loadSparks })
 const {
   phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, errorMsg,
+  thread, liveTurn,
   tStart, tParsed, tDone, isStreaming,
-  send: streamSend, stop, restoreFromHistory: streamRestore, reset,
+  send: streamSend, stop, restoreFromHistory: streamRestore, clearThread,
 } = stream
+
+const chatScroll = ref(null)
 
 const presetPrompts = [
   '低估值高分红的银行股',
@@ -59,7 +62,17 @@ function fmtCond(c) {
   return `${field} ${opLabel[c.op] || c.op} ${c.value}`
 }
 
-const resultPreviewItems = computed(() => (result.value?.items || []).slice(0, 6))
+const conversationTurns = computed(() => {
+  const turns = [...thread.value]
+  const live = liveTurn.value
+  if (live && (isStreaming.value || phase.value === 'error')) {
+    return [...turns, live]
+  }
+  return turns
+})
+const hasConversation = computed(() => conversationTurns.value.length > 0)
+const latestTurn = computed(() => conversationTurns.value[conversationTurns.value.length - 1] || liveTurn.value || null)
+const resultPreviewItems = computed(() => (latestTurn.value?.result?.items || result.value?.items || []).slice(0, 6))
 const fmtMetric = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
 const fmtChange = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 function resultFacts(s) {
@@ -90,6 +103,30 @@ const thinkingPreview = computed(() => {
   return '…' + s.slice(-200)
 })
 const textOnlyTools = ['strategy_design', 'ask_clarification', 'explain_result']
+const turnResultItems = (turn) => (turn?.result?.items || []).slice(0, 6)
+const turnAnswerLines = (turn) => (turn?.agentAnswer || '').split('\n').filter(Boolean)
+const turnThinkingPreview = (turn) => {
+  const s = turn?.thinkingBuf || ''
+  return s.length <= 200 ? s : '…' + s.slice(-200)
+}
+const isDesignTurn = (turn) => turn?.agentPlan?.tool === 'strategy_design'
+const isTextOnlyTurn = (turn) => textOnlyTools.includes(turn?.agentPlan?.tool) && !turn?.result
+const turnAgentTitle = (turn) => turn?.agentPlan?.tool_label || 'Agent 结论'
+const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '股票筛选' : '待判断')
+const turnConditionIntro = (turn) => {
+  if (turn?.agentPlan?.tool === 'strategy_design') return '建议量化条件'
+  if (turn?.agentPlan?.tool === 'explain_result') return '上一轮条件'
+  return turn?.result ? `筛选条件 · 命中 ${turn.result.total} 只` : '识别条件'
+}
+const turnResultTitle = (turn) => turn?.agentPlan?.tool === 'strategy_select' ? '策略选股结果' : '筛选结果'
+function zeroResultHintFor(turn) {
+  const cs = turn?.parsedConditions || []
+  if (!cs.length) return '试着把条件描述得更具体一些'
+  const enumCond = cs.find((c) => c.field === 'industry' || c.field === 'market')
+  if (enumCond) return `当前数据池可能不含「${Array.isArray(enumCond.value) ? enumCond.value.join(' / ') : enumCond.value}」，可以去掉行业限制再试`
+  const tight = cs.find((c) => c.op === 'lt' || c.op === 'lte') || cs[0]
+  return `条件可能太严格，例如 "${tight.field} ${opLabel[tight.op] || tight.op} ${tight.value}" 放宽一些试试`
+}
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
 const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
 const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
@@ -138,24 +175,31 @@ function restoreFromHistory(id) {
   if (streamRestore(id)) history.activate(id)
 }
 
-function openFullResults() {
-  if (agentPlan.value?.tool === 'strategy_select') {
+function openFullResults(turn = latestTurn.value) {
+  const plan = turn?.agentPlan || agentPlan.value
+  if (plan?.tool === 'strategy_select') {
     router.push('/strategy')
     return
   }
   sessionStorage.setItem('qwen.results.agent.v1', JSON.stringify({
-    query: lastQuery.value,
-    conditions: parsedConditions.value,
-    sort_by: screenMeta.value?.sort_by || null,
-    sort_desc: screenMeta.value?.sort_desc !== false,
+    query: turn?.query || lastQuery.value,
+    conditions: turn?.parsedConditions || parsedConditions.value,
+    sort_by: turn?.screenMeta?.sort_by || screenMeta.value?.sort_by || null,
+    sort_desc: (turn?.screenMeta?.sort_desc ?? screenMeta.value?.sort_desc) !== false,
   }))
   router.push({ path: '/results', query: { source: 'agent' } })
 }
 
 function newSession() {
   if (isStreaming.value) stop()
-  reset()
+  clearThread()
   history.newSession()
+}
+
+function retryTurn(turn) {
+  if (!turn?.query || isStreaming.value) return
+  input.value = turn.query
+  send()
 }
 
 function deleteHistory(id, ev) {
@@ -186,6 +230,24 @@ onMounted(() => {
     router.replace({ path: '/chat' })
   }
 })
+
+watch(
+  () => conversationTurns.value.map((turn) => [
+    turn.id,
+    turn.phase,
+    turn.query,
+    turn.thinkingBuf,
+    turn.agentAnswer,
+    turn.result?.total,
+  ].join('|')).join('::'),
+  () => {
+    nextTick(() => {
+      const el = chatScroll.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  },
+  { flush: 'post' }
+)
 
 // ---- 右侧 inspector：每阶段对应一行 ----
 const stages = computed(() => {
@@ -327,7 +389,7 @@ const stageColor = (s) => ({
           </div>
         </div>
 
-        <div class="chat-scroll" :class="{ 'has-thread': !!lastQuery }" :style="{ order: 1, flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
+        <div ref="chatScroll" class="chat-scroll" :class="{ 'has-thread': hasConversation }" :style="{ order: 1, flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
           <!-- AI 离线时的状态条 -->
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
@@ -341,7 +403,7 @@ const stageColor = (s) => ({
           </div>
 
           <!-- 起始引导 -->
-          <div v-if="!lastQuery" class="starter-panel">
+          <div v-if="!hasConversation" class="starter-panel">
             <div :style="{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: '12px', alignItems: 'center' }">
               <div :style="{ display: 'grid', placeItems: 'center', width: '40px', height: '40px', borderRadius: '8px', background: A2.qwenSoft, color: A2.qwen }">
                 <Icon name="sparkle" :size="20" />
@@ -358,125 +420,112 @@ const stageColor = (s) => ({
             </div>
           </div>
 
-          <div v-if="lastQuery" class="thread-spacer" />
-
-          <!-- User msg -->
-          <div v-if="lastQuery" :style="{ display: 'flex', justifyContent: 'flex-end', marginBottom: '18px' }">
-            <div :style="{ maxWidth: '70%', background: A2.surface, color: A2.text, padding: '12px 16px', borderRadius: '6px', fontSize: '13px', lineHeight: 1.65, boxShadow: A2.shadow, border: `1px solid ${A2.borderHair}` }">
-              {{ lastQuery }}
-            </div>
-          </div>
-
-          <!-- AI thinking with live JSON preview -->
-          <div v-if="phase === 'thinking'" :style="{ display: 'flex', gap: '12px', marginBottom: '14px' }">
-            <div :style="{ width: '28px', height: '28px', background: A2.qwenGrad, color: '#fff', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 700, borderRadius: '8px', flexShrink: 0, boxShadow: '0 2px 6px rgba(14,14,12,0.10)' }">千</div>
-            <div :style="{ flex: 1, background: A2.surface, padding: '12px 14px', fontSize: '12px', color: A2.textMuted, borderRadius: '8px', border: `1px solid ${A2.borderHair}` }">
-              <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', color: A2.text, fontWeight: 600 }">
-                <Icon name="brain" :size="11" :color="A2.qwen" />
-                <span>正在判断工具调用…</span>
-                <span class="dot-flow"><i></i><i></i><i></i></span>
+          <div v-if="hasConversation" class="conversation-list">
+            <article v-for="turn in conversationTurns" :key="turn.id" class="conversation-turn">
+              <div class="user-message">
+                <div class="user-bubble">{{ turn.query }}</div>
               </div>
-              <pre v-if="thinkingBuf" :style="{ margin: '8px 0 0 0', fontSize: '10.5px', fontFamily: 'IBM Plex Mono, monospace', color: A2.textDim, lineHeight: 1.55, whiteSpace: 'pre-wrap', background: A2.bgDeep, padding: '8px 10px', borderRadius: '5px', maxHeight: '120px', overflow: 'hidden' }">{{ thinkingPreview }}<span class="caret-mono" /></pre>
-            </div>
-          </div>
 
-          <!-- Parsed conditions（从 parsed 阶段开始展示，stagger 动画） -->
-          <template v-if="parsedConditions.length">
-            <div :style="{ display: 'flex', gap: '12px', marginBottom: '12px' }">
-              <div :style="{ width: '28px', flexShrink: 0 }" />
-              <div :style="{ flex: 1, fontSize: '13.5px', lineHeight: 1.75 }">
-                <template v-if="isDesignResponse">
-                  {{ conditionIntro }}：
-                </template>
-                <template v-else>
-                  {{ conditionIntro }}<span v-if="phase === 'screening'" :style="{ color: A2.textMuted, fontWeight: 500 }">，执行中…</span>：
-                </template>
-              </div>
-            </div>
-            <div :style="{ marginLeft: '40px', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '7px' }">
-              <div v-for="(c, i) in parsedConditions" :key="i"
-                   class="cond-chip"
-                   :style="{ '--delay': (i * 60) + 'ms', background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '7px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '7px', borderRadius: '4px', boxShadow: A2.shadow }">
-                <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }">{{ fmtCond(c) }}</span>
-              </div>
-            </div>
-          </template>
-
-          <div v-if="agentAnswerLines.length" class="agent-answer-panel" :class="{ compact: isTextOnlyAgent }">
-            <div class="agent-answer-title">
-              <span>{{ agentAnswerTitle }}</span>
-              <em>Agent</em>
-            </div>
-            <div v-for="(line, i) in agentAnswerLines" :key="i" class="agent-answer-line">
-              {{ line }}
-            </div>
-          </div>
-
-          <!-- Screening 中的 Skeleton 占位 -->
-          <div v-if="phase === 'screening'" :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
-            <div :style="{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '8px', color: A2.textMuted, fontSize: '12px', borderBottom: `1px solid ${A2.borderHair}` }">
-              <span class="dot-flow" :style="{ '--c': A2.qwen }"><i></i><i></i><i></i></span>
-              {{ agentToolLabel }}执行中…
-            </div>
-            <div v-for="n in 4" :key="n" :style="{ display: 'grid', gridTemplateColumns: '36px 1fr 80px 80px 80px', gap: '12px', padding: '11px 16px', borderTop: n > 1 ? `1px solid ${A2.borderHair}` : 'none', alignItems: 'center' }">
-              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
-              <div class="sk-bar" :style="{ height: '14px', width: '60%', borderRadius: '3px' }" />
-              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
-              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
-              <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
-            </div>
-          </div>
-
-          <!-- Error -->
-          <div v-if="phase === 'error'" :style="{ marginBottom: '18px', padding: '12px 16px', background: A2.upSoft, color: A2.up, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '10px' }">
-            <Icon name="shield" :size="14" />
-            <div style="flex:1">
-              {{ errorMsg }}
-            </div>
-            <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="lastQuery && (input = lastQuery, send())">
-              <Icon name="refresh" :size="11" /> 重试
-            </button>
-          </div>
-
-          <!-- Result preview -->
-          <template v-if="result">
-            <div class="result-preview">
-              <div class="result-preview-head">
-                <div>
-                  <div class="result-preview-title">{{ resultTitle }}</div>
-                  <div class="result-preview-sub">命中 <strong>{{ result.total }}</strong> 只 · 预览前 {{ resultPreviewItems.length }} 只</div>
+              <div v-if="turn.phase === 'thinking'" class="assistant-row">
+                <div class="assistant-avatar">千</div>
+                <div class="thinking-card">
+                  <div class="thinking-head">
+                    <Icon name="brain" :size="11" :color="A2.qwen" />
+                    <span>正在判断工具调用…</span>
+                    <span class="dot-flow"><i></i><i></i><i></i></span>
+                  </div>
+                  <pre v-if="turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
                 </div>
-                <button class="result-preview-more" @click="openFullResults">
-                  完整列表 <Icon name="arrowRight" :size="12" />
+              </div>
+
+              <template v-if="turn.parsedConditions?.length">
+                <div class="condition-intro">
+                  <template v-if="isDesignTurn(turn)">
+                    {{ turnConditionIntro(turn) }}：
+                  </template>
+                  <template v-else>
+                    {{ turnConditionIntro(turn) }}<span v-if="turn.phase === 'screening'">，执行中…</span>：
+                  </template>
+                </div>
+                <div class="condition-list">
+                  <div v-for="(c, i) in turn.parsedConditions" :key="i"
+                       class="cond-chip"
+                       :style="{ '--delay': (i * 60) + 'ms' }">
+                    <span>{{ fmtCond(c) }}</span>
+                  </div>
+                </div>
+              </template>
+
+              <div v-if="turnAnswerLines(turn).length" class="agent-answer-panel" :class="{ compact: isTextOnlyTurn(turn) }">
+                <div class="agent-answer-title">
+                  <span>{{ turnAgentTitle(turn) }}</span>
+                  <em>Agent</em>
+                </div>
+                <div v-for="(line, i) in turnAnswerLines(turn)" :key="i" class="agent-answer-line">
+                  {{ line }}
+                </div>
+              </div>
+
+              <div v-if="turn.phase === 'screening'" class="screening-card">
+                <div class="screening-head">
+                  <span class="dot-flow" :style="{ '--c': A2.qwen }"><i></i><i></i><i></i></span>
+                  {{ turnToolLabel(turn) }}执行中…
+                </div>
+                <div v-for="n in 4" :key="n" class="screening-row">
+                  <div class="sk-bar" />
+                  <div class="sk-bar wide" />
+                  <div class="sk-bar" />
+                  <div class="sk-bar" />
+                  <div class="sk-bar" />
+                </div>
+              </div>
+
+              <div v-if="turn.phase === 'error'" class="error-card">
+                <Icon name="shield" :size="14" />
+                <div style="flex:1">{{ turn.errorMsg }}</div>
+                <button class="btn-outline" @click="retryTurn(turn)">
+                  <Icon name="refresh" :size="11" /> 重试
                 </button>
               </div>
-              <div v-if="result.items.length" class="result-preview-list">
-                <button
-                  v-for="(s, i) in resultPreviewItems"
-                  :key="s.code"
-                  type="button"
-                  class="result-preview-row"
-                  @click="router.push(`/detail/${s.code}`)"
-                >
-                  <span class="result-rank">{{ String(i + 1).padStart(2, '0') }}</span>
-                  <span class="result-stock">
-                    <strong>{{ s.name }}</strong>
-                    <small>{{ s.code }}</small>
-                  </span>
-                  <span class="result-industry">{{ s.industry || '—' }}</span>
-                  <span class="result-facts">
-                    <small v-for="fact in resultFacts(s)" :key="fact">{{ fact }}</small>
-                  </span>
-                  <span class="result-price">
-                    <strong>{{ fmtMetric(s.close) }}</strong>
-                    <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
-                  </span>
-                  <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
-                </button>
+
+              <div v-if="turn.result" class="result-preview">
+                <div class="result-preview-head">
+                  <div>
+                    <div class="result-preview-title">{{ turnResultTitle(turn) }}</div>
+                    <div class="result-preview-sub">命中 <strong>{{ turn.result.total }}</strong> 只 · 预览前 {{ turnResultItems(turn).length }} 只</div>
+                  </div>
+                  <button class="result-preview-more" @click="openFullResults(turn)">
+                    完整列表 <Icon name="arrowRight" :size="12" />
+                  </button>
+                </div>
+                <div v-if="turn.result.items.length" class="result-preview-list">
+                  <button
+                    v-for="(s, i) in turnResultItems(turn)"
+                    :key="s.code"
+                    type="button"
+                    class="result-preview-row"
+                    @click="router.push(`/detail/${s.code}`)"
+                  >
+                    <span class="result-rank">{{ String(i + 1).padStart(2, '0') }}</span>
+                    <span class="result-stock">
+                      <strong>{{ s.name }}</strong>
+                      <small>{{ s.code }}</small>
+                    </span>
+                    <span class="result-industry">{{ s.industry || '—' }}</span>
+                    <span class="result-facts">
+                      <small v-for="fact in resultFacts(s)" :key="fact">{{ fact }}</small>
+                    </span>
+                    <span class="result-price">
+                      <strong>{{ fmtMetric(s.close) }}</strong>
+                      <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
+                    </span>
+                    <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
+                  </button>
+                </div>
+                <EmptyState v-else icon="filter" title="没有命中任何股票" :subtitle="zeroResultHintFor(turn)" />
               </div>
-              <EmptyState v-else icon="filter" title="没有命中任何股票" :subtitle="zeroResultHint" />
-            </div>
-          </template>
+            </article>
+          </div>
         </div>
       </div>
 
@@ -584,23 +633,178 @@ const stageColor = (s) => ({
   background: #F5F5F5;
 }
 
-.chat-scroll.has-thread {
-  display: flex;
-  flex-direction: column;
-}
-
 .chat-scroll:not(.has-thread) {
   display: flex;
   flex-direction: column;
 }
 
-.chat-scroll.has-thread > * {
-  flex-shrink: 0;
+.conversation-list {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 8px;
 }
 
-.thread-spacer {
-  flex: 1 1 auto;
-  min-height: 12px;
+.conversation-turn {
+  display: grid;
+  gap: 12px;
+}
+
+.user-message {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.user-bubble {
+  max-width: min(70%, 720px);
+  padding: 12px 16px;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #111111;
+  font-size: 13px;
+  line-height: 1.65;
+  box-shadow: 0 2px 10px rgba(14, 14, 12, 0.04);
+}
+
+.assistant-row {
+  display: flex;
+  gap: 12px;
+}
+
+.assistant-avatar {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #111111, #3F3D38);
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(14, 14, 12, 0.10);
+}
+
+.thinking-card {
+  flex: 1;
+  padding: 12px 14px;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.thinking-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #111111;
+  font-weight: 600;
+}
+
+.thinking-preview {
+  max-height: 120px;
+  margin: 8px 0 0 0;
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: #F7F7F7;
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.condition-intro {
+  margin-left: 40px;
+  color: #2F3137;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+.condition-intro span {
+  color: #71717A;
+  font-weight: 500;
+}
+
+.condition-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-left: 40px;
+}
+
+.condition-list .cond-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 4px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 4px rgba(14, 14, 12, 0.03);
+  font-size: 11.5px;
+}
+
+.condition-list .cond-chip span {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+}
+
+.screening-card {
+  margin-left: 40px;
+  overflow: hidden;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FFFFFF;
+  box-shadow: 0 2px 10px rgba(14, 14, 12, 0.04);
+}
+
+.screening-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #EDEDED;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.screening-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 80px 80px 80px;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 16px;
+  border-top: 1px solid #F1F1F1;
+}
+
+.screening-row:first-of-type {
+  border-top: 0;
+}
+
+.screening-row .sk-bar {
+  height: 12px;
+  border-radius: 3px;
+}
+
+.screening-row .sk-bar.wide {
+  width: 60%;
+  height: 14px;
+}
+
+.error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-left: 40px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(23, 138, 85, 0.10);
+  color: #178A55;
+  font-size: 12px;
 }
 
 .agent-answer-panel {
@@ -851,6 +1055,25 @@ const stageColor = (s) => ({
   }
   .starter-grid {
     grid-template-columns: 1fr;
+  }
+  .user-bubble {
+    max-width: 92%;
+  }
+  .condition-intro,
+  .condition-list,
+  .agent-answer-panel,
+  .screening-card,
+  .error-card {
+    margin-left: 0;
+  }
+  .assistant-row {
+    gap: 8px;
+  }
+  .screening-row {
+    grid-template-columns: 28px 1fr 52px;
+  }
+  .screening-row .sk-bar:nth-child(n + 4) {
+    display: none;
   }
   .result-preview {
     margin-left: 0;
