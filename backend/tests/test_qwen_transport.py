@@ -1,3 +1,4 @@
+import json
 import time
 from types import SimpleNamespace
 
@@ -10,6 +11,9 @@ class _FakeResponse:
     def __init__(self, status_code: int, text: str = ""):
         self.status_code = status_code
         self.text = text
+
+    def json(self):
+        return json.loads(self.text or "{}")
 
 
 class _FakeClient:
@@ -26,6 +30,13 @@ class _FakeClient:
         return None
 
     def post(self, url, **_kwargs):
+        self.calls.append(url)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def get(self, url, **_kwargs):
         self.calls.append(url)
         response = self.responses.pop(0)
         if isinstance(response, Exception):
@@ -187,3 +198,34 @@ def test_openai_probe_reports_gateway_incompatibility(monkeypatch):
 
     assert result["ok"] is False
     assert result["reason"] == "模型或网关不兼容: test-model"
+
+
+def test_openai_probe_reports_inference_unavailable_with_model_catalog(monkeypatch):
+    monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
+    monkeypatch.setattr(transport.settings, "openai_model", "test-model")
+    _mock_http(
+        monkeypatch,
+        [
+            _FakeResponse(503, '{"error":{"message":"Service temporarily unavailable"}}'),
+            _FakeResponse(503, '{"error":{"message":"Service temporarily unavailable"}}'),
+            _FakeResponse(200, '{"data":[{"id":"test-model"}]}'),
+        ],
+    )
+
+    result = transport._probe_openai_health(3)
+
+    assert result["ok"] is False
+    assert result["reason"] == "上游网关推理端不可用: HTTP 503（模型列表正常）"
+    assert result["backend"] == "openai"
+    assert result["model"] == "test-model"
+    assert result["stage"] == "inference"
+    assert result["responses_status"] == 503
+    assert result["chat_status"] == 503
+    assert result["models_status"] == 200
+    assert result["model_listed"] is True
+    assert _FakeClient.calls == [
+        "https://example.test/v1/responses",
+        "https://example.test/v1/chat/completions",
+        "https://example.test/v1/models",
+    ]

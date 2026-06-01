@@ -164,12 +164,60 @@ def _probe_openai_health(timeout: float) -> dict:
             return {"ok": False, "latency_ms": latency_ms, "reason": f"模型或网关不兼容: {settings.openai_model}"}
         response_status = responses_result.status_code if responses_result is not None else 0
         if max(response_status, chat_result.status_code) >= 500:
-            return {"ok": False, "latency_ms": latency_ms, "reason": f"上游网关不可用: HTTP {max(response_status, chat_result.status_code)}"}
-        return {"ok": False, "latency_ms": latency_ms, "reason": f"HTTP {chat_result.status_code}"}
+            diagnostics = _probe_openai_model_catalog(base_url, headers, client_timeout)
+            reason = f"上游网关推理端不可用: HTTP {max(response_status, chat_result.status_code)}"
+            if diagnostics.get("models_status") == 200:
+                reason += "（模型列表正常）"
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "reason": reason,
+                "backend": "openai",
+                "model": settings.openai_model,
+                "stage": "inference",
+                "responses_status": responses_result.status_code if responses_result is not None else None,
+                "chat_status": chat_result.status_code,
+                **diagnostics,
+            }
+        return {
+            "ok": False,
+            "latency_ms": latency_ms,
+            "reason": f"HTTP {chat_result.status_code}",
+            "backend": "openai",
+            "model": settings.openai_model,
+            "stage": "chat",
+            "responses_status": responses_result.status_code if responses_result is not None else None,
+            "chat_status": chat_result.status_code,
+        }
     except Exception as e:
         if _is_transient(e) or (responses_error is not None and _is_transient(responses_error)):
             return {"ok": False, "latency_ms": None, "reason": "上游网络不可达"}
         return {"ok": False, "latency_ms": None, "reason": "服务暂时不可用"}
+
+
+def _probe_openai_model_catalog(base_url: str, headers: dict, timeout: httpx.Timeout) -> dict:
+    """Check whether auth/base URL can reach the model catalog without exposing secrets."""
+    import httpx
+
+    try:
+        with httpx.Client(timeout=timeout) as c:
+            result = c.get(f"{base_url}/models", headers=headers)
+        model_listed = None
+        if result.status_code == 200:
+            try:
+                items = result.json().get("data", [])
+                model_listed = any(item.get("id") == settings.openai_model for item in items if isinstance(item, dict))
+            except Exception:
+                model_listed = None
+        return {
+            "models_status": result.status_code,
+            "model_listed": model_listed,
+        }
+    except Exception:
+        return {
+            "models_status": None,
+            "model_listed": None,
+        }
 
 
 def _probe_dashscope_health(timeout: float) -> dict:
