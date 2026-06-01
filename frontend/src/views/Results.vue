@@ -1,6 +1,6 @@
 <script setup>
 import { computed, h, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
@@ -9,7 +9,6 @@ import {
   NEmpty,
   NGi,
   NGrid,
-  NProgress,
   NSkeleton,
   NSpace,
   NStatistic,
@@ -23,8 +22,22 @@ import { screen } from '../api/screener'
 import { useKlineCache } from '../composables/useKlineCache.js'
 
 const router = useRouter()
+const route = useRoute()
 
-const filterMode = ref('balanced')
+function readAgentContext() {
+  if (route.query.source !== 'agent') return null
+  try {
+    const context = JSON.parse(sessionStorage.getItem('qwen.results.agent.v1') || 'null')
+    return context && Array.isArray(context.conditions) && context.conditions.length
+      ? context
+      : null
+  } catch {
+    return null
+  }
+}
+
+const agentContext = ref(readAgentContext())
+const filterMode = ref(agentContext.value ? 'agent' : 'balanced')
 const conditionSets = {
   balanced: [
     { field: 'pe', op: 'between', value: [0, 500] },
@@ -40,13 +53,48 @@ const conditionSets = {
   all: [],
 }
 
+const fieldLabels = {
+  pe: 'PE(TTM)',
+  pb: 'PB',
+  roe: 'ROE',
+  market_cap: '总市值',
+  dividend_yield: '股息率',
+  debt_ratio: '资产负债率',
+  gross_margin: '毛利率',
+  profit_yoy: '净利润同比',
+  revenue_yoy: '营收同比',
+  industry: '行业',
+}
+const opLabels = {
+  lt: '<',
+  lte: '≤',
+  gt: '>',
+  gte: '≥',
+  eq: '=',
+  between: '范围',
+  in: '包含',
+}
+
+function formatFilterValue(condition) {
+  const value = Array.isArray(condition.value) ? condition.value.join(' — ') : condition.value
+  return `${opLabels[condition.op] || condition.op} ${value}`
+}
+
 const filterGroups = computed(() => {
+  if (filterMode.value === 'agent' && agentContext.value) {
+    return [{
+      cat: '本轮条件',
+      items: agentContext.value.conditions.map((condition) => ({
+        l: fieldLabels[condition.field] || condition.field,
+        v: formatFilterValue(condition),
+      })),
+    }]
+  }
   const map = {
     balanced: [
       { cat: '基础', items: [{ l: '股票池', v: '全市场' }, { l: '数据', v: '最近交易日' }] },
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '0 — 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '不限制' }] },
-      { cat: '提示', items: [{ l: 'baostock', v: '市值缺失时自动跳过规模过滤' }] },
     ],
     value: [
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '0 — 80' }] },
@@ -56,7 +104,6 @@ const filterGroups = computed(() => {
     sized: [
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '0 — 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '> 100 亿' }] },
-      { cat: '注意', items: [{ l: '数据源', v: '需要市值字段' }] },
     ],
     all: [
       { cat: '基础', items: [{ l: '条件', v: '全部放宽' }] },
@@ -84,30 +131,25 @@ const stats = computed(() => {
   const fmt = (v, d = 1) => v == null ? '—' : v.toFixed(d)
   return [
     { l: '命中数量', v: total.value, sub: `已展示 ${arr.length} 只`, unit: '只' },
-    { l: '平均 PE', v: fmt(avg('pe')), sub: '组内中位', unit: 'x' },
-    { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '亿元', unit: '亿' },
-    { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '组内中位', unit: '%' },
-    { l: '平均 ROE', v: fmt(avg('roe')), sub: '组内中位', unit: '%' },
+    { l: '平均 PE', v: fmt(avg('pe')), sub: '当前列表均值', unit: 'x' },
+    { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '当前列表均值', unit: '亿' },
+    { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '当前列表均值', unit: '%' },
+    { l: '平均 ROE', v: fmt(avg('roe')), sub: '当前列表均值', unit: '%' },
   ]
 })
 
 const resultSubtitle = computed(() => {
+  if (filterMode.value === 'agent') {
+    return agentContext.value?.query || '本轮智能筛选'
+  }
   const map = {
-    balanced: '全市场 · PE 由低到高',
+    balanced: '全市场基础视图 · PE 由低到高',
     value: '价值因子 · PE + ROE',
     sized: '大市值 · 按市值排序',
     all: '全部股票 · 已放宽条件',
   }
   return map[filterMode.value]
 })
-
-function bullScore(it) {
-  let s = 60
-  if (it.pe && it.pe > 0) s += Math.max(0, Math.min(20, 25 - it.pe * 0.5))
-  if (it.dividend_yield) s += Math.min(15, it.dividend_yield * 2)
-  if (it.roe) s += Math.min(15, it.roe)
-  return Math.round(Math.max(0, Math.min(99, s)))
-}
 
 const fmtNum = (v, d = 2) => v != null ? v.toFixed(d) : '—'
 const fmtPositive = (v, d = 2) => v != null && v > 0 ? v.toFixed(d) : '—'
@@ -218,19 +260,6 @@ const columns = computed(() => [
     ]),
   },
   {
-    title: '价值分',
-    key: 'score',
-    align: 'right',
-    width: 96,
-    render: (s) => h('div', {
-      title: '价值分 = 60 + 低 PE 加分 + 股息率 + ROE',
-      style: { display: 'inline-flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', width: '100%' },
-    }, [
-      h(NProgress, { type: 'line', percentage: bullScore(s), height: 4, showIndicator: false, style: { width: '36px' } }),
-      h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, fontSize: '10.5px' } }, bullScore(s)),
-    ]),
-  },
-  {
     title: '30日走势',
     key: 'trend',
     width: 94,
@@ -254,9 +283,10 @@ async function load() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const data = await screen(conditionSets[filterMode.value], {
-      sort_by: filterMode.value === 'sized' ? 'market_cap' : 'pe',
-      sort_desc: filterMode.value === 'sized',
+    const usingAgentContext = filterMode.value === 'agent' && agentContext.value
+    const data = await screen(usingAgentContext ? agentContext.value.conditions : conditionSets[filterMode.value], {
+      sort_by: usingAgentContext ? agentContext.value.sort_by : (filterMode.value === 'sized' ? 'market_cap' : 'pe'),
+      sort_desc: usingAgentContext ? agentContext.value.sort_desc !== false : filterMode.value === 'sized',
       limit: 50,
     })
     items.value = data.items
@@ -294,6 +324,9 @@ onMounted(load)
       <div class="results-topbar">
         <div class="results-title-row">
           <h2 class="results-title">筛选结果</h2>
+          <NTag v-if="filterMode === 'agent'" type="info" size="small" :bordered="false">
+            本轮智能筛选
+          </NTag>
           <span class="results-total">
             共 <strong>{{ total }}</strong> 只 · {{ resultSubtitle }}
           </span>
@@ -305,7 +338,7 @@ onMounted(load)
             secondary
             @click="applyMode('balanced')"
           >
-            平衡
+            基础
           </NButton>
           <NButton
             :type="filterMode === 'value' ? 'primary' : 'default'"
@@ -353,7 +386,7 @@ onMounted(load)
       </NAlert>
 
       <!-- Stats -->
-      <NGrid :cols="5" :x-gap="10" :y-gap="10" class="stats-grid">
+      <NGrid cols="2 m:3 l:5" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
         <NGi v-for="s in stats" :key="s.l">
           <NCard size="small" :bordered="false" class="results-card stat-card">
             <NStatistic :label="s.l">
@@ -373,7 +406,7 @@ onMounted(load)
       <NCard :bordered="false" class="results-card table-card">
         <div v-if="loading" class="results-skeleton">
           <div v-for="n in 8" :key="'sk' + n" class="skeleton-row">
-            <NSkeleton v-for="(_, ci) in 13" :key="ci" :height="12" :width="55" :sharp="false" />
+            <NSkeleton v-for="(_, ci) in 12" :key="ci" :height="12" :width="55" :sharp="false" />
           </div>
         </div>
         <NDataTable
@@ -385,6 +418,7 @@ onMounted(load)
           :pagination="false"
           :bordered="false"
           :single-line="false"
+          :scroll-x="1080"
           size="small"
         >
           <template #empty>
@@ -426,10 +460,10 @@ onMounted(load)
 
 .results-title {
   margin: 0;
-  font-size: 34px;
+  font-size: 28px;
   font-weight: 800;
   color: #111111;
-  letter-spacing: -0.8px;
+  letter-spacing: 0;
 }
 
 .results-total {

@@ -60,28 +60,37 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "trade_date": result.trade_date,
         }
 
-    def gen():
-        yield event({"type": "thinking", "text": "正在判断需求类型与可用工具…\n"})
-        try:
-            response = strategy_selector.run_chat_agent(
-                db,
-                req.query,
-                context=req.context or {},
-                limit=50,
-            )
-        except Exception as e:
-            logger.exception("Agent 智能筛选失败")
-            yield event({"type": "error", "message": f"智能筛选失败: {e}"})
-            return
-
+    def response_payload(response) -> dict:
         plan = response.plan
-        common = {
+        return {
             "plan": plan.model_dump(),
             "conditions": [c.model_dump() for c in plan.conditions],
             "answer": response.answer,
             "warnings": response.warnings,
             "tool_trace": response.tool_trace,
         }
+
+    def gen():
+        yield event({"type": "thinking", "text": "正在判断需求类型与可用工具…\n"})
+        try:
+            preview = strategy_selector.preview_chat_plan(
+                req.query,
+                context=req.context or {},
+                limit=50,
+            )
+            yield event({"type": "thinking", "text": f"已选择「{preview.tool_label}」，正在准备参数…\n"})
+            response = strategy_selector.plan_chat_agent(
+                req.query,
+                context=req.context or {},
+                limit=50,
+            )
+        except Exception as e:
+            logger.exception("Agent 规划失败")
+            yield event({"type": "error", "message": f"智能筛选规划失败: {e}"})
+            return
+
+        plan = response.plan
+        common = response_payload(response)
 
         if plan.tool == "stock_screen":
             yield event({
@@ -92,13 +101,19 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 "sort_desc": plan.sort_desc,
                 "limit": 50,
             })
-            yield event({"type": "screening"})
+            yield event({"type": "screening", "tool": plan.tool, "tool_label": plan.tool_label})
+            try:
+                response = strategy_selector.execute_agent_plan(db, response, limit=50)
+            except Exception as e:
+                logger.exception("结构化股票筛选失败")
+                yield event({"type": "error", "message": f"筛选工具执行失败: {e}"})
+                return
             if response.screen_result is None:
                 yield event({"type": "error", "message": "筛选工具没有返回结果"})
                 return
             yield event({
                 "type": "result",
-                **common,
+                **response_payload(response),
                 **screen_result_payload(response.screen_result),
             })
             yield event({"type": "done"})
@@ -109,7 +124,17 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             yield event({"type": "done"})
             return
 
-        payload = {"type": "agent", **common}
+        if plan.tool == "strategy_select":
+            yield event({"type": "planned", **common})
+            yield event({"type": "screening", "tool": plan.tool, "tool_label": plan.tool_label})
+            try:
+                response = strategy_selector.execute_agent_plan(db, response, limit=50)
+            except Exception as e:
+                logger.exception("策略选股失败")
+                yield event({"type": "error", "message": f"策略选股执行失败: {e}"})
+                return
+
+        payload = {"type": "agent", **response_payload(response)}
         if response.strategy_result is not None:
             payload["result"] = strategy_result_payload(response.strategy_result)
         yield event(payload)

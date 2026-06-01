@@ -28,6 +28,7 @@ export async function screenNL(query) {
  * 事件 type:
  *   'thinking'  千问正在生成结构化条件，payload.text 是 token
  *   'parsed'    解析完成，payload.conditions 是结构化条件数组
+ *   'planned'   策略工具已确定，准备执行
  *   'screening' 引擎正在执行
  *   'result'    最终结果，payload = { items, total, parsed_conditions }
  *   'done'      流结束

@@ -108,6 +108,10 @@ export function useNlStream(historyStore, hooks = {}) {
           }
           phase.value = 'parsed'
           tParsed.value = Date.now()
+        } else if (ev.type === 'planned') {
+          applyAgentMeta(ev)
+          phase.value = 'parsed'
+          tParsed.value = Date.now()
         } else if (ev.type === 'design') {
           applyAgentMeta(ev)
           phase.value = 'done'
@@ -128,6 +132,11 @@ export function useNlStream(historyStore, hooks = {}) {
           tParsed.value = Date.now()
           tDone.value = Date.now()
         } else if (ev.type === 'screening') {
+          screenMeta.value = {
+            ...(screenMeta.value || {}),
+            tool: ev.tool || screenMeta.value?.tool || 'stock_screen',
+            tool_label: ev.tool_label || screenMeta.value?.tool_label || '股票筛选',
+          }
           phase.value = 'screening'
         } else if (ev.type === 'result') {
           applyAgentMeta(ev)

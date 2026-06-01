@@ -121,6 +121,26 @@ def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkey
     assert "中芯国际" in res.answer
 
 
+def test_agent_planning_does_not_execute_screen(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("planning must not execute screener_engine.screen")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.plan_agent_selection("低估值银行", limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.condition_labels == ["市盈率低于15", "市净率低于2", "行业包含银行"]
+    assert res.screen_result is None
+    assert res.strategy_result is None
+
+
 def test_agent_uses_local_screen_when_ai_unavailable(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

@@ -189,13 +189,8 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
     return response
 
 
-def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAgentResponse:
-    """Agent-style stock selection.
-
-    The agent always produces a tool plan first, then executes one of the
-    project-owned tools. If AI is unavailable, a deterministic local planner is
-    used and the response clearly says so instead of fabricating AI results.
-    """
+def plan_agent_selection(query: str, limit: int = 50) -> StrategyAgentResponse:
+    """Build an agent tool plan without executing project-owned tools."""
     if is_strategy_design_query(query):
         return build_strategy_design_response(query, ai_configured=_ai_configured())
     if is_clarification_query(query):
@@ -231,13 +226,35 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     elif not ai_configured:
         warnings.append("AI 服务未配置，当前使用本地规则 Agent 规划；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
 
+    plan.condition_labels = _condition_labels(plan.conditions)
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="工具规划完成，等待执行。",
+        warnings=warnings,
+        tool_trace=tool_trace,
+    )
+
+
+def execute_agent_plan(
+    db: Session,
+    response: StrategyAgentResponse,
+    limit: int = 50,
+) -> StrategyAgentResponse:
+    """Execute a prepared tool plan and attach the real result."""
+    plan = response.plan
+    if plan.tool not in ("stock_screen", "strategy_select"):
+        return response
+
+    warnings = list(response.warnings)
+    tool_trace = list(response.tool_trace)
     if plan.tool == "strategy_select":
         strategy_id = plan.strategy_id or "rps_breakout"
         tool_trace.append(f"调用 strategy_selector.run_strategy_selection(strategy_id={strategy_id}, limit={limit})")
         result = run_strategy_selection(db, strategy_id, limit)
-        answer = _summarize_strategy_agent(query, plan, result.total, [item.name or item.code for item in result.items[:5]])
+        answer = _summarize_strategy_agent(response.query, plan, result.total, [item.name or item.code for item in result.items[:5]])
         return StrategyAgentResponse(
-            query=query,
+            query=response.query,
             plan=plan,
             strategy_result=result,
             answer=answer,
@@ -245,7 +262,6 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
             tool_trace=tool_trace,
         )
 
-    plan.condition_labels = _condition_labels(plan.conditions)
     req = ScreenRequest(
         conditions=plan.conditions,
         logic=plan.logic if plan.logic in ("AND", "OR") else "AND",
@@ -256,9 +272,9 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     tool_trace.append(f"调用 screener_engine.screen(conditions={len(req.conditions)}, limit={limit})")
     result = screener_engine.screen(db, req)
     result.parsed_conditions = req.conditions
-    answer = _summarize_screen_agent(query, plan, result.total, [item.name or item.code for item in result.items[:5]])
+    answer = _summarize_screen_agent(response.query, plan, result.total, [item.name or item.code for item in result.items[:5]])
     return StrategyAgentResponse(
-        query=query,
+        query=response.query,
         plan=plan,
         screen_result=result,
         answer=answer,
@@ -267,19 +283,53 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     )
 
 
+def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAgentResponse:
+    """Plan and execute one agent-style stock-selection turn."""
+    response = plan_agent_selection(query, limit=limit)
+    return execute_agent_plan(db, response, limit=limit)
+
+
+def preview_chat_plan(
+    query: str,
+    context: dict[str, Any] | None = None,
+    limit: int = 50,
+) -> StrategyAgentPlan:
+    """Return a fast local routing preview for progressive SSE feedback."""
+    context = context or {}
+    if is_result_explanation_query(query):
+        if is_explain_result_query(query, context):
+            return build_explain_result_response(query, context, ai_configured=_ai_configured()).plan
+        return build_missing_context_response(query, ai_configured=_ai_configured()).plan
+    if is_strategy_design_query(query):
+        return build_strategy_design_response(query, ai_configured=_ai_configured()).plan
+    if is_clarification_query(query):
+        return build_clarification_response(query, ai_configured=_ai_configured()).plan
+    return _plan_agent_locally(query, limit, _ai_configured())
+
+
+def plan_chat_agent(
+    query: str,
+    context: dict[str, Any] | None = None,
+    limit: int = 50,
+) -> StrategyAgentResponse:
+    """Route and plan a chat turn without executing stock tools."""
+    context = context or {}
+    if is_result_explanation_query(query):
+        if is_explain_result_query(query, context):
+            return build_explain_result_response(query, context, ai_configured=_ai_configured())
+        return build_missing_context_response(query, ai_configured=_ai_configured())
+    return plan_agent_selection(query, limit=limit)
+
+
 def run_chat_agent(
     db: Session,
     query: str,
     context: dict[str, Any] | None = None,
     limit: int = 50,
 ) -> StrategyAgentResponse:
-    """Route a chat turn with optional previous-result context."""
-    context = context or {}
-    if is_result_explanation_query(query):
-        if is_explain_result_query(query, context):
-            return build_explain_result_response(query, context, ai_configured=_ai_configured())
-        return build_missing_context_response(query, ai_configured=_ai_configured())
-    return run_agent_selection(db, query, limit=limit)
+    """Plan and execute a chat turn with optional previous-result context."""
+    response = plan_chat_agent(query, context=context, limit=limit)
+    return execute_agent_plan(db, response, limit=limit)
 
 
 def is_clarification_query(query: str) -> bool:

@@ -123,6 +123,8 @@ def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):
         body = "".join(response.iter_text())
 
     events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert event_types.index("planned") < event_types.index("screening") < event_types.index("agent")
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "strategy_select"
     assert agent["result"]["total"] >= 0
@@ -161,6 +163,7 @@ def test_nl_stream_stock_screen_uses_agent_parser(db, seed_stocks, monkeypatch):
     assert "parsed" in event_types
     assert "screening" in event_types
     assert "result" in event_types
+    assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
 
     parsed = next(event for event in events if event["type"] == "parsed")
     result = next(event for event in events if event["type"] == "result")

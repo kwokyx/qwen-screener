@@ -37,10 +37,38 @@ const presetPrompts = [
   '股息率超过 5% 的大蓝筹',
 ]
 
+const fieldLabel = {
+  pe: 'PE',
+  pb: 'PB',
+  roe: 'ROE',
+  market_cap: '市值',
+  dividend_yield: '股息率',
+  revenue_yoy: '营收同比',
+  profit_yoy: '净利润同比',
+  gross_margin: '毛利率',
+  debt_ratio: '资产负债率',
+  industry: '行业',
+  market: '板块',
+  close: '现价',
+  turnover: '换手率',
+}
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
 function fmtCond(c) {
-  if (Array.isArray(c.value)) return `${c.field} ${opLabel[c.op] || c.op} [${c.value.join(', ')}]`
-  return `${c.field} ${opLabel[c.op] || c.op} ${c.value}`
+  const field = fieldLabel[c.field] || c.field
+  if (Array.isArray(c.value)) return `${field} ${opLabel[c.op] || c.op} ${c.value.join('、')}`
+  return `${field} ${opLabel[c.op] || c.op} ${c.value}`
+}
+
+const resultPreviewItems = computed(() => (result.value?.items || []).slice(0, 6))
+const fmtMetric = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
+const fmtChange = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
+function resultFacts(s) {
+  if (s.signals?.length) return s.signals.slice(0, 2)
+  return [
+    s.pe != null ? `PE ${fmtMetric(s.pe)}` : null,
+    s.roe != null ? `ROE ${fmtMetric(s.roe)}%` : null,
+    s.dividend_yield != null ? `股息 ${fmtMetric(s.dividend_yield)}%` : null,
+  ].filter(Boolean)
 }
 
 // 0 命中时给具体可操作建议，根据已解析的条件挑最严的一条
@@ -108,6 +136,20 @@ function pickPreset(p) {
 
 function restoreFromHistory(id) {
   if (streamRestore(id)) history.activate(id)
+}
+
+function openFullResults() {
+  if (agentPlan.value?.tool === 'strategy_select') {
+    router.push('/strategy')
+    return
+  }
+  sessionStorage.setItem('qwen.results.agent.v1', JSON.stringify({
+    query: lastQuery.value,
+    conditions: parsedConditions.value,
+    sort_by: screenMeta.value?.sort_by || null,
+    sort_desc: screenMeta.value?.sort_desc !== false,
+  }))
+  router.push({ path: '/results', query: { source: 'agent' } })
 }
 
 function newSession() {
@@ -316,30 +358,11 @@ const stageColor = (s) => ({
             </div>
           </div>
 
-          <div v-if="!lastQuery" class="empty-result-preview">
-            <div class="preview-head">
-              <strong>筛选结果区</strong>
-              <span>运行后展示真实股票池，不生成虚拟数据</span>
-            </div>
-            <div class="preview-table">
-              <div>代码 / 名称</div>
-              <div>行业</div>
-              <div>价格</div>
-              <div>PE</div>
-              <div>ROE</div>
-              <div>股息率</div>
-              <div>命中原因</div>
-            </div>
-            <div class="preview-empty">
-              等待输入筛选目标
-            </div>
-          </div>
-
           <div v-if="lastQuery" class="thread-spacer" />
 
           <!-- User msg -->
           <div v-if="lastQuery" :style="{ display: 'flex', justifyContent: 'flex-end', marginBottom: '18px' }">
-            <div :style="{ maxWidth: '70%', background: A2.surface, color: A2.text, padding: '12px 16px', borderRadius: '14px 14px 4px 14px', fontSize: '13px', lineHeight: 1.65, boxShadow: A2.shadow, border: `1px solid ${A2.borderHair}` }">
+            <div :style="{ maxWidth: '70%', background: A2.surface, color: A2.text, padding: '12px 16px', borderRadius: '6px', fontSize: '13px', lineHeight: 1.65, boxShadow: A2.shadow, border: `1px solid ${A2.borderHair}` }">
               {{ lastQuery }}
             </div>
           </div>
@@ -373,7 +396,7 @@ const stageColor = (s) => ({
             <div :style="{ marginLeft: '40px', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '7px' }">
               <div v-for="(c, i) in parsedConditions" :key="i"
                    class="cond-chip"
-                   :style="{ '--delay': (i * 60) + 'ms', background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '7px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '7px', borderRadius: '999px', boxShadow: A2.shadow }">
+                   :style="{ '--delay': (i * 60) + 'ms', background: A2.surface, border: `1px solid ${A2.borderHair}`, padding: '7px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '7px', borderRadius: '4px', boxShadow: A2.shadow }">
                 <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 600 }">{{ fmtCond(c) }}</span>
               </div>
             </div>
@@ -393,7 +416,7 @@ const stageColor = (s) => ({
           <div v-if="phase === 'screening'" :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
             <div :style="{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '8px', color: A2.textMuted, fontSize: '12px', borderBottom: `1px solid ${A2.borderHair}` }">
               <span class="dot-flow" :style="{ '--c': A2.qwen }"><i></i><i></i><i></i></span>
-              引擎正在执行筛选…
+              {{ agentToolLabel }}执行中…
             </div>
             <div v-for="n in 4" :key="n" :style="{ display: 'grid', gridTemplateColumns: '36px 1fr 80px 80px 80px', gap: '12px', padding: '11px 16px', borderTop: n > 1 ? `1px solid ${A2.borderHair}` : 'none', alignItems: 'center' }">
               <div class="sk-bar" :style="{ height: '12px', borderRadius: '3px' }" />
@@ -415,51 +438,42 @@ const stageColor = (s) => ({
             </button>
           </div>
 
-          <!-- Result table -->
+          <!-- Result preview -->
           <template v-if="result">
-            <div :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
-              <div :style="{ padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FBFBF9' }">
+            <div class="result-preview">
+              <div class="result-preview-head">
                 <div>
-                  <div :style="{ fontSize: '13px', fontWeight: 700 }">{{ resultTitle }}</div>
-                  <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '1px' }">共 <strong :style="{ color: A2.text }">{{ result.total }}</strong> 只 · 已展示前 {{ result.items.length }} 只</div>
+                  <div class="result-preview-title">{{ resultTitle }}</div>
+                  <div class="result-preview-sub">命中 <strong>{{ result.total }}</strong> 只 · 预览前 {{ resultPreviewItems.length }} 只</div>
                 </div>
-                <button @click="router.push('/results')" :style="{ fontSize: '11px', padding: '5px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', cursor: 'pointer', borderRadius: '6px', fontWeight: 600, boxShadow: '0 1px 4px rgba(14,14,12,0.10)' }">
-                  查看完整列表 →
+                <button class="result-preview-more" @click="openFullResults">
+                  完整列表 <Icon name="arrowRight" :size="12" />
                 </button>
               </div>
-              <table v-if="result.items.length" :style="{ width: '100%', borderCollapse: 'collapse', fontSize: '11.5px' }">
-                <thead>
-                  <tr :style="{ color: A2.textMuted, fontSize: '10px', fontWeight: 600, letterSpacing: '0.4px' }">
-                    <th :style="{ textAlign: 'left', padding: '8px 16px', fontWeight: 600 }">#</th>
-                    <th :style="{ textAlign: 'left', padding: '8px 8px', fontWeight: 600 }">代码 / 名称</th>
-                    <th :style="{ textAlign: 'left', padding: '8px 8px', fontWeight: 600 }">行业</th>
-                    <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">现价</th>
-                    <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">PE</th>
-                    <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">ROE</th>
-                    <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">股息率</th>
-                    <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">市值</th>
-                    <th :style="{ textAlign: 'left', padding: '8px 8px', fontWeight: 600 }">30 日</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(s, i) in result.items.slice(0, 10)" :key="s.code" class="row-hover"
-                      :style="{ borderTop: `1px solid ${A2.borderHair}`, cursor: 'pointer' }"
-                      @click="router.push(`/detail/${s.code}`)">
-                    <td :style="{ padding: '11px 16px', color: A2.textMuted, fontFamily: 'IBM Plex Mono, monospace', fontSize: '10px' }">{{ String(i+1).padStart(2,'0') }}</td>
-                    <td :style="{ padding: '11px 8px' }">
-                      <div :style="{ fontWeight: 600, fontSize: '12.5px' }">{{ s.name }}</div>
-                      <div :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ s.code }}</div>
-                    </td>
-                    <td :style="{ padding: '11px 8px', color: A2.textSub, fontSize: '11px' }">{{ s.industry || '—' }}</td>
-                    <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.text }">{{ s.close != null ? s.close.toFixed(2) : '—' }}</td>
-                    <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ s.pe != null && s.pe > 0 ? s.pe.toFixed(2) : '—' }}</td>
-                    <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.roe > 10 ? A2.up : A2.textSub, fontWeight: s.roe > 10 ? 600 : 500 }">{{ s.roe != null ? s.roe.toFixed(2) + '%' : '—' }}</td>
-                    <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.dividend_yield > 4 ? A2.up : A2.textSub }">{{ s.dividend_yield != null ? s.dividend_yield.toFixed(2) + '%' : '—' }}</td>
-                    <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ s.market_cap != null ? Math.round(s.market_cap).toLocaleString() : '—' }}<span :style="{ fontSize: '9px', color: A2.textDim }">亿</span></td>
-                    <td :style="{ padding: '11px 8px' }"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></td>
-                  </tr>
-                </tbody>
-              </table>
+              <div v-if="result.items.length" class="result-preview-list">
+                <button
+                  v-for="(s, i) in resultPreviewItems"
+                  :key="s.code"
+                  type="button"
+                  class="result-preview-row"
+                  @click="router.push(`/detail/${s.code}`)"
+                >
+                  <span class="result-rank">{{ String(i + 1).padStart(2, '0') }}</span>
+                  <span class="result-stock">
+                    <strong>{{ s.name }}</strong>
+                    <small>{{ s.code }}</small>
+                  </span>
+                  <span class="result-industry">{{ s.industry || '—' }}</span>
+                  <span class="result-facts">
+                    <small v-for="fact in resultFacts(s)" :key="fact">{{ fact }}</small>
+                  </span>
+                  <span class="result-price">
+                    <strong>{{ fmtMetric(s.close) }}</strong>
+                    <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
+                  </span>
+                  <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
+                </button>
+              </div>
               <EmptyState v-else icon="filter" title="没有命中任何股票" :subtitle="zeroResultHint" />
             </div>
           </template>
@@ -532,11 +546,16 @@ const stageColor = (s) => ({
 }
 
 .starter-panel {
+  width: min(100%, 760px);
   margin-bottom: 16px;
   padding: 14px;
   border: 1px solid #EDEDED;
   border-radius: 8px;
   background: #F7F7F7;
+}
+
+.chat-scroll:not(.has-thread) .starter-panel {
+  margin: auto;
 }
 
 .starter-grid {
@@ -565,14 +584,12 @@ const stageColor = (s) => ({
   background: #F5F5F5;
 }
 
-.empty-result-preview {
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
-  background: #FFFFFF;
-  overflow: hidden;
+.chat-scroll.has-thread {
+  display: flex;
+  flex-direction: column;
 }
 
-.chat-scroll.has-thread {
+.chat-scroll:not(.has-thread) {
   display: flex;
   flex-direction: column;
 }
@@ -622,45 +639,158 @@ const stageColor = (s) => ({
   margin-top: 4px;
 }
 
-.preview-head {
+.result-preview {
+  margin: 0 0 20px 40px;
+  overflow: hidden;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
+  box-shadow: 0 2px 10px rgba(14, 14, 12, 0.04);
+}
+
+.result-preview-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid #EDEDED;
   background: #FBFBF9;
 }
 
-.preview-head strong {
-  font-size: 12.5px;
+.result-preview-title {
+  color: #111111;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.result-preview-sub {
+  margin-top: 2px;
+  color: #71717A;
+  font-size: 11px;
+}
+
+.result-preview-sub strong {
+  color: #111111;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.result-preview-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border: 1px solid #D8D8D8;
+  border-radius: 4px;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+
+.result-preview-more:hover {
+  border-color: #B8B8B8;
+  background: #F5F5F5;
   color: #111111;
 }
 
-.preview-head span {
-  font-size: 11px;
-  color: #71717A;
+.result-preview-row {
+  display: grid;
+  grid-template-columns: 26px minmax(112px, 1fr) 76px minmax(148px, 1.2fr) 72px 78px;
+  gap: 10px;
+  width: 100%;
+  min-height: 58px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 0;
+  border-top: 1px solid #F1F1F1;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.18s;
 }
 
-.preview-table {
-  display: grid;
-  grid-template-columns: minmax(130px, 1.4fr) 90px 72px 64px 64px 72px minmax(150px, 1.2fr);
-  gap: 8px;
-  padding: 8px 14px;
-  border-bottom: 1px solid #EDEDED;
-  color: #71717A;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
+.result-preview-row:first-child {
+  border-top: 0;
 }
 
-.preview-empty {
-  display: grid;
-  place-items: center;
-  min-height: 132px;
+.result-preview-row:hover {
+  background: #FAFAFA;
+}
+
+.result-rank,
+.result-stock small,
+.result-price,
+.result-price small {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.result-rank {
   color: #A1A1AA;
+  font-size: 10px;
+}
+
+.result-stock,
+.result-price {
+  display: grid;
+  gap: 3px;
+}
+
+.result-stock strong {
+  overflow: hidden;
+  color: #111111;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-stock small,
+.result-price small {
+  color: #A1A1AA;
+  font-size: 10px;
+}
+
+.result-industry {
+  overflow: hidden;
+  color: #71717A;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.result-facts small {
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: #F5F5F5;
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+}
+
+.result-price {
+  text-align: right;
+}
+
+.result-price strong {
+  color: #111111;
   font-size: 12px;
-  background:
-    linear-gradient(#F5F5F5 1px, transparent 1px) 0 0 / 100% 36px;
+}
+
+.result-price small.up {
+  color: #C8312A;
+}
+
+.result-price small.down {
+  color: #178A55;
 }
 
 .history-item {
@@ -721,6 +851,33 @@ const stageColor = (s) => ({
   }
   .starter-grid {
     grid-template-columns: 1fr;
+  }
+  .result-preview {
+    margin-left: 0;
+  }
+  .result-preview-row {
+    grid-template-areas:
+      "rank stock price"
+      ". facts facts";
+    grid-template-columns: 24px minmax(0, 1fr) 74px;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .result-rank {
+    grid-area: rank;
+  }
+  .result-stock {
+    grid-area: stock;
+  }
+  .result-industry,
+  .result-trend {
+    display: none;
+  }
+  .result-facts {
+    grid-area: facts;
+  }
+  .result-price {
+    grid-area: price;
   }
 }
 </style>
