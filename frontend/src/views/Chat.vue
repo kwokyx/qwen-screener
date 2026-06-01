@@ -26,7 +26,7 @@ const { load: loadSparks, get: spark } = useKlineCache(30)
 // SSE 状态机：把流式逻辑都委托给 composable
 const stream = useNlStream(history, { onResult: loadSparks })
 const {
-  phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, errorMsg,
+  phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, toolCalls, errorMsg,
   thread, liveTurn,
   tStart, tParsed, tDone, isStreaming,
   send: streamSend, stop, restoreFromHistory: streamRestore, clearThread,
@@ -168,6 +168,49 @@ function traceDisplay(trace) {
     .replace(/^未调用 screener_engine\.screen：/, '未执行股票筛选：')
 }
 
+const toolCallRows = computed(() => latestTurn.value?.toolCalls || toolCalls.value || [])
+const toolStatusLabel = (status) => ({
+  pending: '等待',
+  running: '执行中',
+  done: '完成',
+  skipped: '跳过',
+  failed: '失败',
+}[status] || status || '完成')
+const toolStatusColor = (status) => ({
+  pending: A2.textDim,
+  running: A2.qwen,
+  done: A2.up,
+  skipped: A2.textMuted,
+  failed: A2.down,
+}[status] || A2.textDim)
+function fmtToolValue(value) {
+  if (value == null || value === '') return ''
+  if (Array.isArray(value)) return value.join('、')
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, v]) => v != null && v !== '')
+    return entries.slice(0, 3).map(([k, v]) => `${k}:${fmtToolValue(v)}`).join(' · ')
+  }
+  return String(value)
+}
+function toolParamText(call) {
+  const params = call?.params || {}
+  const result = call?.result || {}
+  const parts = []
+  if (params.conditions != null) parts.push(`条件 ${params.conditions}`)
+  if (result.conditions != null) parts.push(`条件 ${result.conditions}`)
+  if (params.sort_by) parts.push(`排序 ${params.sort_by}`)
+  if (params.offset != null) parts.push(`offset ${params.offset}`)
+  if (result.total != null) parts.push(`命中 ${result.total}`)
+  if (result.returned != null) parts.push(`返回 ${result.returned}`)
+  if (!parts.length && call?.message) parts.push(call.message)
+  if (!parts.length) {
+    const raw = fmtToolValue(params) || fmtToolValue(result)
+    if (raw) parts.push(raw)
+  }
+  return parts.join(' · ')
+}
+
 async function send() {
   const q = input.value.trim()
   if (!q) return
@@ -190,15 +233,37 @@ function openFullResults(turn = latestTurn.value) {
     router.push('/strategy')
     return
   }
+  const turnResult = turn?.result || result.value || null
+  const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'score'
+  const sortDesc = (turn?.screenMeta?.sort_desc ?? plan?.sort_desc ?? screenMeta.value?.sort_desc) !== false
   const payload = JSON.stringify({
+    version: 1,
+    session_id: history.activeId && history.activeId !== '__new__' ? history.activeId : null,
+    turn_id: turn?.id || null,
     query: turn?.query || lastQuery.value,
     conditions: turn?.parsedConditions || parsedConditions.value,
-    sort_by: turn?.screenMeta?.sort_by || screenMeta.value?.sort_by || null,
-    sort_desc: (turn?.screenMeta?.sort_desc ?? screenMeta.value?.sort_desc) !== false,
+    sort_by: sortBy,
+    sort_desc: sortDesc,
+    page: 1,
+    size: 20,
+    total: turnResult?.total || 0,
+    last_result: turnResult
+      ? {
+          total: turnResult.total || 0,
+          offset: turnResult.offset || 0,
+          limit: turnResult.limit || 50,
+          trade_date: turnResult.trade_date || null,
+          items: (turnResult.items || []).slice(0, 8),
+          parsed_conditions: turnResult.parsed_conditions || turn?.parsedConditions || parsedConditions.value,
+        }
+      : null,
   })
   try { sessionStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
   try { localStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
-  router.push({ path: '/results', query: { source: 'agent' } })
+  router.push({
+    path: '/results',
+    query: { source: 'agent', page: '1', size: '20', sort: sortBy, order: sortDesc ? 'desc' : 'asc' },
+  })
 }
 
 function newSession() {
@@ -233,6 +298,12 @@ function fmtRelTime(ts) {
 
 // 从其他页面跳转携带 ?q=xxx 时自动发送
 onMounted(() => {
+  const sessionId = route.query.session
+  if (sessionId && typeof sessionId === 'string') {
+    streamRestore(sessionId)
+    router.replace({ path: '/chat' })
+    return
+  }
   const q = route.query.q
   if (q && typeof q === 'string') {
     input.value = q
@@ -424,7 +495,7 @@ const stageColor = (s) => ({
               </div>
               <div>
                 <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">智能筛选</div>
-                <div :style="{ fontSize: '12px', color: A2.textMuted }">输入目标，先判断意图，再返回策略、追问或股票池。</div>
+                <div :style="{ fontSize: '12px', color: A2.textMuted }">输入目标，返回条件、追问或股票池。</div>
               </div>
             </div>
             <div class="starter-grid">
@@ -555,7 +626,17 @@ const stageColor = (s) => ({
         </div>
 
         <template v-else>
-          <div v-for="(stg, i) in stages" :key="stg.t"
+          <div v-if="toolCallRows.length" class="tool-call-list">
+            <div v-for="call in toolCallRows" :key="call.id" class="tool-call-row" :style="{ '--state': toolStatusColor(call.status) }">
+              <div class="tool-call-head">
+                <span class="stage-dot" :class="call.status" :style="{ '--c': toolStatusColor(call.status) }"></span>
+                <strong>{{ call.label || call.name }}</strong>
+                <em>{{ toolStatusLabel(call.status) }}</em>
+              </div>
+              <div v-if="toolParamText(call)" class="tool-call-meta">{{ toolParamText(call) }}</div>
+            </div>
+          </div>
+          <div v-else v-for="(stg, i) in stages" :key="stg.t"
                :style="{ padding: '8px 10px', borderLeft: `2px solid ${stageColor(stg.state)}`, background: A2.bgDeep, marginBottom: '5px', fontSize: '10.5px', borderRadius: '0 6px 6px 0' }">
             <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">
               <span :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
@@ -568,7 +649,7 @@ const stageColor = (s) => ({
           </div>
         </template>
 
-        <div v-if="toolTrace.length" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
+        <div v-if="toolTrace.length && !toolCallRows.length" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
           <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">工具记录</div>
           <div v-for="trace in toolTrace" :key="trace">{{ traceDisplay(trace) }}</div>
         </div>
@@ -583,13 +664,9 @@ const stageColor = (s) => ({
             工具：{{ screenMeta.tool_label || '股票筛选' }}<br />
             条件：{{ parsedConditions.length }} 个<br />
             排序：{{ screenMeta.sort_by || '默认' }}<br />
+            偏移：{{ screenMeta.offset || 0 }}<br />
             上限：{{ screenMeta.limit }}
           </template>
-        </div>
-
-        <div :style="{ marginTop: '18px', padding: '12px', background: A2.qwenGradSoft, borderRadius: '8px', fontSize: '11px', lineHeight: 1.55, border: `1px solid ${A2.borderHair}` }">
-          <div :style="{ fontWeight: 700, color: A2.qwenDeep, marginBottom: '5px', display: 'flex', alignItems: 'center', gap: '5px' }"><Icon name="shield" :size="11" /> 风险提示</div>
-          <div :style="{ color: A2.textSub }">本结果仅供研究参考，不构成投资建议。</div>
         </div>
       </div>
     </div>
@@ -1082,6 +1159,53 @@ const stageColor = (s) => ({
 }
 .history-item:hover .history-del { display: inline-flex; }
 .history-del:hover { background: rgba(200, 49, 42, 0.10); color: #C8312A; }
+
+.tool-call-list {
+  display: grid;
+  gap: 6px;
+}
+
+.tool-call-row {
+  padding: 9px 10px;
+  border-left: 2px solid var(--state);
+  border-radius: 0 6px 6px 0;
+  background: #F7F7F7;
+}
+
+.tool-call-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #111111;
+  font-size: 10.8px;
+  font-weight: 600;
+}
+
+.tool-call-head strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-call-head em {
+  flex-shrink: 0;
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.tool-call-meta {
+  margin-top: 4px;
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  word-break: break-word;
+}
 
 @media (max-width: 1100px) {
   .chat-workbench {

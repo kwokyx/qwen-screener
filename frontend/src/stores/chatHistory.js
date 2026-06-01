@@ -54,6 +54,7 @@ function normalizeTurn(raw = {}) {
     agentAnswer: raw.agentAnswer || raw.agent_answer || raw.screenMeta?.agent_answer || raw.screen_meta?.agent_answer || '',
     agentPlan: raw.agentPlan || raw.agent_plan || raw.screenMeta?.agent_plan || raw.screen_meta?.agent_plan || null,
     toolTrace: raw.toolTrace || raw.tool_trace || raw.screenMeta?.tool_trace || raw.screen_meta?.tool_trace || [],
+    toolCalls: raw.toolCalls || raw.tool_calls || raw.screenMeta?.tool_calls || raw.screen_meta?.tool_calls || [],
     errorMsg: raw.errorMsg || '',
     tStart: raw.tStart || 0,
     tParsed: raw.tParsed || 0,
@@ -88,6 +89,7 @@ function applyLatestSnapshot(session) {
   session.agentAnswer = turn?.agentAnswer || ''
   session.agentPlan = turn?.agentPlan || null
   session.toolTrace = turn?.toolTrace || []
+  session.toolCalls = turn?.toolCalls || []
   return session
 }
 
@@ -102,6 +104,7 @@ function legacySnapshotToTurn(raw = {}) {
     agentAnswer: raw.agentAnswer,
     agentPlan: raw.agentPlan,
     toolTrace: raw.toolTrace,
+    toolCalls: raw.toolCalls,
   })
 }
 
@@ -165,6 +168,7 @@ function toPayload(session) {
     agent_answer: turn?.agentAnswer || '',
     agent_plan: turn?.agentPlan || null,
     tool_trace: turn?.toolTrace || [],
+    tool_calls: turn?.toolCalls || [],
     session_client_id: session.id,
     session_title: session.title,
     session_updated_at: session.updatedAt,

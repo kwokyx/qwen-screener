@@ -385,6 +385,24 @@ async function load() {
     items.value = data.items
     total.value = data.total
     tradeDate.value = data.trade_date || data.items?.[0]?.trade_date || null
+    if (usingAgentContext && agentContext.value) {
+      persistAgentContext({
+        ...agentContext.value,
+        page: page.value,
+        size: pageSize.value,
+        total: data.total,
+        sort_by: sortBy.value,
+        sort_desc: sortDesc.value,
+        last_result: {
+          total: data.total,
+          offset: data.offset || (page.value - 1) * pageSize.value,
+          limit: data.limit || pageSize.value,
+          trade_date: data.trade_date || data.items?.[0]?.trade_date || null,
+          items: (data.items || []).slice(0, 8),
+          parsed_conditions: data.parsed_conditions || agentContext.value.conditions,
+        },
+      })
+    }
   } catch (e) {
     if (requestId !== loadRequestId) return
     errorMsg.value = e.response?.data?.detail || e.message
@@ -407,6 +425,9 @@ function syncRouteState() {
     if (agentContext.value) {
       agentContext.value.sort_by = sortBy.value
       agentContext.value.sort_desc = sortDesc.value
+      agentContext.value.page = page.value
+      agentContext.value.size = pageSize.value
+      agentContext.value.total = total.value
       persistAgentContext(agentContext.value)
     }
   } else {
@@ -484,6 +505,14 @@ function gotoDetail(code) {
   router.push(`/detail/${code}`)
 }
 
+function backToAgentChat() {
+  const sessionId = agentContext.value?.session_id
+  const target = sessionId
+    ? `/chat?session=${encodeURIComponent(sessionId)}`
+    : '/chat'
+  window.location.assign(target)
+}
+
 function rowProps(row) {
   return {
     style: 'cursor: pointer;',
@@ -544,6 +573,15 @@ watch(
           </NButton>
           <NButton text size="small" type="primary" @click="router.push('/chat')">
             自然语言筛选
+          </NButton>
+          <NButton
+            v-if="filterMode === 'agent'"
+            text
+            size="small"
+            type="primary"
+            @click="backToAgentChat"
+          >
+            返回对话
           </NButton>
           <NButton type="primary" size="small" :loading="loading" @click="load">
             重新筛选

@@ -73,6 +73,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "answer": response.answer,
             "warnings": response.warnings,
             "tool_trace": response.tool_trace,
+            "tool_calls": [call.model_dump() for call in response.tool_calls],
         }
 
     def gen():
@@ -96,6 +97,8 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
 
         plan = response.plan
         common = response_payload(response)
+        for call in response.tool_calls:
+            yield event({"type": "tool_call", "tool_call": call.model_dump()})
 
         if plan.tool == "stock_screen":
             yield event({
@@ -105,8 +108,27 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 "sort_by": plan.sort_by,
                 "sort_desc": plan.sort_desc,
                 "limit": 50,
+                "offset": plan.offset,
             })
-            yield event({"type": "screening", "tool": plan.tool, "tool_label": plan.tool_label})
+            yield event({
+                "type": "screening",
+                "tool": plan.tool,
+                "tool_label": plan.tool_label,
+                "tool_call": {
+                    "id": "stock_screen",
+                    "name": "stock_screen",
+                    "label": plan.tool_label,
+                    "status": "running",
+                    "params": {
+                        "conditions": len(plan.conditions),
+                        "sort_by": plan.sort_by,
+                        "offset": plan.offset,
+                        "limit": 50,
+                    },
+                    "result": {},
+                    "message": "正在调用本地筛选引擎",
+                },
+            })
             try:
                 response = strategy_selector.execute_agent_plan(db, response, limit=50)
             except Exception as e:
@@ -131,7 +153,20 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
 
         if plan.tool == "strategy_select":
             yield event({"type": "planned", **common})
-            yield event({"type": "screening", "tool": plan.tool, "tool_label": plan.tool_label})
+            yield event({
+                "type": "screening",
+                "tool": plan.tool,
+                "tool_label": plan.tool_label,
+                "tool_call": {
+                    "id": "strategy_select",
+                    "name": "strategy_select",
+                    "label": plan.tool_label,
+                    "status": "running",
+                    "params": {"strategy_id": plan.strategy_id, "limit": 50},
+                    "result": {},
+                    "message": "正在执行策略选股",
+                },
+            })
             try:
                 response = strategy_selector.execute_agent_plan(db, response, limit=50)
             except Exception as e:

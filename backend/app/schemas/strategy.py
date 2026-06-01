@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date as Date
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -78,8 +78,19 @@ class StrategyAgentPlan(BaseModel):
     logic: str = "AND"
     sort_by: str | None = None
     sort_desc: bool = True
+    offset: int = 0
     ai_configured: bool = False
     ai_used: bool = False
+
+
+class StrategyToolCall(BaseModel):
+    id: str
+    name: str
+    label: str
+    status: Literal["pending", "running", "done", "skipped", "failed"] = "done"
+    params: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] = Field(default_factory=dict)
+    message: str = ""
 
 
 class StrategyAgentResponse(BaseModel):
@@ -90,3 +101,4 @@ class StrategyAgentResponse(BaseModel):
     answer: str
     warnings: list[str] = Field(default_factory=list)
     tool_trace: list[str] = Field(default_factory=list)
+    tool_calls: list[StrategyToolCall] = Field(default_factory=list)

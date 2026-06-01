@@ -126,6 +126,95 @@ def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, s
     assert res.screen_result is not None
     assert {item.code for item in res.screen_result.items} == {"000333.SZ", "000596.SZ"}
     assert "沿用上一轮结构化条件" in res.tool_trace
+    assert any(call.name == "stock_screen" and call.result["total"] == 2 for call in res.tool_calls)
+
+
+def test_chat_agent_tightens_previous_conditions(db, seed_stocks):
+    context = {
+        "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "roe", "sort_desc": True},
+        "last_conditions": [
+            {"field": "pe", "op": "lt", "value": 20},
+            {"field": "roe", "op": "gt", "value": 20},
+        ],
+    }
+
+    res = strategy_selector.run_chat_agent(db, "再严格一点", context=context, limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert [(c.field, c.op, c.value) for c in res.plan.conditions] == [
+        ("pe", "lt", 16),
+        ("roe", "gt", 23),
+    ]
+    assert res.screen_result is not None
+    assert any(call.name == "condition_parser" and call.params["mode"] == "收紧" for call in res.tool_calls)
+
+
+def test_chat_agent_relaxes_previous_conditions(db, seed_stocks):
+    context = {
+        "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "roe", "sort_desc": True},
+        "last_conditions": [
+            {"field": "pe", "op": "lt", "value": 20},
+            {"field": "roe", "op": "gt", "value": 20},
+        ],
+    }
+
+    res = strategy_selector.run_chat_agent(db, "放宽一点", context=context, limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert [(c.field, c.op, c.value) for c in res.plan.conditions] == [
+        ("pe", "lt", 25),
+        ("roe", "gt", 17),
+    ]
+    assert res.screen_result is not None
+
+
+def test_chat_agent_sorts_previous_conditions(db, seed_stocks):
+    context = {
+        "last_plan": {"tool": "stock_screen", "logic": "AND"},
+        "last_conditions": [{"field": "pe", "op": "lt", "value": 500}],
+    }
+
+    res = strategy_selector.run_chat_agent(db, "按股息率排序", context=context, limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.sort_by == "dividend_yield"
+    assert res.plan.sort_desc is True
+    assert res.screen_result is not None
+    assert any(call.name == "result_sort" for call in res.tool_calls)
+
+
+def test_chat_agent_next_page_uses_previous_offset(db, seed_stocks):
+    context = {
+        "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "score", "sort_desc": True},
+        "last_conditions": [{"field": "pe", "op": "lt", "value": 500}],
+        "last_result": {
+            "total": 5,
+            "offset": 0,
+            "limit": 2,
+            "parsed_conditions": [{"field": "pe", "op": "lt", "value": 500}],
+        },
+    }
+
+    res = strategy_selector.run_chat_agent(db, "换一批", context=context, limit=2)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.offset == 2
+    assert res.screen_result is not None
+    assert res.screen_result.offset == 2
+    assert any(call.name == "result_sort" and call.label == "结果分页" for call in res.tool_calls)
+
+
+def test_chat_agent_adjustment_without_context_asks_first(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("adjustment without context must not execute screen")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.run_chat_agent(db, "再严格一点", context={}, limit=10)
+
+    assert res.plan.tool == "ask_clarification"
+    assert res.screen_result is None
+    assert "没有上一轮条件" in res.answer
 
 
 def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkeypatch):
@@ -323,11 +412,16 @@ def test_list_agent_tools_documents_screen_fields():
     tools = strategy_selector.list_agent_tools()
     by_id = {tool.id: tool for tool in tools}
 
-    assert {"strategy_design", "stock_screen", "strategy_select", "explain_result", "ask_clarification"} <= set(by_id)
+    assert {
+        "strategy_design", "stock_screen", "industry_match", "result_sort",
+        "strategy_select", "explain_result", "ask_clarification",
+    } <= set(by_id)
     assert "不调用 screener_engine" in " ".join(by_id["strategy_design"].data_notes)
     assert by_id["stock_screen"].fields
     assert any(field.key == "pe" and field.label == "市盈率" for field in by_id["stock_screen"].fields)
     assert "字段缺失" in " ".join(by_id["stock_screen"].data_notes)
+    assert "行业条件" in " ".join(by_id["industry_match"].data_notes)
+    assert "分页前执行" in " ".join(by_id["result_sort"].data_notes)
     assert "收益回测" in " ".join(by_id["strategy_select"].data_notes)
     assert "上一轮结果" in by_id["explain_result"].description
     assert "不调用 screener_engine" in " ".join(by_id["ask_clarification"].data_notes)

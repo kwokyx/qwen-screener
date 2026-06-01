@@ -18,6 +18,7 @@ from app.schemas.strategy import (
     StrategyPickItem,
     StrategySelectResponse,
     StrategyTemplate,
+    StrategyToolCall,
     StrategyToolField,
     StrategyToolInfo,
 )
@@ -113,6 +114,31 @@ def list_agent_tools() -> list[StrategyToolInfo]:
             ],
         ),
         StrategyToolInfo(
+            id="industry_match",
+            label="行业关键词匹配",
+            category="参数工具",
+            description="把用户口语里的行业或主题词扩展为本地行业字段可识别的关键词。",
+            inputs=["query", "industry_terms"],
+            outputs=["industry 条件"],
+            examples=["大消费", "新能源车", "TMT", "半导体"],
+            fields=[field for field in _tool_fields() if field.key == "industry"],
+            data_notes=["只负责生成行业条件，不直接返回股票池。"],
+        ),
+        StrategyToolInfo(
+            id="result_sort",
+            label="结果排序",
+            category="参数工具",
+            description="基于用户要求或上一轮上下文选择排序字段和方向，再交给筛选工具执行。",
+            inputs=["sort_by", "sort_desc"],
+            outputs=["排序参数"],
+            examples=["按股息率排序", "按市值降序", "换一批"],
+            fields=[
+                field for field in _tool_fields()
+                if field.key in {"pe", "pb", "roe", "market_cap", "dividend_yield", "close", "turnover"}
+            ],
+            data_notes=["排序在后端筛选引擎分页前执行，避免只排序当前页。"],
+        ),
+        StrategyToolInfo(
             id="strategy_select",
             label="策略选股",
             category="策略工具",
@@ -189,6 +215,101 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
     return response
 
 
+def _tool_call(
+    name: str,
+    label: str,
+    status: str = "done",
+    params: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+    message: str = "",
+    call_id: str | None = None,
+) -> StrategyToolCall:
+    return StrategyToolCall(
+        id=call_id or name,
+        name=name,
+        label=label,
+        status=status,
+        params=params or {},
+        result=result or {},
+        message=message,
+    )
+
+
+def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
+    calls = [
+        _tool_call(
+            "tool_router",
+            "意图判断",
+            result={"tool": plan.tool, "label": plan.tool_label},
+            message=plan.reasoning,
+        )
+    ]
+    if plan.tool in ("stock_screen", "strategy_design") and plan.conditions:
+        calls.append(
+            _tool_call(
+                "condition_parser",
+                "条件生成",
+                result={"conditions": len(plan.conditions), "logic": plan.logic},
+                message="已生成结构化条件",
+            )
+        )
+        if any(cond.field == "industry" for cond in plan.conditions):
+            calls.append(
+                _tool_call(
+                    "industry_match",
+                    "行业关键词匹配",
+                    result={
+                        "terms": [
+                            cond.value
+                            for cond in plan.conditions
+                            if cond.field == "industry"
+                        ]
+                    },
+                    message="已匹配本地行业关键词",
+                )
+            )
+        if plan.sort_by:
+            calls.append(
+                _tool_call(
+                    "result_sort",
+                    "结果排序",
+                    params={"sort_by": plan.sort_by, "sort_desc": plan.sort_desc},
+                    message="已确定排序参数",
+                )
+            )
+    elif plan.tool == "strategy_select":
+        calls.append(
+            _tool_call(
+                "strategy_template_match",
+                "策略模板匹配",
+                params={"strategy_id": plan.strategy_id},
+                message="已匹配内置策略模板",
+            )
+        )
+    elif plan.tool == "ask_clarification":
+        calls.append(
+            _tool_call(
+                "ask_clarification",
+                "补充追问",
+                status="skipped",
+                message="条件不足，未调用股票筛选",
+            )
+        )
+    elif plan.tool == "explain_result":
+        calls.append(
+            _tool_call(
+                "explain_result",
+                "结果解释",
+                message="基于上一轮上下文解释结果",
+            )
+        )
+    return calls
+
+
+def _planned_tool_calls_without(plan: StrategyAgentPlan, excluded: set[str]) -> list[StrategyToolCall]:
+    return [call for call in _planned_tool_calls(plan)[1:] if call.name not in excluded]
+
+
 def plan_agent_selection(query: str, limit: int = 50) -> StrategyAgentResponse:
     """Build an agent tool plan without executing project-owned tools."""
     if is_strategy_design_query(query):
@@ -242,6 +363,7 @@ def plan_agent_selection(query: str, limit: int = 50) -> StrategyAgentResponse:
         answer="工具规划完成，等待执行。",
         warnings=warnings,
         tool_trace=tool_trace,
+        tool_calls=_planned_tool_calls(plan),
     )
 
 
@@ -262,6 +384,15 @@ def execute_agent_plan(
             *response.tool_trace,
             "未调用 screener_engine.screen：空条件筛选需要用户明确要求查看全部股票",
         ]
+        guarded.tool_calls = [
+            *response.tool_calls,
+            _tool_call(
+                "stock_screen",
+                "股票筛选",
+                status="skipped",
+                message="空条件筛选已拦截",
+            ),
+        ]
         return guarded
 
     warnings = list(response.warnings)
@@ -278,6 +409,15 @@ def execute_agent_plan(
             answer=answer,
             warnings=warnings,
             tool_trace=tool_trace,
+            tool_calls=[
+                *response.tool_calls,
+                _tool_call(
+                    "strategy_select",
+                    "策略选股",
+                    result={"total": result.total, "returned": len(result.items), "strategy_id": strategy_id},
+                    message="策略选股完成",
+                ),
+            ],
         )
 
     req = ScreenRequest(
@@ -285,6 +425,7 @@ def execute_agent_plan(
         logic=plan.logic if plan.logic in ("AND", "OR") else "AND",
         sort_by=plan.sort_by,
         sort_desc=plan.sort_desc,
+        offset=max(plan.offset, 0),
         limit=limit,
     )
     tool_trace.append(f"调用 screener_engine.screen(conditions={len(req.conditions)}, limit={limit})")
@@ -298,6 +439,15 @@ def execute_agent_plan(
         answer=answer,
         warnings=warnings,
         tool_trace=tool_trace,
+        tool_calls=[
+            *response.tool_calls,
+            _tool_call(
+                "stock_screen",
+                "股票筛选",
+                result={"total": result.total, "returned": len(result.items), "offset": req.offset, "limit": req.limit},
+                message="股票筛选完成",
+            ),
+        ],
     )
 
 
@@ -314,6 +464,12 @@ def preview_chat_plan(
 ) -> StrategyAgentPlan:
     """Return a fast local routing preview for progressive SSE feedback."""
     context = context or {}
+    if is_adjustment_query(query):
+        return build_adjust_conditions_response(query, context, ai_configured=_ai_configured()).plan
+    if is_result_page_query(query):
+        return build_context_page_response(query, context, limit=limit, ai_configured=_ai_configured()).plan
+    if is_result_sort_query(query):
+        return build_context_sort_response(query, context, ai_configured=_ai_configured()).plan
     if is_confirmation_query(query):
         return build_context_screen_response(query, context, ai_configured=_ai_configured()).plan
     if is_result_explanation_query(query):
@@ -334,6 +490,12 @@ def plan_chat_agent(
 ) -> StrategyAgentResponse:
     """Route and plan a chat turn without executing stock tools."""
     context = context or {}
+    if is_adjustment_query(query):
+        return build_adjust_conditions_response(query, context, ai_configured=_ai_configured())
+    if is_result_page_query(query):
+        return build_context_page_response(query, context, limit=limit, ai_configured=_ai_configured())
+    if is_result_sort_query(query):
+        return build_context_sort_response(query, context, ai_configured=_ai_configured())
     if is_confirmation_query(query):
         return build_context_screen_response(query, context, ai_configured=_ai_configured())
     if is_result_explanation_query(query):
@@ -416,6 +578,24 @@ def is_result_explanation_query(query: str) -> bool:
     return any(term in q for term in explain_terms)
 
 
+def is_adjustment_query(query: str) -> bool:
+    q = query.strip().lower()
+    return any(term in q for term in (
+        "再严格", "严格一点", "更严格", "收紧", "门槛高", "更稳健",
+        "放宽", "宽松", "多一点", "扩大范围", "条件松",
+    ))
+
+
+def is_result_sort_query(query: str) -> bool:
+    q = query.strip().lower()
+    return ("排序" in q or "按" in q or "优先" in q) and _requested_sort_by(query) is not None
+
+
+def is_result_page_query(query: str) -> bool:
+    q = "".join(ch for ch in query.strip().lower() if ch not in "，。！？!?、,. ")
+    return q in {"换一批", "下一页", "下页", "再来一批", "继续看", "更多"}
+
+
 def is_strategy_design_query(query: str) -> bool:
     """Return True when the user asks for a strategy plan rather than execution."""
     q = query.strip().lower()
@@ -455,6 +635,7 @@ def build_strategy_design_response(query: str, ai_configured: bool = False) -> S
             "tool_router -> strategy_design",
             "跳过 screener_engine.screen：当前请求是策略设计，不是执行选股",
         ],
+        tool_calls=_planned_tool_calls(plan),
     )
 
 
@@ -479,6 +660,7 @@ def build_clarification_response(query: str, ai_configured: bool = False) -> Str
             "tool_router -> ask_clarification",
             "未调用 screener_engine.screen：缺少风格、行业或指标约束",
         ],
+        tool_calls=_planned_tool_calls(plan),
     )
 
 
@@ -496,6 +678,7 @@ def build_context_screen_response(
             "tool_router -> ask_clarification",
             "未调用 screener_engine.screen：确认语缺少可复用的上一轮条件",
         ]
+        response.tool_calls = _planned_tool_calls(response.plan)
         return response
 
     previous_plan = context.get("last_plan") if isinstance(context, dict) else None
@@ -518,6 +701,184 @@ def build_context_screen_response(
         plan=plan,
         answer="已沿用上一轮条件，等待执行。",
         tool_trace=["tool_router -> stock_screen", "沿用上一轮结构化条件"],
+        tool_calls=_planned_tool_calls(plan),
+    )
+
+
+def build_adjust_conditions_response(
+    query: str,
+    context: dict[str, Any],
+    ai_configured: bool = False,
+) -> StrategyAgentResponse:
+    conditions = _context_conditions(context)
+    if not conditions:
+        response = build_clarification_response(query, ai_configured=ai_configured)
+        response.answer = "我还没有上一轮条件可以调整。请先描述一个选股目标。"
+        response.tool_trace = [
+            "tool_router -> ask_clarification",
+            "未调用 screener_engine.screen：缺少可调整的上一轮条件",
+        ]
+        response.tool_calls = _planned_tool_calls(response.plan)
+        return response
+
+    mode = "loose" if any(term in query for term in ("放宽", "宽松", "多一点", "扩大范围", "条件松")) else "strict"
+    adjusted = _adjust_conditions(conditions, mode)
+    previous_plan = context.get("last_plan") if isinstance(context, dict) else {}
+    if not isinstance(previous_plan, dict):
+        previous_plan = {}
+    plan = StrategyAgentPlan(
+        tool="stock_screen",
+        tool_label="结构化股票筛选",
+        reasoning="用户要求基于上一轮条件调整阈值；先改写条件，再调用本地筛选引擎。",
+        conditions=adjusted,
+        condition_labels=_condition_labels(adjusted),
+        logic=previous_plan.get("logic") if previous_plan.get("logic") in ("AND", "OR") else "AND",
+        sort_by=previous_plan.get("sort_by") or _local_sort_by(query, adjusted),
+        sort_desc=previous_plan.get("sort_desc") is not False,
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="已根据上一轮条件调整阈值，等待执行。",
+        tool_trace=[
+            "tool_router -> stock_screen",
+            f"调整上一轮条件：{'放宽' if mode == 'loose' else '收紧'}",
+        ],
+        tool_calls=[
+            _tool_call(
+                "tool_router",
+                "意图判断",
+                result={"tool": "stock_screen", "action": "adjust_conditions"},
+                message=plan.reasoning,
+            ),
+            _tool_call(
+                "condition_parser",
+                "条件生成",
+                params={"mode": "放宽" if mode == "loose" else "收紧"},
+                result={"conditions": len(adjusted), "logic": plan.logic},
+                message="已改写上一轮条件",
+            ),
+            *_planned_tool_calls_without(plan, {"condition_parser"}),
+        ],
+    )
+
+
+def build_context_sort_response(
+    query: str,
+    context: dict[str, Any],
+    ai_configured: bool = False,
+) -> StrategyAgentResponse:
+    conditions = _context_conditions(context)
+    if not conditions:
+        response = build_clarification_response(query, ai_configured=ai_configured)
+        response.answer = "我还没有上一轮条件可以排序。请先完成一次筛选。"
+        response.tool_trace = [
+            "tool_router -> ask_clarification",
+            "未调用 screener_engine.screen：缺少可排序的上一轮条件",
+        ]
+        response.tool_calls = _planned_tool_calls(response.plan)
+        return response
+
+    previous_plan = context.get("last_plan") if isinstance(context, dict) else {}
+    if not isinstance(previous_plan, dict):
+        previous_plan = {}
+    sort_by = _requested_sort_by(query) or previous_plan.get("sort_by") or "score"
+    plan = StrategyAgentPlan(
+        tool="stock_screen",
+        tool_label="结构化股票筛选",
+        reasoning="用户要求调整上一轮结果排序；沿用条件并修改排序参数后重新筛选。",
+        conditions=conditions,
+        condition_labels=_condition_labels(conditions),
+        logic=previous_plan.get("logic") if previous_plan.get("logic") in ("AND", "OR") else "AND",
+        sort_by=sort_by,
+        sort_desc=_requested_sort_desc(query, sort_by),
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="已沿用上一轮条件并调整排序，等待执行。",
+        tool_trace=["tool_router -> stock_screen", f"调整排序：{sort_by}"],
+        tool_calls=[
+            _tool_call(
+                "tool_router",
+                "意图判断",
+                result={"tool": "stock_screen", "action": "result_sort"},
+                message=plan.reasoning,
+            ),
+            _tool_call(
+                "result_sort",
+                "结果排序",
+                params={"sort_by": sort_by, "sort_desc": plan.sort_desc},
+                message="已确定排序参数",
+            ),
+            *_planned_tool_calls_without(plan, {"result_sort"}),
+        ],
+    )
+
+
+def build_context_page_response(
+    query: str,
+    context: dict[str, Any],
+    limit: int = 50,
+    ai_configured: bool = False,
+) -> StrategyAgentResponse:
+    conditions = _context_conditions(context)
+    if not conditions:
+        response = build_clarification_response(query, ai_configured=ai_configured)
+        response.answer = "我还没有上一轮结果可以翻页。请先完成一次筛选。"
+        response.tool_trace = [
+            "tool_router -> ask_clarification",
+            "未调用 screener_engine.screen：缺少可翻页的上一轮条件",
+        ]
+        response.tool_calls = _planned_tool_calls(response.plan)
+        return response
+
+    previous_plan = context.get("last_plan") if isinstance(context, dict) else {}
+    if not isinstance(previous_plan, dict):
+        previous_plan = {}
+    last_result = context.get("last_result") if isinstance(context, dict) else {}
+    if not isinstance(last_result, dict):
+        last_result = {}
+    previous_offset = int(last_result.get("offset") or previous_plan.get("offset") or 0)
+    previous_limit = int(last_result.get("limit") or limit)
+    next_offset = previous_offset + max(previous_limit, 1)
+    plan = StrategyAgentPlan(
+        tool="stock_screen",
+        tool_label="结构化股票筛选",
+        reasoning="用户要求查看下一批结果；沿用上一轮条件并移动分页偏移。",
+        conditions=conditions,
+        condition_labels=_condition_labels(conditions),
+        logic=previous_plan.get("logic") if previous_plan.get("logic") in ("AND", "OR") else "AND",
+        sort_by=previous_plan.get("sort_by") or "score",
+        sort_desc=previous_plan.get("sort_desc") is not False,
+        offset=next_offset,
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="已沿用上一轮条件，准备查看下一批结果。",
+        tool_trace=["tool_router -> stock_screen", f"结果翻页：offset={next_offset}"],
+        tool_calls=[
+            _tool_call(
+                "tool_router",
+                "意图判断",
+                result={"tool": "stock_screen", "action": "next_page"},
+                message=plan.reasoning,
+            ),
+            _tool_call(
+                "result_sort",
+                "结果分页",
+                params={"offset": next_offset, "limit": limit},
+                message="已确定下一批结果范围",
+            ),
+            *_planned_tool_calls_without(plan, {"result_sort"}),
+        ],
     )
 
 
@@ -541,6 +902,7 @@ def build_missing_context_response(query: str, ai_configured: bool = False) -> S
             "tool_router -> ask_clarification",
             "未调用筛选工具：当前没有上一轮股票池可解释",
         ],
+        tool_calls=_planned_tool_calls(plan),
     )
 
 
@@ -582,6 +944,7 @@ def build_explain_result_response(
             "tool_router -> explain_result",
             "基于上一轮结果生成解释，未重新筛选",
         ],
+        tool_calls=_planned_tool_calls(plan),
     )
 
 
@@ -743,6 +1106,81 @@ def _local_sort_by(query: str, conditions: list[FilterCondition]) -> str | None:
     if any(c.field == "roe" for c in conditions):
         return "roe"
     return "market_cap"
+
+
+def _requested_sort_by(query: str) -> str | None:
+    q = query.strip().lower()
+    mapping = [
+        (("综合分", "评分", "得分"), "score"),
+        (("股息", "分红"), "dividend_yield"),
+        (("roe", "盈利", "质量"), "roe"),
+        (("pe", "市盈率", "估值"), "pe"),
+        (("pb", "市净率"), "pb"),
+        (("市值", "规模", "龙头"), "market_cap"),
+        (("涨跌幅", "涨幅", "强势"), "change_pct"),
+        (("价格", "现价", "收盘价"), "close"),
+        (("换手", "活跃"), "turnover"),
+    ]
+    for terms, field in mapping:
+        if any(term in q for term in terms):
+            return field
+    return None
+
+
+def _requested_sort_desc(query: str, sort_by: str | None) -> bool:
+    q = query.strip().lower()
+    if any(term in q for term in ("升序", "从低到高", "最低", "最小", "低到高")):
+        return False
+    if any(term in q for term in ("降序", "从高到低", "最高", "最大", "高到低")):
+        return True
+    return sort_by not in {"pe", "pb"}
+
+
+def _adjust_conditions(conditions: list[FilterCondition], mode: str) -> list[FilterCondition]:
+    tighten = mode != "loose"
+    adjusted: list[FilterCondition] = []
+    lower_is_better = {"pe", "pb", "debt_ratio"}
+    higher_is_better = {
+        "roe", "dividend_yield", "market_cap", "revenue_yoy",
+        "profit_yoy", "gross_margin", "turnover",
+    }
+    for cond in conditions:
+        if cond.field in lower_is_better:
+            adjusted.append(_adjust_lower_better(cond, tighten))
+        elif cond.field in higher_is_better:
+            adjusted.append(_adjust_higher_better(cond, tighten))
+        else:
+            adjusted.append(cond)
+    return adjusted
+
+
+def _round_threshold(value: float | int) -> float | int:
+    rounded = round(float(value), 2)
+    return int(rounded) if rounded.is_integer() else rounded
+
+
+def _adjust_lower_better(cond: FilterCondition, tighten: bool) -> FilterCondition:
+    factor = 0.8 if tighten else 1.25
+    if cond.op in ("lt", "lte") and isinstance(cond.value, (int, float)):
+        return FilterCondition(field=cond.field, op=cond.op, value=_round_threshold(cond.value * factor))
+    if cond.op == "between" and isinstance(cond.value, list) and len(cond.value) == 2:
+        low, high = cond.value
+        if isinstance(high, (int, float)):
+            high = _round_threshold(high * factor)
+        return FilterCondition(field=cond.field, op=cond.op, value=[low, high])
+    return cond
+
+
+def _adjust_higher_better(cond: FilterCondition, tighten: bool) -> FilterCondition:
+    factor = 1.15 if tighten else 0.85
+    if cond.op in ("gt", "gte") and isinstance(cond.value, (int, float)):
+        return FilterCondition(field=cond.field, op=cond.op, value=_round_threshold(cond.value * factor))
+    if cond.op == "between" and isinstance(cond.value, list) and len(cond.value) == 2:
+        low, high = cond.value
+        if isinstance(low, (int, float)):
+            low = _round_threshold(low * factor)
+        return FilterCondition(field=cond.field, op=cond.op, value=[low, high])
+    return cond
 
 
 def _summarize_strategy_agent(query: str, plan: StrategyAgentPlan, total: int, names: list[str]) -> str:

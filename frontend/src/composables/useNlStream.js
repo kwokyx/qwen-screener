@@ -33,6 +33,7 @@ function normalizeTurn(raw = {}) {
     agentAnswer: raw.agentAnswer || '',
     agentPlan: raw.agentPlan || null,
     toolTrace: raw.toolTrace || [],
+    toolCalls: raw.toolCalls || raw.tool_calls || [],
     errorMsg: raw.errorMsg || '',
     tStart: raw.tStart || 0,
     tParsed: raw.tParsed || 0,
@@ -79,6 +80,9 @@ function turnToContext(turn) {
     last_result: turn.result
       ? {
           total: turn.result.total || 0,
+          offset: turn.result.offset || 0,
+          limit: turn.result.limit || 50,
+          trade_date: turn.result.trade_date || null,
           items: (turn.result.items || []).slice(0, 8),
           parsed_conditions: turn.result.parsed_conditions || turn.parsedConditions || [],
         }
@@ -104,6 +108,7 @@ export function useNlStream(historyStore, hooks = {}) {
   const agentAnswer = ref('')
   const agentPlan = ref(null)
   const toolTrace = ref([])
+  const toolCalls = ref([])
   const errorMsg = ref('')
   const thread = ref(loadInitialThread(historyStore))
 
@@ -134,6 +139,7 @@ export function useNlStream(historyStore, hooks = {}) {
     agentAnswer.value = ''
     agentPlan.value = null
     toolTrace.value = []
+    toolCalls.value = []
     errorMsg.value = ''
   }
 
@@ -154,6 +160,7 @@ export function useNlStream(historyStore, hooks = {}) {
     agentAnswer.value = t.agentAnswer || ''
     agentPlan.value = t.agentPlan || null
     toolTrace.value = t.toolTrace || []
+    toolCalls.value = t.toolCalls || []
     errorMsg.value = t.errorMsg || ''
     tStart.value = t.tStart || (t.ts ? t.ts * 1000 : 0)
     tParsed.value = t.tParsed || tStart.value
@@ -189,6 +196,7 @@ export function useNlStream(historyStore, hooks = {}) {
       agentAnswer: agentAnswer.value,
       agentPlan: cloneJson(agentPlan.value, null),
       toolTrace: cloneJson(toolTrace.value, []),
+      toolCalls: cloneJson(toolCalls.value, []),
       errorMsg: errorMsg.value,
       tStart: tStart.value,
       tParsed: tParsed.value,
@@ -231,18 +239,55 @@ export function useNlStream(historyStore, hooks = {}) {
   }
 
   function applyAgentMeta(ev) {
+    const previousMeta = screenMeta.value || {}
     parsedConditions.value = ev.conditions || ev.plan?.conditions || parsedConditions.value || []
     agentAnswer.value = ev.answer || ''
     agentPlan.value = ev.plan || null
     toolTrace.value = ev.tool_trace || []
+    if (Array.isArray(ev.tool_calls)) {
+      ev.tool_calls.forEach(mergeToolCall)
+    }
     screenMeta.value = {
+      ...previousMeta,
       mode: ev.plan?.tool || 'agent',
       tool: ev.plan?.tool || 'agent',
       tool_label: ev.plan?.tool_label || 'Agent',
       agent_plan: ev.plan || null,
       agent_answer: ev.answer || '',
       tool_trace: ev.tool_trace || [],
+      tool_calls: cloneJson(toolCalls.value, []),
+      sort_by: ev.sort_by ?? ev.plan?.sort_by ?? previousMeta.sort_by,
+      sort_desc: ev.sort_desc ?? ev.plan?.sort_desc ?? previousMeta.sort_desc,
+      limit: ev.limit ?? previousMeta.limit,
+      offset: ev.offset ?? ev.plan?.offset ?? previousMeta.offset,
       warnings: ev.warnings || [],
+    }
+  }
+
+  function normalizeToolCall(call = {}) {
+    const name = call.name || call.id || 'tool'
+    return {
+      id: call.id || name,
+      name,
+      label: call.label || name,
+      status: call.status || 'done',
+      params: call.params || {},
+      result: call.result || {},
+      message: call.message || '',
+    }
+  }
+
+  function mergeToolCall(call) {
+    const normalized = normalizeToolCall(call)
+    const idx = toolCalls.value.findIndex((item) =>
+      item.id === normalized.id || item.name === normalized.name
+    )
+    if (idx >= 0) {
+      const next = [...toolCalls.value]
+      next.splice(idx, 1, { ...next[idx], ...normalized })
+      toolCalls.value = next
+    } else {
+      toolCalls.value = [...toolCalls.value, normalized]
     }
   }
 
@@ -263,6 +308,8 @@ export function useNlStream(historyStore, hooks = {}) {
       await streamNL(q, (ev) => {
         if (ev.type === 'thinking') {
           thinkingBuf.value += ev.text
+        } else if (ev.type === 'tool_call') {
+          mergeToolCall(ev.tool_call)
         } else if (ev.type === 'parsed') {
           applyAgentMeta(ev)
           parsedConditions.value = ev.conditions || []
@@ -272,6 +319,7 @@ export function useNlStream(historyStore, hooks = {}) {
             sort_by: ev.sort_by,
             sort_desc: ev.sort_desc,
             limit: ev.limit,
+            offset: ev.offset,
           }
           phase.value = 'parsed'
           tParsed.value = Date.now()
@@ -290,6 +338,9 @@ export function useNlStream(historyStore, hooks = {}) {
             result.value = {
               items: ev.result.items || [],
               total: ev.result.total || 0,
+              offset: ev.result.offset || 0,
+              limit: ev.result.limit || 50,
+              trade_date: ev.result.trade_date || null,
               parsed_conditions: ev.result.parsed_conditions || parsedConditions.value,
               strategy: ev.result.strategy || null,
             }
@@ -299,10 +350,12 @@ export function useNlStream(historyStore, hooks = {}) {
           tParsed.value = Date.now()
           tDone.value = Date.now()
         } else if (ev.type === 'screening') {
+          if (ev.tool_call) mergeToolCall(ev.tool_call)
           screenMeta.value = {
             ...(screenMeta.value || {}),
             tool: ev.tool || screenMeta.value?.tool || 'stock_screen',
             tool_label: ev.tool_label || screenMeta.value?.tool_label || '股票筛选',
+            tool_calls: cloneJson(toolCalls.value, []),
           }
           phase.value = 'screening'
         } else if (ev.type === 'result') {
@@ -310,6 +363,9 @@ export function useNlStream(historyStore, hooks = {}) {
           result.value = {
             items: ev.items || [],
             total: ev.total || 0,
+            offset: ev.offset || 0,
+            limit: ev.limit || 50,
+            trade_date: ev.trade_date || null,
             parsed_conditions: ev.parsed_conditions || parsedConditions.value,
           }
           if (hooks.onResult) hooks.onResult((ev.items || []).map((s) => s.code))
@@ -371,7 +427,7 @@ export function useNlStream(historyStore, hooks = {}) {
 
   return {
     // state
-    phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, errorMsg,
+    phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, toolCalls, errorMsg,
     thread, liveTurn,
     tStart, tParsed, tDone,
     isStreaming,
