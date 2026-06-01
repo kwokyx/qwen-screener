@@ -32,6 +32,39 @@ FIELD_MAP = {
     "industry": StockBasic.industry,
     "market": StockBasic.market,
 }
+SORT_FIELDS = {*FIELD_MAP, "change_pct", "score"}
+STRING_FIELDS = {"industry", "market"}
+
+
+def validate_screen_request(req: ScreenRequest) -> None:
+    """Reject malformed tool arguments before building or executing SQL."""
+    if req.sort_by is not None and req.sort_by not in SORT_FIELDS:
+        raise ValueError(f"不支持的排序字段: {req.sort_by}")
+    for cond in req.conditions:
+        if cond.field in STRING_FIELDS:
+            if cond.op == "eq" and isinstance(cond.value, str) and cond.value:
+                continue
+            if cond.op == "in" and isinstance(cond.value, list) and cond.value and all(
+                isinstance(item, str) and item for item in cond.value
+            ):
+                continue
+            raise ValueError(f"{cond.field} 仅支持非空字符串 eq 或非空字符串数组 in")
+        if cond.op == "between":
+            if isinstance(cond.value, list) and len(cond.value) == 2 and all(
+                isinstance(item, (int, float)) and not isinstance(item, bool)
+                for item in cond.value
+            ):
+                continue
+            raise ValueError("between 需要两个数字")
+        if cond.op == "in":
+            if isinstance(cond.value, list) and cond.value and all(
+                isinstance(item, (int, float)) and not isinstance(item, bool)
+                for item in cond.value
+            ):
+                continue
+            raise ValueError("数值字段的 in 需要非空数字数组")
+        if not isinstance(cond.value, (int, float)) or isinstance(cond.value, bool):
+            raise ValueError(f"{cond.field} 需要数字阈值")
 
 
 def _build_clause(cond: FilterCondition):
@@ -248,6 +281,7 @@ def _quality_score(daily: StockDaily | None, previous: StockDaily | None, fin: S
 
 
 def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
+    validate_screen_request(req)
     # 兼容 SQLite/MySQL：用 group by + max 找最新日期，再 join
     latest_daily_dates = (
         db.query(StockDaily.code, func.max(StockDaily.trade_date).label("d"))
@@ -307,7 +341,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     )
     quality_score = _quality_score_expr(change_pct)
     sort_fields = {**FIELD_MAP, "change_pct": change_pct, "score": quality_score}
-    if req.sort_by and req.sort_by in sort_fields:
+    if req.sort_by:
         col = sort_fields[req.sort_by]
         q = q.order_by(
             col.is_(None).asc(),

@@ -27,7 +27,7 @@ class ScreenRequest(BaseModel):
     logic: Literal["AND", "OR"] = "AND"
     sort_by: str | None = None
     sort_desc: bool = True
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=10_000)
     limit: int = Field(default=50, ge=1, le=500)
 
 

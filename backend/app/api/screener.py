@@ -76,15 +76,20 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "tool_calls": [call.model_dump() for call in response.tool_calls],
         }
 
+    def _stage_text(tool: str, source: str) -> str:
+        """Return truthful SSE stage text for each tool."""
+        labels = {
+            "stock_screen": "正在执行筛选",
+            "strategy_design": "正在生成策略",
+            "strategy_select": "正在执行策略选股",
+            "explain_result": "正在解释结果",
+            "ask_clarification": "正在请求补充信息",
+        }
+        return f"{labels.get(tool, '正在处理')}（{source}）…\n"
+
     def gen():
-        yield event({"type": "thinking", "text": "正在判断需求类型与可用工具…\n"})
+        yield event({"type": "thinking", "text": "正在判断需求…\n"})
         try:
-            preview = strategy_selector.preview_chat_plan(
-                req.query,
-                context=req.context or {},
-                limit=50,
-            )
-            yield event({"type": "thinking", "text": f"已选择「{preview.tool_label}」，正在准备参数…\n"})
             response = strategy_selector.plan_chat_agent(
                 req.query,
                 context=req.context or {},
@@ -96,6 +101,11 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             return
 
         plan = response.plan
+        source = "AI 模型" if plan.ai_used else "本地规则"
+        effective_limit = min(max(plan.limit, 1), 50)
+        yield event({"type": "thinking", "text": f"已选择工具：{plan.tool_label}（{source}）\n"})
+        yield event({"type": "thinking", "text": "参数校验已完成\n"})
+
         common = response_payload(response)
         for call in response.tool_calls:
             yield event({"type": "tool_call", "tool_call": call.model_dump()})
@@ -107,9 +117,10 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 "logic": plan.logic,
                 "sort_by": plan.sort_by,
                 "sort_desc": plan.sort_desc,
-                "limit": 50,
+                "limit": effective_limit,
                 "offset": plan.offset,
             })
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
             yield event({
                 "type": "screening",
                 "tool": plan.tool,
@@ -123,14 +134,14 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                         "conditions": len(plan.conditions),
                         "sort_by": plan.sort_by,
                         "offset": plan.offset,
-                        "limit": 50,
+                        "limit": effective_limit,
                     },
                     "result": {},
                     "message": "正在调用本地筛选引擎",
                 },
             })
             try:
-                response = strategy_selector.execute_agent_plan(db, response, limit=50)
+                response = strategy_selector.execute_agent_plan(db, response, limit=effective_limit)
             except Exception as e:
                 logger.exception("结构化股票筛选失败")
                 yield event({"type": "error", "message": f"筛选工具执行失败: {e}"})
@@ -143,16 +154,20 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 **response_payload(response),
                 **screen_result_payload(response.screen_result),
             })
+            yield event({"type": "thinking", "text": "已生成结果\n"})
             yield event({"type": "done"})
             return
 
         if plan.tool == "strategy_design":
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
             yield event({"type": "design", **common})
+            yield event({"type": "thinking", "text": "已生成策略设计方案\n"})
             yield event({"type": "done"})
             return
 
         if plan.tool == "strategy_select":
             yield event({"type": "planned", **common})
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
             yield event({
                 "type": "screening",
                 "tool": plan.tool,
@@ -162,22 +177,27 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                     "name": "strategy_select",
                     "label": plan.tool_label,
                     "status": "running",
-                    "params": {"strategy_id": plan.strategy_id, "limit": 50},
+                    "params": {"strategy_id": plan.strategy_id, "limit": effective_limit},
                     "result": {},
                     "message": "正在执行策略选股",
                 },
             })
             try:
-                response = strategy_selector.execute_agent_plan(db, response, limit=50)
+                response = strategy_selector.execute_agent_plan(db, response, limit=effective_limit)
             except Exception as e:
                 logger.exception("策略选股失败")
                 yield event({"type": "error", "message": f"策略选股执行失败: {e}"})
                 return
 
+        # explain_result / ask_clarification are non-executing
+        if plan.tool in ("explain_result", "ask_clarification"):
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
+
         payload = {"type": "agent", **response_payload(response)}
         if response.strategy_result is not None:
             payload["result"] = strategy_result_payload(response.strategy_result)
         yield event(payload)
+        yield event({"type": "thinking", "text": "已生成结果\n"})
         yield event({"type": "done"})
 
     return StreamingResponse(

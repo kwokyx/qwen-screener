@@ -1,11 +1,12 @@
 """qwen_client 包：AI 大模型业务封装。
 
 公开能力：
-- parse_nl_query(query)         自然语言 → ScreenRequest（FC + 缓存 + JSON 模式兜底）
-- analyze_stock(snapshot)       基于基本面数据生成投资分析（缓存）
-- stream_analyze_stock(snapshot) 流式版本，yields 字符串 chunks
-- stream_call(prompt)           裸流式调用（不预设 prompt 模板）
-- probe_health()                探测上游 AI 是否可用
+- parse_nl_query(query)           自然语言 → ScreenRequest（FC + 缓存 + JSON 模式兜底）
+- plan_agent_turn(query, context) 模型 FC Agent 规划（五工具，校验后返回）
+- analyze_stock(snapshot)         基于基本面数据生成投资分析（缓存）
+- stream_analyze_stock(snapshot)  流式版本，yields 字符串 chunks
+- stream_call(prompt)             裸流式调用（不预设 prompt 模板）
+- probe_health()                  探测上游 AI 是否可用
 
 底层 transport（OpenAI Responses / Chat / DashScope / 重试 / 错误清洗）见 .transport。
 """
@@ -21,10 +22,12 @@ from loguru import logger
 from app.config import settings
 from app.schemas.screener import ScreenRequest
 
+from .agent_planner import plan_agent_turn
 from .transport import call as _call, openai_client, probe_health, stream_call
 
 __all__ = [
     "parse_nl_query",
+    "plan_agent_turn",
     "analyze_stock",
     "stream_analyze_stock",
     "stream_call",

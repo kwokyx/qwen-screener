@@ -78,7 +78,8 @@ class StrategyAgentPlan(BaseModel):
     logic: str = "AND"
     sort_by: str | None = None
     sort_desc: bool = True
-    offset: int = 0
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0, le=10_000)
     ai_configured: bool = False
     ai_used: bool = False
 

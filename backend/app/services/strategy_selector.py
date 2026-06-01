@@ -6,6 +6,7 @@ from statistics import mean
 import time
 from typing import Any
 
+from loguru import logger
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -244,6 +245,17 @@ def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
             message=plan.reasoning,
         )
     ]
+    calls.append(
+        _tool_call(
+            "parameter_validation",
+            "参数校验",
+            message=(
+                "筛选参数已校验"
+                if plan.tool in ("stock_screen", "strategy_select")
+                else "请求参数已校验"
+            ),
+        )
+    )
     if plan.tool in ("stock_screen", "strategy_design") and plan.conditions:
         calls.append(
             _tool_call(
@@ -260,9 +272,14 @@ def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
                     "行业关键词匹配",
                     result={
                         "terms": [
-                            cond.value
+                            term
                             for cond in plan.conditions
                             if cond.field == "industry"
+                            for term in (
+                                cond.value
+                                if isinstance(cond.value, list)
+                                else [cond.value]
+                            )
                         ]
                     },
                     message="已匹配本地行业关键词",
@@ -310,46 +327,126 @@ def _planned_tool_calls_without(plan: StrategyAgentPlan, excluded: set[str]) -> 
     return [call for call in _planned_tool_calls(plan)[1:] if call.name not in excluded]
 
 
-def plan_agent_selection(query: str, limit: int = 50) -> StrategyAgentResponse:
-    """Build an agent tool plan without executing project-owned tools."""
-    if is_strategy_design_query(query):
-        return build_strategy_design_response(query, ai_configured=_ai_configured())
-    if is_clarification_query(query):
-        return build_clarification_response(query, ai_configured=_ai_configured())
+def _mark_model_response(
+    response: StrategyAgentResponse,
+    model_plan: qwen_client.AgentPlanResult,
+) -> StrategyAgentResponse:
+    response.plan.ai_configured = True
+    response.plan.ai_used = True
+    response.plan.reasoning = model_plan.reasoning
+    response.tool_trace = ["模型 FC Agent 已选择工具并校验通过", *response.tool_trace]
+    response.tool_calls = _planned_tool_calls(response.plan)
+    return response
 
+
+def _build_non_executing_model_response(
+    query: str,
+    context: dict[str, Any] | None,
+    model_plan: qwen_client.AgentPlanResult,
+) -> StrategyAgentResponse | None:
+    if model_plan.tool == "strategy_design":
+        response = build_strategy_design_response(query, ai_configured=True)
+        quantitative_conditions = [
+            str(item).strip()
+            for item in model_plan.extra.get("quantitative_conditions", [])
+            if str(item).strip()
+        ]
+        framework = str(model_plan.extra.get("framework") or "").strip()
+        notes = str(model_plan.extra.get("notes") or "").strip()
+        if quantitative_conditions:
+            response.answer = "\n".join([
+                "我先给出策略草案，不执行筛选。",
+                "建议量化条件：",
+                *[f"{index}. {item}" for index, item in enumerate(quantitative_conditions, start=1)],
+                *([f"策略框架：{framework}"] if framework else []),
+                *([f"执行注意：{notes}"] if notes else []),
+            ])
+        return _mark_model_response(response, model_plan)
+    if model_plan.tool == "ask_clarification":
+        response = build_clarification_response(query, ai_configured=True)
+        question = str(model_plan.extra.get("question") or "").strip()
+        if question:
+            response.answer = question
+        return _mark_model_response(response, model_plan)
+    if model_plan.tool == "explain_result":
+        if is_explain_result_query(query, context):
+            response = build_explain_result_response(query, context or {}, ai_configured=True)
+        else:
+            response = build_missing_context_response(query, ai_configured=True)
+        return _mark_model_response(response, model_plan)
+    return None
+
+
+def plan_agent_selection(
+    query: str,
+    limit: int = 50,
+    context: dict[str, Any] | None = None,
+) -> StrategyAgentResponse:
+    """Build an agent tool plan without executing project-owned tools.
+
+    Model-first: when AI is configured and available, the model FC Agent
+    selects the tool and generates structured args.  On any failure the
+    local rule Agent takes over as fallback.
+    """
     ai_status = _ai_status()
     ai_configured = bool(ai_status.get("configured"))
     ai_available = bool(ai_status.get("ok"))
     warnings: list[str] = []
     tool_trace: list[str] = []
-    plan = _plan_agent_locally(query, limit, ai_configured)
 
-    if ai_configured and not ai_available:
-        reason = ai_status.get("reason") or "AI 服务不可用"
-        warnings.append(f"AI 服务已配置但当前不可用：{reason}。已使用本地规则 Agent 规划。")
-    elif ai_available and plan.tool == "stock_screen":
+    # Fast local checks for design / clarification when AI is not available
+    if not ai_available:
+        if is_strategy_design_query(query):
+            return build_strategy_design_response(query, ai_configured=ai_configured)
+        if is_clarification_query(query):
+            return build_clarification_response(query, ai_configured=ai_configured)
+
+    # ── Model FC Agent (primary) ──
+    model_plan = None
+    if ai_configured and ai_available:
         try:
-            parsed = qwen_client.parse_nl_query(query)
-            if parsed.conditions or is_explicit_all_stocks_query(query):
-                plan = StrategyAgentPlan(
-                    tool="stock_screen",
-                    tool_label="结构化股票筛选",
-                    reasoning="AI 将自然语言目标转换为结构化筛选条件，再调用本地 screener_engine。",
-                    conditions=parsed.conditions,
-                    logic=parsed.logic,
-                    sort_by=parsed.sort_by,
-                    sort_desc=parsed.sort_desc,
-                    ai_configured=True,
-                    ai_used=True,
-                )
-            else:
-                warnings.append("AI 未返回有效筛选条件，已保留本地规则规划。")
-        except RuntimeError as exc:
-            warnings.append(str(exc))
-            warnings.append("AI 解析失败，已改用本地规则规划工具。")
-    elif not ai_configured:
-        warnings.append("AI 服务未配置，当前使用本地规则 Agent 规划；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
+            model_plan = qwen_client.plan_agent_turn(query, context)
+        except Exception as e:
+            logger.warning("模型规划异常，已回退本地规则 Agent: {}", str(e)[:120])
+            warnings.append("模型规划暂不可用，已回退本地规则 Agent。")
 
+    if model_plan is not None:
+        non_executing = _build_non_executing_model_response(query, context, model_plan)
+        if non_executing is not None:
+            non_executing.warnings = warnings
+            return non_executing
+        plan = StrategyAgentPlan(
+            tool=model_plan.tool,
+            tool_label=model_plan.tool_label,
+            reasoning=model_plan.reasoning,
+            conditions=model_plan.conditions,
+            logic=model_plan.logic if model_plan.logic in ("AND", "OR") else "AND",
+            sort_by=model_plan.sort_by,
+            sort_desc=model_plan.sort_desc,
+            limit=min(max(model_plan.limit, 1), 200),
+            offset=min(max(model_plan.offset, 0), 10_000),
+            strategy_id=model_plan.strategy_id,
+            ai_configured=True,
+            ai_used=True,
+        )
+        # Extra guard: implicit empty conditions without explicit all-stock
+        if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(query):
+            warnings.append("模型未返回有效筛选条件，已回退本地规则。")
+            plan = _plan_agent_locally(query, limit, ai_configured)
+        else:
+            tool_trace.append("模型 FC Agent 已选择工具并校验通过")
+    else:
+        # ── Local rule Agent (fallback) ──
+        plan = _plan_agent_locally(query, limit, ai_configured)
+        if ai_configured and not ai_available:
+            reason = ai_status.get("reason") or "AI 服务不可用"
+            warnings.append(f"AI 服务已配置但当前不可用：{reason}。已使用本地规则 Agent 规划。")
+        elif ai_configured and ai_available:
+            warnings.append("模型未生成有效规划，已回退本地规则 Agent。")
+        elif not ai_configured:
+            warnings.append("AI 服务未配置，当前使用本地规则 Agent 规划；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
+
+    # ── Safety guard ──
     if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(query):
         response = build_clarification_response(query, ai_configured=ai_configured)
         response.warnings = [*warnings, "已阻止无条件全市场筛选。"]
@@ -395,12 +492,13 @@ def execute_agent_plan(
         ]
         return guarded
 
+    effective_limit = min(max(plan.limit, 1), limit)
     warnings = list(response.warnings)
     tool_trace = list(response.tool_trace)
     if plan.tool == "strategy_select":
         strategy_id = plan.strategy_id or "rps_breakout"
-        tool_trace.append(f"调用 strategy_selector.run_strategy_selection(strategy_id={strategy_id}, limit={limit})")
-        result = run_strategy_selection(db, strategy_id, limit)
+        tool_trace.append(f"调用 strategy_selector.run_strategy_selection(strategy_id={strategy_id}, limit={effective_limit})")
+        result = run_strategy_selection(db, strategy_id, effective_limit)
         answer = _summarize_strategy_agent(response.query, plan, result.total, [item.name or item.code for item in result.items[:5]])
         return StrategyAgentResponse(
             query=response.query,
@@ -426,9 +524,9 @@ def execute_agent_plan(
         sort_by=plan.sort_by,
         sort_desc=plan.sort_desc,
         offset=max(plan.offset, 0),
-        limit=limit,
+        limit=effective_limit,
     )
-    tool_trace.append(f"调用 screener_engine.screen(conditions={len(req.conditions)}, limit={limit})")
+    tool_trace.append(f"调用 screener_engine.screen(conditions={len(req.conditions)}, limit={effective_limit})")
     result = screener_engine.screen(db, req)
     result.parsed_conditions = req.conditions
     answer = _summarize_screen_agent(response.query, plan, result.total, [item.name or item.code for item in result.items[:5]])
@@ -490,19 +588,31 @@ def plan_chat_agent(
 ) -> StrategyAgentResponse:
     """Route and plan a chat turn without executing stock tools."""
     context = context or {}
+    model_fallback: StrategyAgentResponse | None = None
+    ai_status = _ai_status()
+    if ai_status.get("configured") and ai_status.get("ok"):
+        model_fallback = plan_agent_selection(query, limit=limit, context=context)
+        if model_fallback.plan.ai_used:
+            return model_fallback
+
+    def local_response(response: StrategyAgentResponse) -> StrategyAgentResponse:
+        if model_fallback is not None:
+            response.warnings = [*model_fallback.warnings, *response.warnings]
+        return response
+
     if is_adjustment_query(query):
-        return build_adjust_conditions_response(query, context, ai_configured=_ai_configured())
+        return local_response(build_adjust_conditions_response(query, context, ai_configured=_ai_configured()))
     if is_result_page_query(query):
-        return build_context_page_response(query, context, limit=limit, ai_configured=_ai_configured())
+        return local_response(build_context_page_response(query, context, limit=limit, ai_configured=_ai_configured()))
     if is_result_sort_query(query):
-        return build_context_sort_response(query, context, ai_configured=_ai_configured())
+        return local_response(build_context_sort_response(query, context, ai_configured=_ai_configured()))
     if is_confirmation_query(query):
-        return build_context_screen_response(query, context, ai_configured=_ai_configured())
+        return local_response(build_context_screen_response(query, context, ai_configured=_ai_configured()))
     if is_result_explanation_query(query):
         if is_explain_result_query(query, context):
-            return build_explain_result_response(query, context, ai_configured=_ai_configured())
-        return build_missing_context_response(query, ai_configured=_ai_configured())
-    return plan_agent_selection(query, limit=limit)
+            return local_response(build_explain_result_response(query, context, ai_configured=_ai_configured()))
+        return local_response(build_missing_context_response(query, ai_configured=_ai_configured()))
+    return model_fallback or plan_agent_selection(query, limit=limit, context=context)
 
 
 def run_chat_agent(
