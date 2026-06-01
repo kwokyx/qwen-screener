@@ -233,7 +233,7 @@ const stageColor = (s) => ({
       <!-- Main chat -->
       <div :style="{ background: A2.bg, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }">
         <!-- Input -->
-        <div :style="{ borderBottom: `1px solid ${A2.borderHair}`, padding: '12px 16px', background: A2.surface }">
+        <div :style="{ order: 2, borderTop: `1px solid ${A2.borderHair}`, padding: '12px 16px', background: A2.surface }">
           <div :style="{ border: `1px solid ${A2.borderHair}`, padding: '10px 12px', background: A2.surfaceElev, borderRadius: '8px', boxShadow: A2.shadowMd }">
             <textarea v-model="input"
                       @keydown.enter.exact.prevent="send"
@@ -261,7 +261,7 @@ const stageColor = (s) => ({
           </div>
         </div>
 
-        <div :style="{ flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
+        <div :style="{ order: 1, flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
           <!-- AI 离线时的状态条 -->
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
