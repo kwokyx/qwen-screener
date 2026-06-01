@@ -77,6 +77,9 @@ function turnToContext(turn) {
     last_plan: turn.agentPlan || null,
     last_answer: turn.agentAnswer || '',
     last_conditions: turn.parsedConditions || [],
+    last_screen_meta: turn.screenMeta || null,
+    last_tool_trace: turn.toolTrace || [],
+    last_tool_calls: turn.toolCalls || [],
     last_result: turn.result
       ? {
           total: turn.result.total || 0,

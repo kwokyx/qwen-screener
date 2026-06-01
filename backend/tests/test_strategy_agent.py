@@ -126,6 +126,7 @@ def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, s
     assert res.screen_result is not None
     assert {item.code for item in res.screen_result.items} == {"000333.SZ", "000596.SZ"}
     assert "沿用上一轮结构化条件" in res.tool_trace
+    assert "上一轮策略条件" in res.answer
     assert any(call.name == "stock_screen" and call.result["total"] == 2 for call in res.tool_calls)
 
 

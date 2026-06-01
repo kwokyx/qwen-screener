@@ -1190,6 +1190,10 @@ def _summarize_strategy_agent(query: str, plan: StrategyAgentPlan, total: int, n
 
 def _summarize_screen_agent(query: str, plan: StrategyAgentPlan, total: int, names: list[str]) -> str:
     picked = "、".join(names) if names else "暂无命中"
+    if is_confirmation_query(query):
+        return f"已按上一轮策略条件执行筛选，当前命中 {total} 只，前排结果：{picked}。"
+    if is_explicit_all_stocks_query(query) and not plan.conditions:
+        return f"已按你的要求展示全市场股票，当前共 {total} 只，前排结果：{picked}。"
     return f"我将「{query}」转换为 {len(plan.conditions)} 个结构化条件，并调用本地筛选引擎。当前命中 {total} 只，前排结果：{picked}。"
 
 

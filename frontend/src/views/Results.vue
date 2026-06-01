@@ -29,6 +29,21 @@ const AGENT_RESULTS_KEY = 'qwen.results.agent.v1'
 const resultModes = new Set(['balanced', 'value', 'sized', 'all'])
 let suppressNextRouteSync = false
 
+function isExplicitAllStocksQuery(query) {
+  const q = String(query || '').trim().toLowerCase()
+  return [
+    '全部股票',
+    '所有股票',
+    '全市场股票',
+    '查看全市场',
+    '显示全市场',
+    '不设条件',
+    '不限条件',
+    '无条件筛选',
+    '放宽全部条件',
+  ].some((term) => q.includes(term))
+}
+
 function readAgentContext(query = route.query) {
   if (query.source !== 'agent') return null
   try {
@@ -165,7 +180,10 @@ const errorMsg = ref('')
 let loadRequestId = 0
 
 const hasRunnableFilter = computed(() => {
-  if (filterMode.value === 'agent') return Boolean(agentContext.value?.conditions?.length)
+  if (filterMode.value === 'agent') {
+    return Boolean(agentContext.value?.conditions?.length)
+      || Boolean(agentContext.value?.last_result && isExplicitAllStocksQuery(agentContext.value?.query))
+  }
   return Boolean(filterMode.value && conditionSets[filterMode.value])
 })
 

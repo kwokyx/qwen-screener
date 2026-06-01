@@ -63,6 +63,27 @@ def test_nl_stream_clarification_request_skips_screening(db, seed_stocks):
     assert "我先不筛股票" in agent["answer"]
 
 
+def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks):
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={"query": "可以，做吧", "context": {}},
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert "agent" in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+
+    agent = next(event for event in events if event["type"] == "agent")
+    assert agent["plan"]["tool"] == "ask_clarification"
+    assert "还没有可以直接执行的上一轮条件" in agent["answer"]
+
+
 def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks):
     client = TestClient(app)
     with client.stream(
