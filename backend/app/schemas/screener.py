@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,7 @@ class ScreenRequest(BaseModel):
 class NLScreenRequest(BaseModel):
     """自然语言筛选请求"""
     query: str = Field(min_length=1, max_length=500, description="用户自然语言，如：低估值高分红的银行股")
+    context: dict[str, Any] | None = Field(default=None, description="当前对话上下文，如上一轮筛选结果")
 
 
 class ScreenResultItem(StockBasicOut):

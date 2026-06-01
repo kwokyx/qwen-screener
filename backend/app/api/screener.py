@@ -39,89 +39,80 @@ def run_nl_screen(req: NLScreenRequest, db: Session = Depends(get_db)):
 
 @router.post("/nl/stream")
 def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
-    """自然语言筛选（流式 SSE）。
-
-    前端可以即时看到三个阶段：
-        1. thinking — 千问正在生成 JSON，token 实时回流（用作"思考预览"）
-        2. parsed   — JSON 完整解析成功，返回结构化条件
-        3. result   — 引擎执行完毕，返回命中股票
-
-    协议：data: <json>\\n\\n，payload.type ∈
-        'thinking' {text}
-        'parsed'   {conditions, sort_by, sort_desc, limit, logic}
-        'screening'
-        'result'   {total, items, parsed_conditions}
-        'error'    {message}
-        'done'
-    """
-    from app.services.qwen_client import _load_prompt, _extract_json, stream_call
-    from app.schemas.screener import ScreenRequest
+    """自然语言智能筛选（流式 SSE）。"""
 
     def event(payload: dict) -> bytes:
         return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n".encode("utf-8")
 
+    def screen_result_payload(result) -> dict:
+        return {
+            "total": result.total,
+            "items": [it.model_dump() for it in result.items],
+            "parsed_conditions": [c.model_dump() for c in (result.parsed_conditions or [])],
+        }
+
+    def strategy_result_payload(result) -> dict:
+        return {
+            "total": result.total,
+            "items": [it.model_dump() for it in result.items],
+            "parsed_conditions": [],
+            "strategy": result.strategy.model_dump(),
+            "trade_date": result.trade_date,
+        }
+
     def gen():
-        # ---- 工具路由：策略设计请求不应无脑执行股票筛选 ----
-        if strategy_selector.is_strategy_design_query(req.query):
-            response = strategy_selector.build_strategy_design_response(
+        yield event({"type": "thinking", "text": "正在判断需求类型与可用工具…\n"})
+        try:
+            response = strategy_selector.run_chat_agent(
+                db,
                 req.query,
-                ai_configured=strategy_selector.is_ai_configured(),
+                context=req.context or {},
+                limit=50,
             )
-            plan = response.plan
-            yield event({"type": "thinking", "text": "tool_router -> strategy_design；不调用 screen_stocks。\n"})
+        except Exception as e:
+            logger.exception("Agent 智能筛选失败")
+            yield event({"type": "error", "message": f"智能筛选失败: {e}"})
+            return
+
+        plan = response.plan
+        common = {
+            "plan": plan.model_dump(),
+            "conditions": [c.model_dump() for c in plan.conditions],
+            "answer": response.answer,
+            "warnings": response.warnings,
+            "tool_trace": response.tool_trace,
+        }
+
+        if plan.tool == "stock_screen":
             yield event({
-                "type": "design",
-                "plan": plan.model_dump(),
-                "conditions": [c.model_dump() for c in plan.conditions],
-                "answer": response.answer,
-                "tool_trace": response.tool_trace,
+                "type": "parsed",
+                **common,
+                "logic": plan.logic,
+                "sort_by": plan.sort_by,
+                "sort_desc": plan.sort_desc,
+                "limit": 50,
+            })
+            yield event({"type": "screening"})
+            if response.screen_result is None:
+                yield event({"type": "error", "message": "筛选工具没有返回结果"})
+                return
+            yield event({
+                "type": "result",
+                **common,
+                **screen_result_payload(response.screen_result),
             })
             yield event({"type": "done"})
             return
 
-        # ---- 阶段 1：流式生成 JSON ----
-        prompt = _load_prompt("nl_to_filter.md").replace("{user_query}", req.query)
-        buf = []
-        try:
-            for chunk in stream_call(prompt):
-                buf.append(chunk)
-                yield event({"type": "thinking", "text": chunk})
-        except Exception as e:
-            logger.exception("NL 流式解析失败")
-            yield event({"type": "error", "message": f"千问调用失败: {e}"})
+        if plan.tool == "strategy_design":
+            yield event({"type": "design", **common})
+            yield event({"type": "done"})
             return
 
-        # ---- 阶段 2：解析为结构化条件 ----
-        raw = "".join(buf)
-        try:
-            data = _extract_json(raw)
-            parsed = ScreenRequest(**data)
-        except Exception as e:
-            yield event({"type": "error", "message": f"千问输出无法解析为筛选条件: {e}"})
-            return
-        yield event({
-            "type": "parsed",
-            "conditions": [c.model_dump() for c in parsed.conditions],
-            "logic": parsed.logic,
-            "sort_by": parsed.sort_by,
-            "sort_desc": parsed.sort_desc,
-            "limit": parsed.limit,
-        })
-
-        # ---- 阶段 3：执行筛选 ----
-        yield event({"type": "screening"})
-        try:
-            result = screener_engine.screen(db, parsed)
-        except ValueError as e:
-            yield event({"type": "error", "message": f"千问条件无效: {e}"})
-            return
-        result.parsed_conditions = parsed.conditions
-        yield event({
-            "type": "result",
-            "total": result.total,
-            "items": [it.model_dump() for it in result.items],
-            "parsed_conditions": [c.model_dump() for c in (result.parsed_conditions or [])],
-        })
+        payload = {"type": "agent", **common}
+        if response.strategy_result is not None:
+            payload["result"] = strategy_result_payload(response.strategy_result)
+        yield event(payload)
         yield event({"type": "done"})
 
     return StreamingResponse(

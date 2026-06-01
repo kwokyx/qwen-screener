@@ -47,10 +47,43 @@ export function useNlStream(historyStore, hooks = {}) {
     errorMsg.value = ''
   }
 
+  function buildContext() {
+    return {
+      last_query: lastQuery.value || '',
+      last_plan: agentPlan.value || null,
+      last_answer: agentAnswer.value || '',
+      last_conditions: parsedConditions.value || [],
+      last_result: result.value
+        ? {
+            total: result.value.total || 0,
+            items: (result.value.items || []).slice(0, 8),
+            parsed_conditions: result.value.parsed_conditions || parsedConditions.value || [],
+          }
+        : null,
+    }
+  }
+
+  function applyAgentMeta(ev) {
+    parsedConditions.value = ev.conditions || ev.plan?.conditions || parsedConditions.value || []
+    agentAnswer.value = ev.answer || ''
+    agentPlan.value = ev.plan || null
+    toolTrace.value = ev.tool_trace || []
+    screenMeta.value = {
+      mode: ev.plan?.tool || 'agent',
+      tool: ev.plan?.tool || 'agent',
+      tool_label: ev.plan?.tool_label || 'Agent',
+      agent_plan: ev.plan || null,
+      agent_answer: ev.answer || '',
+      tool_trace: ev.tool_trace || [],
+      warnings: ev.warnings || [],
+    }
+  }
+
   async function send(query) {
     const q = (query || '').trim()
     if (!q || isStreaming.value) return
 
+    const context = buildContext()
     reset()
     lastQuery.value = q
     phase.value = 'thinking'
@@ -64,22 +97,32 @@ export function useNlStream(historyStore, hooks = {}) {
         if (ev.type === 'thinking') {
           thinkingBuf.value += ev.text
         } else if (ev.type === 'parsed') {
+          applyAgentMeta(ev)
           parsedConditions.value = ev.conditions || []
-          screenMeta.value = { logic: ev.logic, sort_by: ev.sort_by, sort_desc: ev.sort_desc, limit: ev.limit }
+          screenMeta.value = {
+            ...(screenMeta.value || {}),
+            logic: ev.logic,
+            sort_by: ev.sort_by,
+            sort_desc: ev.sort_desc,
+            limit: ev.limit,
+          }
           phase.value = 'parsed'
           tParsed.value = Date.now()
         } else if (ev.type === 'design') {
-          parsedConditions.value = ev.conditions || ev.plan?.conditions || []
-          agentAnswer.value = ev.answer || ''
-          agentPlan.value = ev.plan || null
-          toolTrace.value = ev.tool_trace || []
-          screenMeta.value = {
-            mode: 'strategy_design',
-            tool: ev.plan?.tool || 'strategy_design',
-            tool_label: ev.plan?.tool_label || '策略设计',
-            agent_plan: ev.plan || null,
-            agent_answer: ev.answer || '',
-            tool_trace: ev.tool_trace || [],
+          applyAgentMeta(ev)
+          phase.value = 'done'
+          tParsed.value = Date.now()
+          tDone.value = Date.now()
+        } else if (ev.type === 'agent') {
+          applyAgentMeta(ev)
+          if (ev.result) {
+            result.value = {
+              items: ev.result.items || [],
+              total: ev.result.total || 0,
+              parsed_conditions: ev.result.parsed_conditions || parsedConditions.value,
+              strategy: ev.result.strategy || null,
+            }
+            if (hooks.onResult) hooks.onResult((ev.result.items || []).map((s) => s.code))
           }
           phase.value = 'done'
           tParsed.value = Date.now()
@@ -87,6 +130,7 @@ export function useNlStream(historyStore, hooks = {}) {
         } else if (ev.type === 'screening') {
           phase.value = 'screening'
         } else if (ev.type === 'result') {
+          applyAgentMeta(ev)
           result.value = {
             items: ev.items || [],
             total: ev.total || 0,
@@ -100,7 +144,7 @@ export function useNlStream(historyStore, hooks = {}) {
           errorMsg.value = friendlyError(ev.message, { context: 'ai' })
           phase.value = 'error'
         }
-      }, abortCtrl.signal)
+      }, abortCtrl.signal, context)
 
       // 流正常结束但没收到 'done'
       if (phase.value !== 'error' && phase.value !== 'done') {
@@ -148,7 +192,7 @@ export function useNlStream(historyStore, hooks = {}) {
     agentAnswer.value = it.agentAnswer || it.screenMeta?.agent_answer || ''
     agentPlan.value = it.agentPlan || it.screenMeta?.agent_plan || null
     toolTrace.value = it.toolTrace || it.screenMeta?.tool_trace || []
-    if (agentPlan.value?.tool === 'strategy_design') {
+    if (['strategy_design', 'ask_clarification', 'explain_result'].includes(agentPlan.value?.tool)) {
       result.value = null
     } else {
       result.value = {

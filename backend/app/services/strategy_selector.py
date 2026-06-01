@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from statistics import mean
 import time
+from typing import Any
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -125,6 +126,26 @@ def list_agent_tools() -> list[StrategyToolInfo]:
                 "结果表示当前条件命中，不构成买卖建议。",
             ],
         ),
+        StrategyToolInfo(
+            id="explain_result",
+            label="结果解释",
+            category="对话工具",
+            description="当用户追问上一轮结果为什么命中、怎么看某只股票时使用；只解释当前结果，不重新筛选。",
+            inputs=["query", "last_result"],
+            outputs=["命中原因", "关键指标解释", "风险提示"],
+            examples=["为什么这些股票会被选出来？", "第一只怎么样？", "这个结果怎么看"],
+            data_notes=["依赖前端传回的上一轮结果；上下文为空时会转为补充追问。"],
+        ),
+        StrategyToolInfo(
+            id="ask_clarification",
+            label="补充追问",
+            category="对话工具",
+            description="当用户需求过于模糊时使用，先询问风险偏好、行业、周期或指标侧重点，不硬套默认条件。",
+            inputs=["query"],
+            outputs=["澄清问题", "可选方向"],
+            examples=["帮我选点好股票", "推荐几个股票", "有什么可以买"],
+            data_notes=["该工具不调用 screener_engine，也不返回股票池。"],
+        ),
     ]
 
 
@@ -177,6 +198,8 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     """
     if is_strategy_design_query(query):
         return build_strategy_design_response(query, ai_configured=_ai_configured())
+    if is_clarification_query(query):
+        return build_clarification_response(query, ai_configured=_ai_configured())
 
     ai_status = _ai_status()
     ai_configured = bool(ai_status.get("configured"))
@@ -244,6 +267,63 @@ def run_agent_selection(db: Session, query: str, limit: int = 50) -> StrategyAge
     )
 
 
+def run_chat_agent(
+    db: Session,
+    query: str,
+    context: dict[str, Any] | None = None,
+    limit: int = 50,
+) -> StrategyAgentResponse:
+    """Route a chat turn with optional previous-result context."""
+    context = context or {}
+    if is_result_explanation_query(query):
+        if is_explain_result_query(query, context):
+            return build_explain_result_response(query, context, ai_configured=_ai_configured())
+        return build_missing_context_response(query, ai_configured=_ai_configured())
+    return run_agent_selection(db, query, limit=limit)
+
+
+def is_clarification_query(query: str) -> bool:
+    """Return True when the user intent is too vague to run a real screen."""
+    q = query.strip().lower()
+    if not q:
+        return True
+
+    vague_terms = (
+        "帮我选点", "帮我选一些", "帮我选几个", "推荐点", "推荐几个", "推荐一些",
+        "有什么股票", "买什么", "可以买", "好股票", "随便选", "来几个",
+    )
+    if not any(term in q for term in vague_terms):
+        return False
+
+    concrete_terms = (
+        "低估值", "高分红", "股息", "roe", "pe", "pb", "市盈率", "市净率",
+        "成长", "增长", "净利润", "营收", "行业", "银行", "白酒", "半导体",
+        "医药", "新能源", "消费", "龙头", "蓝筹", "大盘", "小盘", "突破",
+        "强势", "均线", "放量", "海龟", "rps", "%",
+    )
+    has_number = any(ch.isdigit() for ch in q)
+    has_concrete_constraint = has_number or any(term in q for term in concrete_terms)
+    return not has_concrete_constraint
+
+
+def is_explain_result_query(query: str, context: dict[str, Any] | None = None) -> bool:
+    """Return True when the turn asks to explain the previous result."""
+    if not context:
+        return False
+    if not is_result_explanation_query(query):
+        return False
+    return bool(_context_items(context) or _context_conditions(context))
+
+
+def is_result_explanation_query(query: str) -> bool:
+    q = query.strip().lower()
+    explain_terms = (
+        "为什么", "原因", "怎么看", "解释", "说明", "分析一下", "这些股票",
+        "这些结果", "这个结果", "第一只", "第一支", "前几个", "命中",
+    )
+    return any(term in q for term in explain_terms)
+
+
 def is_strategy_design_query(query: str) -> bool:
     """Return True when the user asks for a strategy plan rather than execution."""
     q = query.strip().lower()
@@ -282,6 +362,94 @@ def build_strategy_design_response(query: str, ai_configured: bool = False) -> S
         tool_trace=[
             "tool_router -> strategy_design",
             "跳过 screener_engine.screen：当前请求是策略设计，不是执行选股",
+        ],
+    )
+
+
+def build_clarification_response(query: str, ai_configured: bool = False) -> StrategyAgentResponse:
+    plan = StrategyAgentPlan(
+        tool="ask_clarification",
+        tool_label="补充追问",
+        reasoning="用户没有给出可执行筛选条件；先询问偏好，避免硬套默认股票池。",
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    answer = "\n".join([
+        "这个需求还不够具体，我先不筛股票。",
+        "你更偏向哪一类：低估值高分红、成长股、行业龙头、短线强势，还是低风险蓝筹？",
+        "也可以补充行业、持有周期和能接受的波动范围。",
+    ])
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=answer,
+        tool_trace=[
+            "tool_router -> ask_clarification",
+            "未调用 screener_engine.screen：缺少风格、行业或指标约束",
+        ],
+    )
+
+
+def build_missing_context_response(query: str, ai_configured: bool = False) -> StrategyAgentResponse:
+    plan = StrategyAgentPlan(
+        tool="ask_clarification",
+        tool_label="补充追问",
+        reasoning="用户在追问结果，但当前对话没有可解释的上一轮股票池。",
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    answer = "\n".join([
+        "我这里还没有可解释的上一轮股票结果。",
+        "你可以先说一个筛选目标，比如“低估值高分红的银行股”，得到结果后再问为什么命中。",
+    ])
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=answer,
+        tool_trace=[
+            "tool_router -> ask_clarification",
+            "未调用筛选工具：当前没有上一轮股票池可解释",
+        ],
+    )
+
+
+def build_explain_result_response(
+    query: str,
+    context: dict[str, Any],
+    ai_configured: bool = False,
+) -> StrategyAgentResponse:
+    conditions = _context_conditions(context)
+    items = _context_items(context)
+    if not items and not conditions:
+        return build_clarification_response(query, ai_configured=ai_configured)
+
+    labels = _condition_labels(conditions)
+    plan = StrategyAgentPlan(
+        tool="explain_result",
+        tool_label="结果解释",
+        reasoning="用户在追问上一轮结果；基于当前上下文解释，不重新调用筛选工具。",
+        conditions=conditions,
+        condition_labels=labels,
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    lines = ["我基于上一轮结果解释，不重新筛选。"]
+    if labels:
+        lines.append("主要命中条件：" + "；".join(labels[:6]))
+    if items:
+        lines.append("前排股票的主要依据：")
+        for item in items[:5]:
+            lines.append(f"- {_explain_item(item)}")
+    else:
+        lines.append("上一轮没有命中股票，通常是条件过严或本地数据缺字段导致。")
+
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="\n".join(lines),
+        tool_trace=[
+            "tool_router -> explain_result",
+            "基于上一轮结果生成解释，未重新筛选",
         ],
     )
 
@@ -458,6 +626,64 @@ def _summarize_strategy_design(query: str, plan: StrategyAgentPlan) -> str:
         "执行建议：先用这些条件做初筛，再按行业放宽阈值；银行、保险等金融行业不适合直接套用毛利率和资产负债率。",
     ]
     return "\n".join(lines)
+
+
+def _context_items(context: dict[str, Any]) -> list[dict[str, Any]]:
+    result = context.get("last_result") if isinstance(context, dict) else None
+    if not isinstance(result, dict):
+        result = context
+    items = result.get("items") if isinstance(result, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _context_conditions(context: dict[str, Any]) -> list[FilterCondition]:
+    result = context.get("last_result") if isinstance(context, dict) else None
+    raw = None
+    if isinstance(result, dict):
+        raw = result.get("parsed_conditions")
+    raw = raw or context.get("last_conditions") or context.get("parsed_conditions") or []
+    if not isinstance(raw, list):
+        return []
+
+    conditions: list[FilterCondition] = []
+    for item in raw:
+        if isinstance(item, FilterCondition):
+            conditions.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        try:
+            conditions.append(FilterCondition(**item))
+        except Exception:
+            continue
+    return conditions
+
+
+def _explain_item(item: dict[str, Any]) -> str:
+    name = item.get("name") or item.get("code") or "未知股票"
+    code = item.get("code") or "—"
+    parts = [f"{name}（{code}）"]
+    metrics = [
+        ("行业", item.get("industry")),
+        ("PE", item.get("pe")),
+        ("ROE", item.get("roe")),
+        ("股息率", item.get("dividend_yield")),
+        ("市值", item.get("market_cap")),
+    ]
+    for label, value in metrics:
+        if value is None or value == "":
+            continue
+        suffix = "%" if label in ("ROE", "股息率") else ("亿" if label == "市值" else "")
+        parts.append(f"{label}{_compact_metric(value)}{suffix}")
+    return "，".join(parts)
+
+
+def _compact_metric(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return str(value)
 
 
 def _condition_labels(conditions: list[FilterCondition]) -> list[str]:

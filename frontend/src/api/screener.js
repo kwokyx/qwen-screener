@@ -33,10 +33,10 @@ export async function screenNL(query) {
  *   'done'      流结束
  *   'error'     payload.message
  */
-export function streamNL(query, onEvent, signal) {
+export function streamNL(query, onEvent, signal, context = null) {
   return streamSSE('/api/v1/screener/nl/stream', {
     method: 'POST',
-    body: { query },
+    body: context ? { query, context } : { query },
     onEvent,
     signal,
   })

@@ -37,14 +37,6 @@ const presetPrompts = [
   '股息率超过 5% 的大蓝筹',
 ]
 
-function bullScore(it) {
-  let s = 60
-  if (it.pe && it.pe > 0) s += Math.max(0, Math.min(20, 25 - it.pe * 0.5))
-  if (it.dividend_yield) s += Math.min(15, it.dividend_yield * 2)
-  if (it.roe) s += Math.min(15, it.roe)
-  return Math.round(Math.max(0, Math.min(99, s)))
-}
-
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
 function fmtCond(c) {
   if (Array.isArray(c.value)) return `${c.field} ${opLabel[c.op] || c.op} [${c.value.join(', ')}]`
@@ -69,8 +61,38 @@ const thinkingPreview = computed(() => {
   if (s.length <= 200) return s
   return '…' + s.slice(-200)
 })
+const textOnlyTools = ['strategy_design', 'ask_clarification', 'explain_result']
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
+const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
 const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
+const agentAnswerTitle = computed(() => agentPlan.value?.tool_label || 'Agent 结论')
+const agentToolLabel = computed(() => agentPlan.value?.tool_label || (result.value ? '股票筛选' : '待判断'))
+const conditionIntro = computed(() => {
+  if (agentPlan.value?.tool === 'strategy_design') return '建议量化条件'
+  if (agentPlan.value?.tool === 'explain_result') return '上一轮条件'
+  return result.value ? `筛选条件 · 命中 ${result.value.total} 只` : '识别条件'
+})
+const resultTitle = computed(() => agentPlan.value?.tool === 'strategy_select' ? '策略选股结果' : '筛选结果')
+function historyBadge(c) {
+  const tool = c.agentPlan?.tool
+  if (tool === 'strategy_design') return '策略'
+  if (tool === 'ask_clarification') return '追问'
+  if (tool === 'explain_result') return '解释'
+  return `${c.total} 只`
+}
+function traceDisplay(trace) {
+  return String(trace || '')
+    .replace(/^tool_router -> /, '选择工具：')
+    .replace('选择工具：strategy_design', '选择工具：策略设计')
+    .replace('选择工具：stock_screen', '选择工具：股票筛选')
+    .replace('选择工具：strategy_select', '选择工具：策略选股')
+    .replace('选择工具：explain_result', '选择工具：结果解释')
+    .replace('选择工具：ask_clarification', '选择工具：补充追问')
+    .replace(/^调用 screener_engine\.screen/, '执行股票筛选')
+    .replace(/^调用 strategy_selector\.run_strategy_selection/, '执行策略选股')
+    .replace(/^跳过 screener_engine\.screen：/, '未执行股票筛选：')
+    .replace(/^未调用 screener_engine\.screen：/, '未执行股票筛选：')
+}
 
 async function send() {
   const q = input.value.trim()
@@ -127,18 +149,20 @@ onMounted(() => {
 const stages = computed(() => {
   const items = []
   const elapsed = (a, b) => (b > a ? `${((b - a) / 1000).toFixed(1)}s` : '')
-  if (isDesignResponse.value) {
+  if (agentPlan.value && agentPlan.value.tool !== 'stock_screen') {
     return [
       {
-        t: 'tool_router',
+        t: '工具判断',
         state: 'success',
-        out: '判断为策略设计请求',
+        out: `选择「${agentToolLabel.value}」`,
         dur: tParsed.value && tStart.value ? elapsed(tStart.value, tParsed.value) : '',
       },
       {
-        t: 'strategy_design',
+        t: agentToolLabel.value,
         state: 'success',
-        out: `生成 ${parsedConditions.value.length} 个量化条件，未执行筛选`,
+        out: result.value
+          ? `返回 ${result.value.total} 只结果`
+          : (isTextOnlyAgent.value ? '未执行股票筛选' : '已完成'),
         dur: tDone.value && tParsed.value ? elapsed(tParsed.value, tDone.value) : '',
       },
     ]
@@ -150,11 +174,11 @@ const stages = computed(() => {
   else if (phase.value === 'error' && !parsedConditions.value.length) s1State = 'failed'
   else if (phase.value === 'idle') s1State = 'pending'
   items.push({
-    t: 'parse_nl_query',
+    t: '工具判断',
     state: s1State,
     out: parsedConditions.value.length
-      ? `识别出 ${parsedConditions.value.length} 个条件`
-      : (phase.value === 'thinking' ? '千问解析中…' : '等待输入'),
+      ? `选择「${agentToolLabel.value}」，识别 ${parsedConditions.value.length} 个条件`
+      : (phase.value === 'thinking' ? '判断中…' : '等待输入'),
     dur: tParsed.value && tStart.value ? elapsed(tStart.value, tParsed.value) : '',
   })
   // 2. 执行筛选
@@ -163,9 +187,9 @@ const stages = computed(() => {
   else if (phase.value === 'done') s2State = 'success'
   else if (phase.value === 'error' && parsedConditions.value.length) s2State = 'failed'
   items.push({
-    t: 'apply_filters',
+    t: '股票筛选',
     state: s2State,
-    out: result.value ? `命中 ${result.value.total} 只 · 已展示 ${result.value.items.length}` : '等待解析完成',
+    out: result.value ? `命中 ${result.value.total} 只，展示 ${result.value.items.length} 只` : '等待条件确认',
     dur: tDone.value && tParsed.value ? elapsed(tParsed.value, tDone.value) : '',
   })
   return items
@@ -208,7 +232,7 @@ const stageColor = (s) => ({
                :title="isStreaming ? '当前对话进行中，请先停止' : c.query"
                :style="{ padding: '8px 10px', borderRadius: '7px', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '6px', cursor: isStreaming ? 'wait' : 'pointer' }">
             <span :style="{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11.5px' }">{{ c.query }}</span>
-            <span :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ c.agentPlan?.tool === 'strategy_design' ? '策略' : `${c.total} 只` }}</span>
+            <span :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ historyBadge(c) }}</span>
             <button class="history-del" @click="deleteHistory(c.id, $event)" title="删除">
               <Icon name="x" :size="10" />
             </button>
@@ -245,7 +269,7 @@ const stageColor = (s) => ({
                 <span :style="{ width: '6px', height: '6px', borderRadius: '50%', background: A2.amber }" />
                 AI 服务暂时不可用
               </span>
-              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '解析中…' : phase === 'screening' ? '执行中…' : 'Stream · SSE' }}</span>
+              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '判断中…' : phase === 'screening' ? '执行中…' : '就绪' }}</span>
               <div style="flex:1" />
               <button v-if="isStreaming" @click="stop"
                       :style="{ padding: '7px 14px', background: '#3F3D38', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
@@ -261,7 +285,7 @@ const stageColor = (s) => ({
           </div>
         </div>
 
-        <div :style="{ order: 1, flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
+        <div class="chat-scroll" :class="{ 'has-thread': !!lastQuery }" :style="{ order: 1, flex: 1, overflow: 'auto', padding: '16px 24px', minHeight: 0 }">
           <!-- AI 离线时的状态条 -->
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
@@ -281,8 +305,8 @@ const stageColor = (s) => ({
                 <Icon name="sparkle" :size="20" />
               </div>
               <div>
-                <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">用自然语言筛选或设计策略</div>
-                <div :style="{ fontSize: '12px', color: A2.textMuted }">系统会先判断工具：需要股票池才执行筛选，只问策略时只列量化条件。</div>
+                <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">智能筛选</div>
+                <div :style="{ fontSize: '12px', color: A2.textMuted }">输入目标，先判断意图，再返回策略、追问或股票池。</div>
               </div>
             </div>
             <div class="starter-grid">
@@ -311,6 +335,8 @@ const stageColor = (s) => ({
             </div>
           </div>
 
+          <div v-if="lastQuery" class="thread-spacer" />
+
           <!-- User msg -->
           <div v-if="lastQuery" :style="{ display: 'flex', justifyContent: 'flex-end', marginBottom: '18px' }">
             <div :style="{ maxWidth: '70%', background: A2.surface, color: A2.text, padding: '12px 16px', borderRadius: '14px 14px 4px 14px', fontSize: '13px', lineHeight: 1.65, boxShadow: A2.shadow, border: `1px solid ${A2.borderHair}` }">
@@ -337,10 +363,10 @@ const stageColor = (s) => ({
               <div :style="{ width: '28px', flexShrink: 0 }" />
               <div :style="{ flex: 1, fontSize: '13.5px', lineHeight: 1.75 }">
                 <template v-if="isDesignResponse">
-                  我判断这是策略设计请求，暂不执行筛选，先列出建议量化条件：
+                  {{ conditionIntro }}：
                 </template>
                 <template v-else>
-                  我已将你的需求拆解为结构化条件<span v-if="phase === 'screening'" :style="{ color: A2.textMuted, fontWeight: 500 }">，引擎执行中…</span><span v-else-if="result">，命中 <span :style="{ color: A2.qwenDeep, fontWeight: 800, fontSize: '16px' }">{{ result.total }}</span> 只</span>：
+                  {{ conditionIntro }}<span v-if="phase === 'screening'" :style="{ color: A2.textMuted, fontWeight: 500 }">，执行中…</span>：
                 </template>
               </div>
             </div>
@@ -353,8 +379,11 @@ const stageColor = (s) => ({
             </div>
           </template>
 
-          <div v-if="isDesignResponse && agentAnswerLines.length" class="agent-answer-panel">
-            <div class="agent-answer-title">策略设计</div>
+          <div v-if="agentAnswerLines.length" class="agent-answer-panel" :class="{ compact: isTextOnlyAgent }">
+            <div class="agent-answer-title">
+              <span>{{ agentAnswerTitle }}</span>
+              <em>Agent</em>
+            </div>
             <div v-for="(line, i) in agentAnswerLines" :key="i" class="agent-answer-line">
               {{ line }}
             </div>
@@ -391,7 +420,7 @@ const stageColor = (s) => ({
             <div :style="{ marginLeft: '40px', marginBottom: '20px', background: A2.surface, border: `1px solid ${A2.borderHair}`, borderRadius: '10px', boxShadow: A2.shadowMd, overflow: 'hidden' }">
               <div :style="{ padding: '12px 16px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FBFBF9' }">
                 <div>
-                  <div :style="{ fontSize: '13px', fontWeight: 700 }">筛选结果</div>
+                  <div :style="{ fontSize: '13px', fontWeight: 700 }">{{ resultTitle }}</div>
                   <div :style="{ fontSize: '11px', color: A2.textMuted, marginTop: '1px' }">共 <strong :style="{ color: A2.text }">{{ result.total }}</strong> 只 · 已展示前 {{ result.items.length }} 只</div>
                 </div>
                 <button @click="router.push('/results')" :style="{ fontSize: '11px', padding: '5px 12px', background: A2.qwenGrad, color: '#fff', border: 'none', cursor: 'pointer', borderRadius: '6px', fontWeight: 600, boxShadow: '0 1px 4px rgba(14,14,12,0.10)' }">
@@ -409,7 +438,6 @@ const stageColor = (s) => ({
                     <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">ROE</th>
                     <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">股息率</th>
                     <th :style="{ textAlign: 'right', padding: '8px 8px', fontWeight: 600 }">市值</th>
-                    <th :style="{ textAlign: 'left', padding: '8px 8px', fontWeight: 600 }">千问评分</th>
                     <th :style="{ textAlign: 'left', padding: '8px 8px', fontWeight: 600 }">30 日</th>
                   </tr>
                 </thead>
@@ -428,14 +456,6 @@ const stageColor = (s) => ({
                     <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.roe > 10 ? A2.up : A2.textSub, fontWeight: s.roe > 10 ? 600 : 500 }">{{ s.roe != null ? s.roe.toFixed(2) + '%' : '—' }}</td>
                     <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: s.dividend_yield > 4 ? A2.up : A2.textSub }">{{ s.dividend_yield != null ? s.dividend_yield.toFixed(2) + '%' : '—' }}</td>
                     <td :style="{ padding: '11px 8px', textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace', color: A2.textSub }">{{ s.market_cap != null ? Math.round(s.market_cap).toLocaleString() : '—' }}<span :style="{ fontSize: '9px', color: A2.textDim }">亿</span></td>
-                    <td :style="{ padding: '11px 8px' }">
-                      <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
-                        <div :style="{ width: '50px', height: '5px', background: A2.bgDeep, borderRadius: '3px', overflow: 'hidden' }">
-                          <div :style="{ width: `${bullScore(s)}%`, height: '100%', background: A2.qwenGrad }" />
-                        </div>
-                        <span :style="{ fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700, color: A2.qwenDeep, fontSize: '11px' }">{{ bullScore(s) }}</span>
-                      </div>
-                    </td>
                     <td :style="{ padding: '11px 8px' }"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></td>
                   </tr>
                 </tbody>
@@ -454,7 +474,7 @@ const stageColor = (s) => ({
         </div>
 
         <div v-if="phase === 'idle'" :style="{ fontSize: '11px', color: A2.textMuted, lineHeight: 1.6 }">
-          发送一条自然语言需求，将在这里展示千问的工具调用步骤。
+          发送一条需求后，这里会显示本轮选择的工具和状态。
         </div>
 
         <template v-else>
@@ -463,7 +483,7 @@ const stageColor = (s) => ({
             <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">
               <span :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
                 <span class="stage-dot" :class="stg.state" :style="{ '--c': stageColor(stg.state) }"></span>
-                {{ stg.t }}()
+                {{ stg.t }}
               </span>
               <span :style="{ color: A2.textDim, fontWeight: 500 }">{{ stg.dur || (stg.state === 'running' ? '…' : '') }}</span>
             </div>
@@ -472,22 +492,21 @@ const stageColor = (s) => ({
         </template>
 
         <div v-if="toolTrace.length" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
-          <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">TOOL TRACE</div>
-          <div v-for="trace in toolTrace" :key="trace">{{ trace }}</div>
+          <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">工具记录</div>
+          <div v-for="trace in toolTrace" :key="trace">{{ traceDisplay(trace) }}</div>
         </div>
 
         <div v-if="screenMeta" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
-          <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">QUERY META</div>
-          <template v-if="screenMeta.mode === 'strategy_design'">
-            tool = {{ screenMeta.tool }}<br />
-            execute = skipped<br />
-            reason = design_only
+          <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">本轮信息</div>
+          <template v-if="screenMeta.mode !== 'stock_screen'">
+            工具：{{ screenMeta.tool_label || screenMeta.tool }}<br />
+            筛选：{{ result ? '已返回结果' : '未执行' }}
           </template>
           <template v-else>
-            logic = {{ screenMeta.logic }}<br />
-            sort_by = {{ screenMeta.sort_by || '—' }}<br />
-            sort_desc = {{ screenMeta.sort_desc }}<br />
-            limit = {{ screenMeta.limit }}
+            工具：{{ screenMeta.tool_label || '股票筛选' }}<br />
+            条件：{{ parsedConditions.length }} 个<br />
+            排序：{{ screenMeta.sort_by || '默认' }}<br />
+            上限：{{ screenMeta.limit }}
           </template>
         </div>
 
@@ -553,6 +572,20 @@ const stageColor = (s) => ({
   overflow: hidden;
 }
 
+.chat-scroll.has-thread {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-scroll.has-thread > * {
+  flex-shrink: 0;
+}
+
+.thread-spacer {
+  flex: 1 1 auto;
+  min-height: 12px;
+}
+
 .agent-answer-panel {
   margin-left: 40px;
   margin-bottom: 20px;
@@ -571,6 +604,18 @@ const stageColor = (s) => ({
   color: #111111;
   font-size: 13px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-answer-title em {
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .agent-answer-line + .agent-answer-line {

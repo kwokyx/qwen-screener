@@ -35,6 +35,61 @@ def test_agent_design_request_does_not_execute_screen(db, seed_stocks, monkeypat
     assert "命中 0 只" not in res.answer
 
 
+def test_agent_clarifies_vague_query(db, seed_stocks, monkeypatch):
+    def fail_ai_status():
+        raise AssertionError("vague query should not probe AI health")
+
+    def fail_parse(_query):
+        raise AssertionError("vague query should not parse filters")
+
+    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(strategy_selector.qwen_client, "parse_nl_query", fail_parse)
+
+    res = strategy_selector.run_agent_selection(db, "帮我选点好股票", limit=10)
+
+    assert res.plan.tool == "ask_clarification"
+    assert res.screen_result is None
+    assert res.strategy_result is None
+    assert "我先不筛股票" in res.answer
+    assert "未调用 screener_engine.screen" in res.tool_trace[1]
+
+
+def test_chat_agent_explains_previous_result_without_rescreen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("explain_result should not execute screen")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    context = {
+        "last_result": {
+            "total": 1,
+            "items": [
+                {"code": "600036.SH", "name": "招商银行", "industry": "银行", "pe": 6.5, "roe": 16.5}
+            ],
+            "parsed_conditions": [{"field": "pe", "op": "lt", "value": 15}],
+        }
+    }
+
+    res = strategy_selector.run_chat_agent(db, "为什么这些股票会被选出来？", context=context, limit=10)
+
+    assert res.plan.tool == "explain_result"
+    assert res.screen_result is None
+    assert res.strategy_result is None
+    assert "招商银行" in res.answer
+
+
+def test_chat_agent_asks_when_explain_has_no_previous_result(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("missing-context explanation should not execute screen")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.run_chat_agent(db, "为什么这些股票会被选出来？", context={}, limit=10)
+
+    assert res.plan.tool == "ask_clarification"
+    assert res.screen_result is None
+    assert "还没有可解释的上一轮股票结果" in res.answer
+
+
 def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
@@ -132,9 +187,11 @@ def test_list_agent_tools_documents_screen_fields():
     tools = strategy_selector.list_agent_tools()
     by_id = {tool.id: tool for tool in tools}
 
-    assert {"strategy_design", "stock_screen", "strategy_select"} <= set(by_id)
+    assert {"strategy_design", "stock_screen", "strategy_select", "explain_result", "ask_clarification"} <= set(by_id)
     assert "不调用 screener_engine" in " ".join(by_id["strategy_design"].data_notes)
     assert by_id["stock_screen"].fields
     assert any(field.key == "pe" and field.label == "市盈率" for field in by_id["stock_screen"].fields)
     assert "字段缺失" in " ".join(by_id["stock_screen"].data_notes)
     assert "收益回测" in " ".join(by_id["strategy_select"].data_notes)
+    assert "上一轮结果" in by_id["explain_result"].description
+    assert "不调用 screener_engine" in " ".join(by_id["ask_clarification"].data_notes)
