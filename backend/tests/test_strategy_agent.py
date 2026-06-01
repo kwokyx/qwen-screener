@@ -1,4 +1,5 @@
 from app.schemas.screener import FilterCondition, ScreenRequest
+from app.schemas.strategy import StrategyAgentPlan, StrategyAgentResponse
 from app.services import strategy_selector
 
 
@@ -90,6 +91,43 @@ def test_chat_agent_asks_when_explain_has_no_previous_result(db, seed_stocks, mo
     assert "还没有可解释的上一轮股票结果" in res.answer
 
 
+def test_chat_agent_asks_when_confirmation_has_no_previous_conditions(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("confirmation without context should not execute screen")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.run_chat_agent(db, "可以，做吧", context={}, limit=10)
+
+    assert res.plan.tool == "ask_clarification"
+    assert res.screen_result is None
+    assert "还没有可以直接执行的上一轮条件" in res.answer
+
+
+def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, seed_stocks):
+    context = {
+        "last_plan": {
+            "tool": "strategy_design",
+            "logic": "AND",
+            "sort_by": "roe",
+            "sort_desc": True,
+        },
+        "last_conditions": [
+            {"field": "pe", "op": "lt", "value": 20},
+            {"field": "roe", "op": "gt", "value": 20},
+        ],
+    }
+
+    res = strategy_selector.run_chat_agent(db, "可以，做吧", context=context, limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.ai_used is False
+    assert res.plan.sort_by == "roe"
+    assert res.screen_result is not None
+    assert {item.code for item in res.screen_result.items} == {"000333.SZ", "000596.SZ"}
+    assert "沿用上一轮结构化条件" in res.tool_trace
+
+
 def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
@@ -119,6 +157,66 @@ def test_agent_uses_ai_parser_then_executes_local_screen(db, seed_stocks, monkey
     assert res.screen_result.items[0].code == "688981.SH"
     assert res.tool_trace == ["调用 screener_engine.screen(conditions=2, limit=10)"]
     assert "中芯国际" in res.answer
+
+
+def test_agent_keeps_local_plan_when_ai_returns_empty_conditions(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "parse_nl_query",
+        lambda _query: ScreenRequest(conditions=[]),
+    )
+
+    res = strategy_selector.run_agent_selection(db, "低估值银行", limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.ai_used is False
+    assert res.plan.condition_labels == ["市盈率低于15", "市净率低于2", "行业包含银行"]
+    assert res.screen_result is not None
+    assert res.screen_result.total == 1
+    assert "AI 未返回有效筛选条件" in res.warnings[0]
+
+
+def test_agent_allows_explicit_all_stocks_query(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    res = strategy_selector.run_agent_selection(db, "查看全部股票", limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.conditions == []
+    assert res.screen_result is not None
+    assert res.screen_result.total == 5
+
+
+def test_agent_execution_guard_blocks_implicit_empty_screen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("implicit empty screen must be blocked before execution")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    response = StrategyAgentResponse(
+        query="可以，做吧",
+        plan=StrategyAgentPlan(
+            tool="stock_screen",
+            tool_label="结构化股票筛选",
+            reasoning="test malformed plan",
+            conditions=[],
+        ),
+        answer="等待执行",
+    )
+
+    result = strategy_selector.execute_agent_plan(db, response, limit=10)
+
+    assert result.plan.tool == "ask_clarification"
+    assert result.screen_result is None
+    assert any("已阻止无条件全市场筛选" in warning for warning in result.warnings)
 
 
 def test_agent_planning_does_not_execute_screen(db, seed_stocks, monkeypatch):

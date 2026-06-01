@@ -29,6 +29,8 @@ def run_nl_screen(req: NLScreenRequest, db: Session = Depends(get_db)):
         parsed = qwen_client.parse_nl_query(req.query)
     except RuntimeError as e:
         raise HTTPException(503, str(e))
+    if not parsed.conditions and not strategy_selector.is_explicit_all_stocks_query(req.query):
+        raise HTTPException(400, "未识别到可执行筛选条件，请补充指标或明确要求查看全部股票")
     try:
         result = screener_engine.screen(db, parsed)
     except ValueError as e:
@@ -48,6 +50,9 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         return {
             "total": result.total,
             "items": [it.model_dump() for it in result.items],
+            "offset": result.offset,
+            "limit": result.limit,
+            "trade_date": result.trade_date,
             "parsed_conditions": [c.model_dump() for c in (result.parsed_conditions or [])],
         }
 

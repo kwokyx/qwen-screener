@@ -209,22 +209,31 @@ def plan_agent_selection(query: str, limit: int = 50) -> StrategyAgentResponse:
     elif ai_available and plan.tool == "stock_screen":
         try:
             parsed = qwen_client.parse_nl_query(query)
-            plan = StrategyAgentPlan(
-                tool="stock_screen",
-                tool_label="结构化股票筛选",
-                reasoning="AI 将自然语言目标转换为结构化筛选条件，再调用本地 screener_engine。",
-                conditions=parsed.conditions,
-                logic=parsed.logic,
-                sort_by=parsed.sort_by,
-                sort_desc=parsed.sort_desc,
-                ai_configured=True,
-                ai_used=True,
-            )
+            if parsed.conditions or is_explicit_all_stocks_query(query):
+                plan = StrategyAgentPlan(
+                    tool="stock_screen",
+                    tool_label="结构化股票筛选",
+                    reasoning="AI 将自然语言目标转换为结构化筛选条件，再调用本地 screener_engine。",
+                    conditions=parsed.conditions,
+                    logic=parsed.logic,
+                    sort_by=parsed.sort_by,
+                    sort_desc=parsed.sort_desc,
+                    ai_configured=True,
+                    ai_used=True,
+                )
+            else:
+                warnings.append("AI 未返回有效筛选条件，已保留本地规则规划。")
         except RuntimeError as exc:
             warnings.append(str(exc))
             warnings.append("AI 解析失败，已改用本地规则规划工具。")
     elif not ai_configured:
         warnings.append("AI 服务未配置，当前使用本地规则 Agent 规划；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
+
+    if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(query):
+        response = build_clarification_response(query, ai_configured=ai_configured)
+        response.warnings = [*warnings, "已阻止无条件全市场筛选。"]
+        response.tool_trace.append("未调用 screener_engine.screen：空条件筛选需要用户明确要求查看全部股票")
+        return response
 
     plan.condition_labels = _condition_labels(plan.conditions)
     return StrategyAgentResponse(
@@ -245,6 +254,15 @@ def execute_agent_plan(
     plan = response.plan
     if plan.tool not in ("stock_screen", "strategy_select"):
         return response
+    if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(response.query):
+        guarded = build_clarification_response(response.query, ai_configured=plan.ai_configured)
+        guarded.answer = "我还没有拿到可执行的筛选条件。请补充指标、行业或风险偏好后再执行。"
+        guarded.warnings = [*response.warnings, "已阻止无条件全市场筛选。"]
+        guarded.tool_trace = [
+            *response.tool_trace,
+            "未调用 screener_engine.screen：空条件筛选需要用户明确要求查看全部股票",
+        ]
+        return guarded
 
     warnings = list(response.warnings)
     tool_trace = list(response.tool_trace)
@@ -296,6 +314,8 @@ def preview_chat_plan(
 ) -> StrategyAgentPlan:
     """Return a fast local routing preview for progressive SSE feedback."""
     context = context or {}
+    if is_confirmation_query(query):
+        return build_context_screen_response(query, context, ai_configured=_ai_configured()).plan
     if is_result_explanation_query(query):
         if is_explain_result_query(query, context):
             return build_explain_result_response(query, context, ai_configured=_ai_configured()).plan
@@ -314,6 +334,8 @@ def plan_chat_agent(
 ) -> StrategyAgentResponse:
     """Route and plan a chat turn without executing stock tools."""
     context = context or {}
+    if is_confirmation_query(query):
+        return build_context_screen_response(query, context, ai_configured=_ai_configured())
     if is_result_explanation_query(query):
         if is_explain_result_query(query, context):
             return build_explain_result_response(query, context, ai_configured=_ai_configured())
@@ -337,6 +359,8 @@ def is_clarification_query(query: str) -> bool:
     q = query.strip().lower()
     if not q:
         return True
+    if is_confirmation_query(query):
+        return True
 
     vague_terms = (
         "帮我选点", "帮我选一些", "帮我选几个", "推荐点", "推荐几个", "推荐一些",
@@ -354,6 +378,24 @@ def is_clarification_query(query: str) -> bool:
     has_number = any(ch.isdigit() for ch in q)
     has_concrete_constraint = has_number or any(term in q for term in concrete_terms)
     return not has_concrete_constraint
+
+
+def is_confirmation_query(query: str) -> bool:
+    """Return True for short follow-up confirmations that require prior context."""
+    normalized = "".join(ch for ch in query.strip().lower() if ch not in "，。！？!?、,. ")
+    return normalized in {
+        "可以", "可以做吧", "可以执行", "做吧", "按这个来", "按这个做",
+        "执行吧", "执行", "继续", "继续吧", "开始吧", "就这样", "确认",
+    }
+
+
+def is_explicit_all_stocks_query(query: str) -> bool:
+    """Allow an empty-condition screen only when the user explicitly asks for it."""
+    q = query.strip().lower()
+    return any(term in q for term in (
+        "全部股票", "所有股票", "全市场股票", "查看全市场", "显示全市场",
+        "不设条件", "不限条件", "无条件筛选", "放宽全部条件",
+    ))
 
 
 def is_explain_result_query(query: str, context: dict[str, Any] | None = None) -> bool:
@@ -437,6 +479,45 @@ def build_clarification_response(query: str, ai_configured: bool = False) -> Str
             "tool_router -> ask_clarification",
             "未调用 screener_engine.screen：缺少风格、行业或指标约束",
         ],
+    )
+
+
+def build_context_screen_response(
+    query: str,
+    context: dict[str, Any],
+    ai_configured: bool = False,
+) -> StrategyAgentResponse:
+    """Reuse the previous executable conditions for a confirmation turn."""
+    conditions = _context_conditions(context)
+    if not conditions:
+        response = build_clarification_response(query, ai_configured=ai_configured)
+        response.answer = "我还没有可以直接执行的上一轮条件。请先描述选股目标，或补充行业和指标偏好。"
+        response.tool_trace = [
+            "tool_router -> ask_clarification",
+            "未调用 screener_engine.screen：确认语缺少可复用的上一轮条件",
+        ]
+        return response
+
+    previous_plan = context.get("last_plan") if isinstance(context, dict) else None
+    if not isinstance(previous_plan, dict):
+        previous_plan = {}
+    plan = StrategyAgentPlan(
+        tool="stock_screen",
+        tool_label="结构化股票筛选",
+        reasoning="用户确认执行上一轮方案；沿用对话上下文中的结构化条件调用本地 screener_engine。",
+        conditions=conditions,
+        condition_labels=_condition_labels(conditions),
+        logic=previous_plan.get("logic") if previous_plan.get("logic") in ("AND", "OR") else "AND",
+        sort_by=previous_plan.get("sort_by"),
+        sort_desc=previous_plan.get("sort_desc") is not False,
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="已沿用上一轮条件，等待执行。",
+        tool_trace=["tool_router -> stock_screen", "沿用上一轮结构化条件"],
     )
 
 
@@ -534,6 +615,17 @@ def _ai_status() -> dict:
 
 def _plan_agent_locally(query: str, limit: int, ai_configured: bool) -> StrategyAgentPlan:
     text = query.lower()
+    if is_explicit_all_stocks_query(query):
+        return StrategyAgentPlan(
+            tool="stock_screen",
+            tool_label="结构化股票筛选",
+            reasoning="用户明确要求查看全部股票，允许执行无条件全市场查询。",
+            conditions=[],
+            logic="AND",
+            sort_by="market_cap",
+            sort_desc=True,
+            ai_configured=ai_configured,
+        )
     if any(k in query for k in ("海龟", "突破", "新高")) or "breakout" in text:
         return StrategyAgentPlan(
             tool="strategy_select",

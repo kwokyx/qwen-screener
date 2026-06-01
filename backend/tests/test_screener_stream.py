@@ -63,6 +63,38 @@ def test_nl_stream_clarification_request_skips_screening(db, seed_stocks):
     assert "我先不筛股票" in agent["answer"]
 
 
+def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks):
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={
+            "query": "可以，做吧",
+            "context": {
+                "last_plan": {
+                    "tool": "strategy_design",
+                    "logic": "AND",
+                    "sort_by": "roe",
+                    "sort_desc": True,
+                },
+                "last_conditions": [
+                    {"field": "pe", "op": "lt", "value": 20},
+                    {"field": "roe", "op": "gt", "value": 20},
+                ],
+            },
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
+    result = next(event for event in events if event["type"] == "result")
+    assert result["total"] == 2
+    assert {item["code"] for item in result["items"]} == {"000333.SZ", "000596.SZ"}
+
+
 def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks):
     client = TestClient(app)
     with client.stream(
