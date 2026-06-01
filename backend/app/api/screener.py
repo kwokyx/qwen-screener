@@ -103,6 +103,12 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         plan = response.plan
         source = "AI 模型" if plan.ai_used else "本地规则"
         effective_limit = min(max(plan.limit, 1), 50)
+        logger.info(
+            "Agent SSE 规划完成: tool={} source={} validated=true conditions={}",
+            plan.tool,
+            "model" if plan.ai_used else "local",
+            len(plan.conditions),
+        )
         yield event({"type": "thinking", "text": f"已选择工具：{plan.tool_label}（{source}）\n"})
         yield event({"type": "thinking", "text": "参数校验已完成\n"})
 
@@ -111,6 +117,11 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             yield event({"type": "tool_call", "tool_call": call.model_dump()})
 
         if plan.tool == "stock_screen":
+            logger.info(
+                "Agent SSE 执行工具: tool=stock_screen conditions={} limit={}",
+                len(plan.conditions),
+                effective_limit,
+            )
             yield event({
                 "type": "parsed",
                 **common,
@@ -149,6 +160,10 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             if response.screen_result is None:
                 yield event({"type": "error", "message": "筛选工具没有返回结果"})
                 return
+            logger.info(
+                "Agent SSE 工具完成: tool=stock_screen total={}",
+                response.screen_result.total,
+            )
             yield event({
                 "type": "result",
                 **response_payload(response),
@@ -159,6 +174,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             return
 
         if plan.tool == "strategy_design":
+            logger.info("Agent SSE 跳过执行: tool=strategy_design reason=non-executing")
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
             yield event({"type": "design", **common})
             yield event({"type": "thinking", "text": "已生成策略设计方案\n"})
@@ -166,6 +182,11 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             return
 
         if plan.tool == "strategy_select":
+            logger.info(
+                "Agent SSE 执行工具: tool=strategy_select strategy_id={} limit={}",
+                plan.strategy_id,
+                effective_limit,
+            )
             yield event({"type": "planned", **common})
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
             yield event({
@@ -188,9 +209,14 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 logger.exception("策略选股失败")
                 yield event({"type": "error", "message": f"策略选股执行失败: {e}"})
                 return
+            logger.info(
+                "Agent SSE 工具完成: tool=strategy_select total={}",
+                response.strategy_result.total if response.strategy_result else 0,
+            )
 
         # explain_result / ask_clarification are non-executing
         if plan.tool in ("explain_result", "ask_clarification"):
+            logger.info("Agent SSE 跳过执行: tool={} reason=non-executing", plan.tool)
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
 
         payload = {"type": "agent", **response_payload(response)}
