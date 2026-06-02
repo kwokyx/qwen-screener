@@ -355,20 +355,15 @@ def plan_agent_turn(
 
     成功返回校验后的 AgentPlanResult；任何失败返回 None（调用方回退本地规则）。
     """
-    if (settings.ai_backend or "openai").lower() != "openai":
-        logger.info("Agent FC 暂不支持当前 AI provider，回退本地规则")
+    chat_client = _agent_chat_client()
+    if chat_client is None:
         return None
-    if not settings.openai_api_key:
-        return None
-    try:
-        client = openai_client()
-    except RuntimeError:
-        return None
+    client, model, backend = chat_client
 
     messages = _build_messages(query, context)
     try:
         resp = client.chat.completions.create(
-            model=settings.openai_model,
+            model=model,
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
@@ -406,8 +401,9 @@ def plan_agent_turn(
 
     result = _to_plan_result(tool_name, validated, query)
     logger.info(
-        "Agent FC 成功: tool={} source=model",
+        "Agent FC 成功: tool={} backend={}",
         tool_name,
+        backend,
     )
     return result
 
@@ -415,6 +411,41 @@ def plan_agent_turn(
 # ---------------------------------------------------------------------------
 # 内部辅助
 # ---------------------------------------------------------------------------
+
+def _agent_chat_client():
+    """Return an OpenAI-compatible chat client for Agent tool calling."""
+    backend = (settings.ai_backend or "openai").lower()
+    if backend == "openai":
+        if not settings.openai_api_key:
+            return None
+        try:
+            return openai_client(), settings.openai_model, "openai"
+        except RuntimeError as e:
+            logger.info("Agent FC OpenAI 客户端不可用，回退本地规则: {}", str(e)[:120])
+            return None
+
+    if backend == "dashscope":
+        if not settings.dashscope_api_key:
+            return None
+        try:
+            return _dashscope_openai_client(), settings.qwen_model, "dashscope"
+        except RuntimeError as e:
+            logger.info("Agent FC DashScope 客户端不可用，回退本地规则: {}", str(e)[:120])
+            return None
+
+    logger.info("Agent FC 暂不支持当前 AI provider={}，回退本地规则", backend)
+    return None
+
+
+def _dashscope_openai_client():
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise RuntimeError("openai 未安装，请 pip install -r requirements.txt") from e
+    return OpenAI(
+        api_key=settings.dashscope_api_key,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
 
 def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
     system = (

@@ -25,6 +25,20 @@ def run_screen(req: ScreenRequest, db: Session = Depends(get_db)):
 @router.post("/nl", response_model=ScreenResponse)
 def run_nl_screen(req: NLScreenRequest, db: Session = Depends(get_db)):
     """自然语言筛选：千问解析 → 引擎执行（一次性返回）"""
+    if req.context:
+        try:
+            response = strategy_selector.run_chat_agent(
+                db,
+                req.query,
+                context=req.context,
+                limit=50,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if response.screen_result is None:
+            raise HTTPException(400, response.answer)
+        return response.screen_result
+
     try:
         parsed = qwen_client.parse_nl_query(req.query)
     except RuntimeError as e:

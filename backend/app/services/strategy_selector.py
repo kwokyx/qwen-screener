@@ -1302,6 +1302,18 @@ def _summarize_screen_agent(query: str, plan: StrategyAgentPlan, total: int, nam
     picked = "、".join(names) if names else "暂无命中"
     if is_confirmation_query(query):
         return f"已按上一轮策略条件执行筛选，当前命中 {total} 只，前排结果：{picked}。"
+    if is_result_page_query(query):
+        if total == 0:
+            return "已沿用上一轮条件查看下一批结果，当前没有命中股票。"
+        if plan.offset >= total or not names:
+            return f"已沿用上一轮条件查看下一批结果，当前共 {total} 只，已经没有更多结果。"
+        start = plan.offset + 1 if total else plan.offset
+        end = min(plan.offset + plan.limit, total) if total else plan.offset
+        return f"已沿用上一轮条件查看下一批结果，当前共 {total} 只，返回第 {start}–{end} 条：{picked}。"
+    if is_result_sort_query(query):
+        return f"已沿用上一轮条件并调整排序，当前命中 {total} 只，前排结果：{picked}。"
+    if is_adjustment_query(query):
+        return f"已基于上一轮条件调整阈值并重新筛选，当前命中 {total} 只，前排结果：{picked}。"
     if is_explicit_all_stocks_query(query) and not plan.conditions:
         return f"已按你的要求展示全市场股票，当前共 {total} 只，前排结果：{picked}。"
     return f"我将「{query}」转换为 {len(plan.conditions)} 个结构化条件，并调用本地筛选引擎。当前命中 {total} 只，前排结果：{picked}。"

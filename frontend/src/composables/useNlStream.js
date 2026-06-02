@@ -252,8 +252,8 @@ export function useNlStream(historyStore, hooks = {}) {
     }
   }
 
-  function commitCurrentTurn() {
-    const turn = snapshotCurrentTurn('done')
+  function commitCurrentTurn(turnPhase = 'done') {
+    const turn = snapshotCurrentTurn(turnPhase)
     if (!turn.query) return null
     thread.value = [...thread.value, turn].slice(-MAX_THREAD_TURNS)
     persistCurrentThread(thread.value)
@@ -414,15 +414,15 @@ export function useNlStream(historyStore, hooks = {}) {
         tDone.value = Date.now()
       }
 
-      if (phase.value === 'done') {
-        commitCurrentTurn()
-      }
+      if (phase.value === 'done') commitCurrentTurn()
+      else if (phase.value === 'error') commitCurrentTurn('error')
     } catch (e) {
       if (e.name === 'AbortError') {
         phase.value = 'idle'
       } else {
         errorMsg.value = friendlyError(e, { context: 'ai' })
         phase.value = 'error'
+        commitCurrentTurn('error')
       }
     } finally {
       abortCtrl = null

@@ -139,6 +139,42 @@ def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stock
     assert any(call["name"] == "stock_screen" for call in result["tool_calls"])
 
 
+def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/screener/nl",
+        json={
+            "query": "可以，做吧",
+            "context": {
+                "last_plan": {
+                    "tool": "strategy_design",
+                    "logic": "AND",
+                    "sort_by": "roe",
+                    "sort_desc": True,
+                },
+                "last_conditions": [
+                    {"field": "pe", "op": "lt", "value": 20},
+                    {"field": "roe", "op": "gt", "value": 20},
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert {item["code"] for item in data["items"]} == {"000333.SZ", "000596.SZ"}
+    assert data["parsed_conditions"] == [
+        {"field": "pe", "op": "lt", "value": 20},
+        {"field": "roe", "op": "gt", "value": 20},
+    ]
+
+
 def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

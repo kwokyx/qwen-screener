@@ -321,7 +321,24 @@ def test_chat_agent_next_page_uses_previous_offset(db, seed_stocks, monkeypatch)
     assert res.plan.offset == 2
     assert res.screen_result is not None
     assert res.screen_result.offset == 2
+    assert "下一批结果" in res.answer
+    assert "转换为" not in res.answer
     assert any(call.name == "result_sort" and call.label == "结果分页" for call in res.tool_calls)
+
+
+def test_next_page_summary_handles_past_end():
+    plan = StrategyAgentPlan(
+        tool="stock_screen",
+        tool_label="结构化股票筛选",
+        reasoning="翻页测试",
+        offset=50,
+        limit=50,
+    )
+
+    answer = strategy_selector._summarize_screen_agent("换一批", plan, total=42, names=[])
+
+    assert "没有更多结果" in answer
+    assert "51–42" not in answer
 
 
 def test_chat_agent_adjustment_without_context_asks_first(db, seed_stocks, monkeypatch):

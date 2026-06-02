@@ -83,6 +83,30 @@ def test_plan_agent_turn_accepts_valid_screen_and_compact_context(monkeypatch):
     assert "limit" not in context_message
 
 
+def test_plan_agent_turn_supports_dashscope_compatible_function_call(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(agent_planner.settings, "ai_backend", "dashscope")
+    monkeypatch.setattr(agent_planner.settings, "dashscope_api_key", "dash-key")
+    monkeypatch.setattr(agent_planner.settings, "qwen_model", "qwen-test")
+    monkeypatch.setattr(
+        agent_planner,
+        "_dashscope_openai_client",
+        lambda: _fake_client(
+            "ask_clarification",
+            {"missing_info": ["行业"], "question": "请补充行业或风格偏好。"},
+            captured,
+        ),
+    )
+
+    result = agent_planner.plan_agent_turn("帮我选点好股票")
+
+    assert result is not None
+    assert result.tool == "ask_clarification"
+    assert result.extra["question"] == "请补充行业或风格偏好。"
+    assert captured["model"] == "qwen-test"
+    assert captured["tools"] == agent_planner.TOOLS
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

@@ -115,6 +115,9 @@ const isDesignTurn = (turn) => turn?.agentPlan?.tool === 'strategy_design'
 const isTextOnlyTurn = (turn) => textOnlyTools.includes(turn?.agentPlan?.tool) && !turn?.result
 const turnAgentTitle = (turn) => turn?.agentPlan?.tool_label || 'Agent 结论'
 const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '股票筛选' : '待判断')
+const turnSourceLabel = (turn) => turn?.agentPlan?.ai_used
+  ? 'AI FC'
+  : (turn?.agentPlan?.ai_configured ? '本地规则' : '本地规则')
 const turnConditionIntro = (turn) => {
   if (turn?.agentPlan?.tool === 'strategy_design') return '建议量化条件'
   if (turn?.agentPlan?.tool === 'explain_result') return '上一轮条件'
@@ -131,6 +134,9 @@ function zeroResultHintFor(turn) {
 }
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
 const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
+const sourceLabel = computed(() => agentPlan.value?.ai_used
+  ? 'AI Function Calling'
+  : (agentPlan.value?.ai_configured ? '本地规则 fallback' : '本地规则'))
 const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
 const agentAnswerTitle = computed(() => agentPlan.value?.tool_label || 'Agent 结论')
 const agentToolLabel = computed(() => agentPlan.value?.tool_label || (result.value ? '股票筛选' : '待判断'))
@@ -221,8 +227,13 @@ function openFullResults(turn = latestTurn.value) {
   const turnResult = turn?.result || result.value || null
   const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'score'
   const sortDesc = (turn?.screenMeta?.sort_desc ?? plan?.sort_desc ?? screenMeta.value?.sort_desc) !== false
+  const contextId = [
+    history.activeId && history.activeId !== '__new__' ? history.activeId : null,
+    turn?.id || Date.now().toString(36),
+  ].filter(Boolean).join(':')
   const payload = JSON.stringify({
     version: 1,
+    context_id: contextId,
     session_id: history.activeId && history.activeId !== '__new__' ? history.activeId : null,
     turn_id: turn?.id || null,
     query: turn?.query || lastQuery.value,
@@ -243,11 +254,17 @@ function openFullResults(turn = latestTurn.value) {
         }
       : null,
   })
-  try { sessionStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
-  try { localStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
+  try {
+    sessionStorage.setItem(`${AGENT_RESULTS_KEY}:${contextId}`, payload)
+    sessionStorage.setItem(AGENT_RESULTS_KEY, payload)
+  } catch { /* ignore storage quota */ }
+  try {
+    localStorage.setItem(`${AGENT_RESULTS_KEY}:${contextId}`, payload)
+    localStorage.setItem(AGENT_RESULTS_KEY, payload)
+  } catch { /* ignore storage quota */ }
   router.push({
     path: '/results',
-    query: { source: 'agent', page: '1', size: '20', sort: sortBy, order: sortDesc ? 'desc' : 'asc' },
+    query: { source: 'agent', ctx: contextId, page: '1', size: '20', sort: sortBy, order: sortDesc ? 'desc' : 'asc' },
   })
 }
 
@@ -529,7 +546,7 @@ const stageColor = (s) => ({
               <div v-if="turnAnswerLines(turn).length" class="agent-answer-panel" :class="{ compact: isTextOnlyTurn(turn) }">
                 <div class="agent-answer-title">
                   <span>{{ turnAgentTitle(turn) }}</span>
-                  <em>Agent</em>
+                  <em>{{ turnSourceLabel(turn) }}</em>
                 </div>
                 <div v-for="(line, i) in turnAnswerLines(turn)" :key="i" class="agent-answer-line">
                   {{ line }}
@@ -642,7 +659,8 @@ const stageColor = (s) => ({
         <div v-if="screenMeta" :style="{ marginTop: '14px', padding: '10px 12px', background: A2.bgDeep, borderRadius: '6px', fontSize: '10.5px', color: A2.textSub, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.6 }">
           <div :style="{ color: A2.textDim, fontSize: '9.5px', letterSpacing: '1px', marginBottom: '4px' }">本轮信息</div>
           工具：{{ screenMeta.tool_label || screenMeta.tool || 'Agent' }}<br />
-          状态：{{ result ? `命中 ${result.total} 只` : (isTextOnlyAgent ? '未执行筛选' : '已完成') }}
+          状态：{{ result ? `命中 ${result.total} 只` : (isTextOnlyAgent ? '未执行筛选' : '已完成') }}<br />
+          来源：{{ sourceLabel }}
         </div>
 
         <div class="risk-note">

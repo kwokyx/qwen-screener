@@ -52,11 +52,18 @@ function isExplicitAllStocksQuery(query) {
 
 function readAgentContext(query = route.query) {
   if (query.source !== 'agent') return null
+  const contextId = typeof query.ctx === 'string' && query.ctx ? query.ctx : null
   try {
-    const raw = sessionStorage.getItem(AGENT_RESULTS_KEY) || localStorage.getItem(AGENT_RESULTS_KEY)
+    const scopedKey = contextId ? `${AGENT_RESULTS_KEY}:${contextId}` : null
+    const scopedRaw = scopedKey
+      ? (sessionStorage.getItem(scopedKey) || localStorage.getItem(scopedKey))
+      : null
+    const raw = contextId
+      ? scopedRaw
+      : (sessionStorage.getItem(AGENT_RESULTS_KEY) || localStorage.getItem(AGENT_RESULTS_KEY))
     const context = JSON.parse(raw || 'null')
     return context && Array.isArray(context.conditions)
-      ? context
+      ? { ...context, context_id: context.context_id || contextId }
       : null
   } catch {
     return null
@@ -65,8 +72,15 @@ function readAgentContext(query = route.query) {
 
 function persistAgentContext(context) {
   const payload = JSON.stringify(context)
-  try { sessionStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
-  try { localStorage.setItem(AGENT_RESULTS_KEY, payload) } catch { /* ignore storage quota */ }
+  const contextId = context?.context_id || null
+  try {
+    if (contextId) sessionStorage.setItem(`${AGENT_RESULTS_KEY}:${contextId}`, payload)
+    sessionStorage.setItem(AGENT_RESULTS_KEY, payload)
+  } catch { /* ignore storage quota */ }
+  try {
+    if (contextId) localStorage.setItem(`${AGENT_RESULTS_KEY}:${contextId}`, payload)
+    localStorage.setItem(AGENT_RESULTS_KEY, payload)
+  } catch { /* ignore storage quota */ }
 }
 
 function routeFilterMode(query = route.query, hasAgent = false) {
@@ -513,6 +527,7 @@ function syncRouteState() {
   if (filterMode.value === 'agent') {
     query.source = 'agent'
     if (agentContext.value) {
+      if (agentContext.value.context_id) query.ctx = agentContext.value.context_id
       agentContext.value.sort_by = sortBy.value
       agentContext.value.sort_desc = sortDesc.value
       agentContext.value.page = page.value
@@ -598,9 +613,9 @@ function gotoDetail(code) {
 function backToAgentChat() {
   const sessionId = agentContext.value?.session_id
   const target = sessionId
-    ? `/chat?session=${encodeURIComponent(sessionId)}`
-    : '/chat'
-  window.location.assign(target)
+    ? { path: '/chat', query: { session: sessionId } }
+    : { path: '/chat' }
+  router.push(target).catch(() => {})
 }
 
 function rowProps(row) {
