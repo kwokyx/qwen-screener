@@ -8,6 +8,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
+from datetime import datetime
 
 from app.core.deps import get_current_user
 from app.database import get_db
@@ -22,6 +23,22 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 MAX_KEEP = 50
 
 
+def _apply_payload(item: ChatSession, payload: ChatSessionIn) -> ChatSession:
+    item.context_id = payload.context_id or item.context_id
+    item.query = payload.query
+    item.parsed_conditions = payload.parsed_conditions
+    item.items = payload.items
+    item.total = payload.total
+    item.screen_meta = payload.screen_meta
+    item.agent_plan = payload.agent_plan
+    item.agent_answer = payload.agent_answer
+    item.tool_trace = payload.tool_trace
+    item.tool_calls = payload.tool_calls
+    item.result_snapshot = payload.result_snapshot
+    item.updated_at = datetime.utcnow()
+    return item
+
+
 @router.get("/sessions", response_model=list[ChatSessionOut])
 def list_sessions(
     user: User = Depends(get_current_user),
@@ -32,7 +49,7 @@ def list_sessions(
     return (
         db.query(ChatSession)
         .filter(ChatSession.user_id == user.id)
-        .order_by(desc(ChatSession.created_at))
+        .order_by(desc(ChatSession.updated_at), desc(ChatSession.created_at))
         .limit(limit)
         .all()
     )
@@ -44,23 +61,28 @@ def create_session(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = ChatSession(
-        user_id=user.id,
-        query=payload.query,
-        parsed_conditions=payload.parsed_conditions,
-        items=payload.items,
-        total=payload.total,
-        screen_meta=payload.screen_meta,
-    )
-    db.add(item)
-    db.commit()
-    db.refresh(item)
+    item = None
+    if payload.context_id:
+        item = (
+            db.query(ChatSession)
+            .filter(ChatSession.user_id == user.id, ChatSession.context_id == payload.context_id)
+            .first()
+        )
+    if item is None:
+        item = ChatSession(user_id=user.id, query=payload.query)
+        db.add(_apply_payload(item, payload))
+        db.commit()
+        db.refresh(item)
+    else:
+        _apply_payload(item, payload)
+        db.commit()
+        db.refresh(item)
 
     # 单用户保留最近 MAX_KEEP 条，多出来的从最旧开始删
     overflow = (
         db.query(ChatSession.id)
         .filter(ChatSession.user_id == user.id)
-        .order_by(desc(ChatSession.created_at))
+        .order_by(desc(ChatSession.updated_at), desc(ChatSession.created_at))
         .offset(MAX_KEEP)
         .all()
     )
@@ -70,6 +92,23 @@ def create_session(
         ).delete(synchronize_session=False)
         db.commit()
 
+    return item
+
+
+@router.get("/sessions/context/{context_id}", response_model=ChatSessionOut)
+def get_session_by_context(
+    context_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """按 Agent ctx 恢复当前用户的一轮筛选快照。"""
+    item = (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == user.id, ChatSession.context_id == context_id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(404, "会话结果不存在")
     return item
 
 
@@ -93,11 +132,7 @@ def update_session(
     if not item:
         raise HTTPException(404, "会话不存在")
 
-    item.query = payload.query
-    item.parsed_conditions = payload.parsed_conditions
-    item.items = payload.items
-    item.total = payload.total
-    item.screen_meta = payload.screen_meta
+    _apply_payload(item, payload)
     db.commit()
     db.refresh(item)
     return item

@@ -86,6 +86,7 @@ def data_health(db: Session = Depends(get_db)):
         ).count()
 
     sync_meta = scheduler.get_meta()
+    sync_warnings = _sync_warnings(sync_meta)
 
     # 简单"新鲜度"判断：覆盖全市场的最新日期已达到最近工作日。
     expected_trade_date = _latest_expected_weekday()
@@ -117,7 +118,33 @@ def data_health(db: Session = Depends(get_db)):
             "latest_dividend_yield": round(dividend_yield_cnt / latest_daily_cnt, 4) if latest_daily_cnt else 0,
         },
         "sync_meta": sync_meta,
+        "sync_warnings": sync_warnings,
+        "sync_has_issue": bool(sync_warnings),
     }
+
+
+def _sync_warnings(sync_meta: dict[str, dict]) -> list[dict[str, str]]:
+    labels = {
+        "daily_market": "日线行情",
+        "daily_value": "估值数据",
+        "weekly_fundamentals": "财务指标",
+        "weekly_dividend": "分红数据",
+        "weekly_basic": "股票列表",
+        "weekly_kline_backfill": "K线回填",
+        "db_backup": "数据备份",
+    }
+    warnings: list[dict[str, str]] = []
+    for name, meta in (sync_meta or {}).items():
+        status = meta.get("display_status") or meta.get("status")
+        if status not in {"failed", "stuck"}:
+            continue
+        warnings.append({
+            "job": name,
+            "label": labels.get(name, name),
+            "status": status,
+            "message": meta.get("detail") or ("任务异常" if status == "stuck" else "同步失败"),
+        })
+    return warnings
 
 
 @router.get("/cache")

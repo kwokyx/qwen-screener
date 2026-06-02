@@ -1,6 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.api import health
 from app.main import app
@@ -29,6 +30,32 @@ def test_data_health_treats_friday_close_as_fresh_on_sunday(db, monkeypatch):
     assert result["fresh"] is True
     assert result["expected_trade_date"] == "2026-05-29"
     assert result["latest_trade_date"] == "2026-05-29"
+
+
+def test_data_health_reports_stuck_sync_job(db):
+    health.scheduler._ensure_meta_table()
+    old = datetime.utcnow() - timedelta(minutes=90)
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+        conn.execute(text(
+            "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+            "VALUES (:n, :t, :s, :d, :x)"
+        ), {
+            "n": "daily_market",
+            "t": old,
+            "s": "running",
+            "d": 0,
+            "x": "任务执行中",
+        })
+
+    result = health.data_health(db)
+
+    assert result["sync_has_issue"] is True
+    assert result["sync_meta"]["daily_market"]["display_status"] == "stuck"
+    assert result["sync_meta"]["daily_market"]["stuck"] is True
+    assert result["sync_warnings"][0]["label"] == "日线行情"
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
 
 
 def test_data_health_is_public_but_manual_sync_requires_login(db, monkeypatch):

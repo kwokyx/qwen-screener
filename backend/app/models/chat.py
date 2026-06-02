@@ -7,7 +7,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -18,9 +18,16 @@ class ChatSession(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    context_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     query: Mapped[str] = mapped_column(String(512))
     parsed_conditions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     items: Mapped[list | None] = mapped_column(JSON, nullable=True)  # 前 N 只命中股票快照
     total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     screen_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    agent_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    agent_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_trace: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    result_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

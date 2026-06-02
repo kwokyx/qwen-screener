@@ -21,6 +21,7 @@ import Sparkline from '../components/charts/Sparkline.vue'
 import StarButton from '../components/StarButton.vue'
 import { Preview } from '../shared/theme.js'
 import { screen } from '../api/screener'
+import * as chatApi from '../api/chat'
 import { useKlineCache } from '../composables/useKlineCache.js'
 import {
   formatCoverage,
@@ -81,6 +82,56 @@ function persistAgentContext(context) {
     if (contextId) localStorage.setItem(`${AGENT_RESULTS_KEY}:${contextId}`, payload)
     localStorage.setItem(AGENT_RESULTS_KEY, payload)
   } catch { /* ignore storage quota */ }
+}
+
+function agentContextFromServer(row, contextId) {
+  const meta = row?.screen_meta || {}
+  const plan = row?.agent_plan || meta.agent_plan || null
+  const snapshot = row?.result_snapshot || {
+    total: row?.total || 0,
+    items: row?.items || [],
+    parsed_conditions: row?.parsed_conditions || [],
+  }
+  const conditions = row?.parsed_conditions || snapshot.parsed_conditions || []
+  if (!Array.isArray(conditions)) return null
+  return {
+    version: 1,
+    context_id: row?.context_id || contextId,
+    server_session_id: row?.id || null,
+    session_id: meta.session_client_id || null,
+    turn_id: meta.agent_turn_id || null,
+    query: row?.query || '',
+    conditions,
+    sort_by: meta.sort_by || plan?.sort_by || 'score',
+    sort_desc: meta.sort_desc ?? plan?.sort_desc ?? true,
+    page: 1,
+    size: 20,
+    total: row?.total || snapshot.total || 0,
+    agent_plan: plan,
+    agent_answer: row?.agent_answer || meta.agent_answer || '',
+    tool_trace: row?.tool_trace || meta.tool_trace || [],
+    tool_calls: row?.tool_calls || meta.tool_calls || [],
+    last_result: {
+      total: snapshot.total || row?.total || 0,
+      offset: snapshot.offset || 0,
+      limit: snapshot.limit || 50,
+      trade_date: snapshot.trade_date || null,
+      items: (snapshot.items || row?.items || []).slice(0, 8),
+      parsed_conditions: snapshot.parsed_conditions || conditions,
+    },
+  }
+}
+
+async function restoreAgentContextFromServer(query = route.query) {
+  if (query.source !== 'agent' || !query.ctx) return null
+  try {
+    const row = await chatApi.getSessionByContext(String(query.ctx))
+    const context = agentContextFromServer(row, String(query.ctx))
+    if (context) persistAgentContext(context)
+    return context
+  } catch {
+    return null
+  }
 }
 
 function routeFilterMode(query = route.query, hasAgent = false) {
@@ -461,6 +512,19 @@ const columns = computed(() => [
 
 async function load() {
   const requestId = ++loadRequestId
+  if (route.query.source === 'agent' && route.query.ctx && !agentContext.value) {
+    const restored = await restoreAgentContextFromServer(route.query)
+    if (requestId !== loadRequestId) return
+    if (restored) {
+      agentContext.value = restored
+      filterMode.value = 'agent'
+      const nextSort = typeof route.query.sort === 'string' ? route.query.sort : restored.sort_by
+      sortBy.value = sortableFields.has(nextSort) ? nextSort : 'score'
+      sortDesc.value = route.query.order === 'asc'
+        ? false
+        : (route.query.order === 'desc' ? true : restored.sort_desc !== false)
+    }
+  }
   if (!hasRunnableFilter.value) {
     items.value = []
     total.value = 0

@@ -218,7 +218,7 @@ function restoreFromHistory(id) {
   if (streamRestore(id)) history.activate(id)
 }
 
-function openFullResults(turn = latestTurn.value) {
+async function openFullResults(turn = latestTurn.value) {
   const plan = turn?.agentPlan || agentPlan.value
   if (plan?.tool === 'strategy_select') {
     router.push('/strategy')
@@ -227,13 +227,16 @@ function openFullResults(turn = latestTurn.value) {
   const turnResult = turn?.result || result.value || null
   const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'score'
   const sortDesc = (turn?.screenMeta?.sort_desc ?? plan?.sort_desc ?? screenMeta.value?.sort_desc) !== false
-  const contextId = [
+  const remoteSession = await history.ensureRemote?.(history.activeId)
+  const fallbackContextId = [
     history.activeId && history.activeId !== '__new__' ? history.activeId : null,
     turn?.id || Date.now().toString(36),
   ].filter(Boolean).join(':')
+  const contextId = remoteSession?.contextId || turn?.contextId || fallbackContextId || Date.now().toString(36)
   const payload = JSON.stringify({
     version: 1,
     context_id: contextId,
+    server_session_id: remoteSession?.serverId || null,
     session_id: history.activeId && history.activeId !== '__new__' ? history.activeId : null,
     turn_id: turn?.id || null,
     query: turn?.query || lastQuery.value,

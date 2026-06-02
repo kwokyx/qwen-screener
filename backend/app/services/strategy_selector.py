@@ -1027,6 +1027,11 @@ def build_explain_result_response(
         return build_clarification_response(query, ai_configured=ai_configured)
 
     labels = _condition_labels(conditions)
+    previous_plan = _context_plan(context)
+    sort_by = previous_plan.get("sort_by") or _context_sort_by(context)
+    sort_desc = previous_plan.get("sort_desc")
+    if sort_desc is None:
+        sort_desc = True
     plan = StrategyAgentPlan(
         tool="explain_result",
         tool_label="结果解释",
@@ -1037,12 +1042,20 @@ def build_explain_result_response(
         ai_used=False,
     )
     lines = ["我基于上一轮结果解释，不重新筛选。"]
+    lines.append("排序依据：" + _format_sort_basis(sort_by, bool(sort_desc)))
     if labels:
         lines.append("主要命中条件：" + "；".join(labels[:6]))
     if items:
-        lines.append("前排股票的主要依据：")
+        lines.append("前排股票的关键优势：")
         for item in items[:5]:
             lines.append(f"- {_explain_item(item)}")
+        if conditions:
+            lines.append("条件对应关系：")
+            for item in items[:3]:
+                lines.append(f"- {_condition_mapping_for_item(item, conditions)}")
+        risks = _explain_result_risks(items, conditions)
+        if risks:
+            lines.append("可能风险点：" + "；".join(risks[:4]))
     else:
         lines.append("上一轮没有命中股票，通常是条件过严或本地数据缺字段导致。")
 
@@ -1362,6 +1375,22 @@ def _context_conditions(context: dict[str, Any]) -> list[FilterCondition]:
     return conditions
 
 
+def _context_plan(context: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(context, dict):
+        return {}
+    raw = context.get("last_plan") or context.get("agent_plan") or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _context_sort_by(context: dict[str, Any]) -> str | None:
+    if not isinstance(context, dict):
+        return None
+    for raw in (context.get("last_result"), context):
+        if isinstance(raw, dict) and isinstance(raw.get("sort_by"), str):
+            return raw.get("sort_by")
+    return None
+
+
 def _explain_item(item: dict[str, Any]) -> str:
     name = item.get("name") or item.get("code") or "未知股票"
     code = item.get("code") or "—"
@@ -1379,6 +1408,59 @@ def _explain_item(item: dict[str, Any]) -> str:
         suffix = "%" if label in ("ROE", "股息率") else ("亿" if label == "市值" else "")
         parts.append(f"{label}{_compact_metric(value)}{suffix}")
     return "，".join(parts)
+
+
+def _format_sort_basis(sort_by: str | None, sort_desc: bool) -> str:
+    field_names = _field_labels()
+    if not sort_by:
+        return "沿用上一轮结果顺序，未检测到明确排序字段。"
+    direction = "从高到低" if sort_desc else "从低到高"
+    return f"按{field_names.get(sort_by, sort_by)}{direction}排列；排在前面的股票更符合当前排序目标。"
+
+
+def _condition_mapping_for_item(item: dict[str, Any], conditions: list[FilterCondition]) -> str:
+    name = item.get("name") or item.get("code") or "未知股票"
+    mappings: list[str] = []
+    for cond in conditions[:4]:
+        label = _format_condition(cond)
+        value = item.get(cond.field)
+        if value is None and cond.field == "industry":
+            value = item.get("industry")
+        if value is None:
+            mappings.append(f"{label}：缺字段")
+        else:
+            mappings.append(f"{label}：当前{_compact_metric(value)}")
+    return f"{name}：" + "；".join(mappings)
+
+
+def _explain_result_risks(items: list[dict[str, Any]], conditions: list[FilterCondition]) -> list[str]:
+    risks: list[str] = []
+    missing_fields = {
+        cond.field
+        for cond in conditions
+        if any(item.get(cond.field) is None for item in items[:5])
+    }
+    if missing_fields:
+        labels = [_field_labels().get(field, field) for field in sorted(missing_fields)]
+        risks.append("部分股票缺少" + "、".join(labels) + "字段，排序和解释需要谨慎")
+    if any(_as_float(item.get("pe")) is not None and _as_float(item.get("pe")) < 0 for item in items[:5]):
+        risks.append("存在负市盈率，通常代表最近利润为负，不能按低估值简单理解")
+    if any(_as_float(item.get("roe")) is not None and _as_float(item.get("roe")) < 0 for item in items[:5]):
+        risks.append("存在 ROE 为负的股票，盈利质量风险较高")
+    if any(_as_float(item.get("dividend_yield")) == 0 for item in items[:5]):
+        risks.append("部分股票股息率为 0，不适合高分红目标")
+    if not risks:
+        risks.append("当前解释只基于本地最新数据快照，仍需结合公告、行业景气度和财报质量复核")
+    return risks
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value))
+    except Exception:
+        return None
 
 
 def _compact_metric(value: Any) -> str:
@@ -1423,7 +1505,24 @@ def _tool_fields() -> list[StrategyToolField]:
 
 
 def _format_condition(cond: FilterCondition) -> str:
-    field_names = {
+    field_names = _field_labels()
+    op_names = {
+        "gt": "大于",
+        "gte": "不低于",
+        "lt": "低于",
+        "lte": "不高于",
+        "eq": "等于",
+        "between": "介于",
+        "in": "包含",
+    }
+    field = field_names.get(cond.field, cond.field)
+    op = op_names.get(cond.op, cond.op)
+    value = _format_condition_value(cond.value)
+    return f"{field}{op}{value}"
+
+
+def _field_labels() -> dict[str, str]:
+    return {
         "pe": "市盈率",
         "pb": "市净率",
         "roe": "ROE",
@@ -1438,19 +1537,6 @@ def _format_condition(cond: FilterCondition) -> str:
         "close": "收盘价",
         "turnover": "换手率",
     }
-    op_names = {
-        "gt": "大于",
-        "gte": "不低于",
-        "lt": "低于",
-        "lte": "不高于",
-        "eq": "等于",
-        "between": "介于",
-        "in": "包含",
-    }
-    field = field_names.get(cond.field, cond.field)
-    op = op_names.get(cond.op, cond.op)
-    value = _format_condition_value(cond.value)
-    return f"{field}{op}{value}"
 
 
 def _format_condition_value(value) -> str:

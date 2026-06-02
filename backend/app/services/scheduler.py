@@ -37,6 +37,18 @@ _running_jobs: set[str] = set()
 _running_lock = threading.Lock()
 
 
+_DEFAULT_STUCK_MINUTES = 60
+_JOB_STUCK_MINUTES = {
+    "daily_market": 45,
+    "daily_value": 45,
+    "weekly_fundamentals": 180,
+    "weekly_dividend": 120,
+    "weekly_basic": 30,
+    "weekly_kline_backfill": 180,
+    "db_backup": 15,
+}
+
+
 _META_TABLE_DDL = """
 CREATE TABLE IF NOT EXISTS sync_meta (
     name VARCHAR(64) PRIMARY KEY,
@@ -99,6 +111,7 @@ def _mark_interrupted_jobs():
 
 def get_meta() -> dict[str, dict]:
     _ensure_meta_table()
+    now = datetime.utcnow()
     with engine.begin() as conn:
         rows = conn.execute(text(
             "SELECT name, last_run_at, status, duration_ms, detail FROM sync_meta"
@@ -112,13 +125,51 @@ def get_meta() -> dict[str, dict]:
             ts_str = ts
         else:
             ts_str = ts.isoformat()
+        age_minutes = _age_minutes(now, ts)
+        stale_after = _JOB_STUCK_MINUTES.get(r.name, _DEFAULT_STUCK_MINUTES)
+        stuck = r.status in ("queued", "running") and age_minutes is not None and age_minutes > stale_after
+        detail = r.detail
+        if stuck:
+            detail = f"任务已{status_label(r.status)}超过 {stale_after} 分钟，请重试或检查日志"
         out[r.name] = {
             "last_run_at": ts_str,
             "status": r.status,
             "duration_ms": r.duration_ms,
-            "detail": r.detail,
+            "detail": detail,
+            "age_minutes": age_minutes,
+            "stale_after_minutes": stale_after,
+            "stuck": stuck,
+            "display_status": "stuck" if stuck else r.status,
         }
     return out
+
+
+def _age_minutes(now: datetime, ts) -> int | None:
+    dt = _parse_meta_datetime(ts)
+    if dt is None:
+        return None
+    return max(0, int((now - dt).total_seconds() // 60))
+
+
+def _parse_meta_datetime(ts) -> datetime | None:
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts.replace(tzinfo=None)
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts).replace(tzinfo=None)
+        except ValueError:
+            return None
+    return None
+
+
+def status_label(status: str | None) -> str:
+    if status == "queued":
+        return "排队"
+    if status == "running":
+        return "运行"
+    return "执行"
 
 
 def _run_with_meta(name: str, fn, *, reserved: bool = False):

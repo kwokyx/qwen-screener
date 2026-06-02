@@ -21,9 +21,11 @@ const counts = ref(null)        // {basic, daily, financial, with_industry}
 const coverage = ref(null)
 const latestDate = ref(null)
 const expectedDate = ref(null)
+const warnings = ref([])
 const loading = ref(false)
 const running = ref({})         // {jobName: boolean}
 const canSync = computed(() => Boolean(auth.token))
+const hasIssue = computed(() => warnings.value.length > 0)
 let poller = null
 
 const JOBS = [
@@ -45,6 +47,7 @@ async function refresh() {
     coverage.value = r.coverage
     latestDate.value = r.latest_trade_date
     expectedDate.value = r.expected_trade_date
+    warnings.value = Array.isArray(r.sync_warnings) ? r.sync_warnings : []
   } catch (e) {
     /* 静默 */
   } finally {
@@ -90,7 +93,7 @@ function labelOf(name) {
 
 function statusOf(name) {
   if (running.value[name]) return 'queued'
-  return meta.value[name]?.status || ''
+  return meta.value[name]?.display_status || (meta.value[name]?.stuck ? 'stuck' : meta.value[name]?.status) || ''
 }
 
 function isJobActive(name) {
@@ -100,13 +103,14 @@ function isJobActive(name) {
 function statusLabel(status) {
   if (status === 'queued') return '已排队'
   if (status === 'running') return '执行中'
+  if (status === 'stuck') return '异常'
   if (status === 'success') return '成功'
   if (status === 'failed') return '失败'
   return '未执行'
 }
 
 function statusStyle(status) {
-  if (status === 'failed') return { background: A2.upSoft, color: A2.up }
+  if (status === 'failed' || status === 'stuck') return { background: A2.upSoft, color: A2.up }
   if (status === 'queued' || status === 'running') return { background: A2.amberSoft, color: A2.amber }
   if (status === 'success') return { background: A2.downSoft, color: A2.down }
   return { background: A2.bgDeep, color: A2.textDim }
@@ -141,6 +145,7 @@ const summary = computed(() => {
 })
 
 const summaryColor = computed(() =>
+  hasIssue.value ? A2.up :
   summary.value.tone === 'fresh' ? A2.down :
   summary.value.tone === 'meh' ? A2.amber :
   summary.value.tone === 'stale' ? A2.up :
@@ -207,6 +212,13 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <div v-if="hasIssue" :style="{ padding: '10px 14px', borderBottom: `1px solid ${A2.borderHair}`, background: A2.upSoft }">
+          <div :style="{ fontSize: '11px', fontWeight: 700, color: A2.up, marginBottom: '4px' }">同步异常</div>
+          <div v-for="w in warnings.slice(0, 3)" :key="w.job" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55 }">
+            {{ w.label }}：{{ w.message || '任务异常，请重试' }}
+          </div>
+        </div>
+
         <div v-if="!canSync" :style="{ padding: '12px 14px', borderTop: `1px solid ${A2.borderHair}` }">
           <div :style="{ fontSize: '11.5px', color: A2.textSub, lineHeight: 1.6, marginBottom: '10px' }">
             数据状态可公开查看。手动同步需要登录后执行，避免误触发耗时任务。
@@ -228,7 +240,7 @@ onBeforeUnmount(() => {
               <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">
                 上次：{{ fmtRel(meta[j.name]?.last_run_at) }}<span v-if="meta[j.name]?.duration_ms"> · {{ (meta[j.name].duration_ms / 1000).toFixed(0) }}s</span>
               </div>
-              <div v-if="meta[j.name]?.status === 'failed' && meta[j.name]?.detail" :style="{ fontSize: '10px', color: A2.up, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
+              <div v-if="['failed', 'stuck'].includes(statusOf(j.name)) && meta[j.name]?.detail" :style="{ fontSize: '10px', color: A2.up, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
                 {{ meta[j.name].detail }}
               </div>
             </div>

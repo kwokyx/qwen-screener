@@ -6,8 +6,13 @@ export async function listSessions(limit = 50) {
 }
 
 export async function createSession(payload) {
-  // payload = { query, parsed_conditions, items, total, screen_meta }
+  // payload = { query, context_id, parsed_conditions, items, total, screen_meta, agent_* }
   const { data } = await client.post('/chat/sessions', payload)
+  return data
+}
+
+export async function getSessionByContext(contextId) {
+  const { data } = await client.get(`/chat/sessions/context/${encodeURIComponent(contextId)}`)
   return data
 }
 

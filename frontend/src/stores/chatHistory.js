@@ -44,6 +44,7 @@ function normalizeTurn(raw = {}) {
 
   return {
     id: raw.id || uid(),
+    contextId: raw.contextId || raw.context_id || raw.screenMeta?.agent_context_id || raw.screen_meta?.agent_context_id || null,
     ts: raw.ts || Math.floor(Date.now() / 1000),
     query: raw.query || '',
     phase: raw.phase || 'done',
@@ -126,6 +127,7 @@ function normalizeSession(raw = {}) {
   const session = {
     id: raw.id || uid(),
     serverId: raw.serverId ?? raw.server_id ?? null,
+    contextId: raw.contextId || raw.context_id || meta?.agent_context_id || null,
     ts: raw.ts || firstTurn.ts || updatedAt,
     updatedAt,
     title: safeTitle(raw.title || meta?.session_title || firstTurn.query || raw.query),
@@ -152,19 +154,36 @@ function fromServer(row) {
   return normalizeSession({
     id: meta?.session_client_id || `server-${row.id}`,
     serverId: row.id,
+    contextId: row.context_id || meta?.agent_context_id || null,
     ts: row.created_at ? Math.floor(new Date(row.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000),
+    updatedAt: row.updated_at ? Math.floor(new Date(row.updated_at).getTime() / 1000) : undefined,
     query: row.query || '',
     parsed_conditions: row.parsed_conditions || [],
     items: row.items || [],
     total: row.total || 0,
+    agent_plan: row.agent_plan || null,
+    agent_answer: row.agent_answer || '',
+    tool_trace: row.tool_trace || [],
+    tool_calls: row.tool_calls || [],
+    result: row.result_snapshot || null,
     screen_meta: meta,
   })
 }
 
 function toPayload(session) {
   const turn = latestTurn(session)
+  const contextId = turn?.contextId || (turn?.id ? `${session.id}:${turn.id}` : session.contextId || null)
+  const resultSnapshot = turn?.result
+    ? {
+        ...turn.result,
+        items: (turn.result.items || []).slice(0, MAX_RESULT_PRESERVE),
+        parsed_conditions: turn.result.parsed_conditions || turn.parsedConditions || [],
+      }
+    : null
   const meta = {
     ...(turn?.screenMeta || {}),
+    agent_context_id: contextId,
+    agent_turn_id: turn?.id || null,
     agent_answer: turn?.agentAnswer || '',
     agent_plan: turn?.agentPlan || null,
     tool_trace: turn?.toolTrace || [],
@@ -176,11 +195,17 @@ function toPayload(session) {
     thread: session.turns || [],
   }
   return {
+    context_id: contextId,
     query: session.query || turn?.query || session.title,
     parsed_conditions: turn?.parsedConditions || [],
     items: (turn?.result?.items || []).slice(0, MAX_RESULT_PRESERVE),
     total: turn?.result?.total || 0,
     screen_meta: meta,
+    agent_plan: turn?.agentPlan || null,
+    agent_answer: turn?.agentAnswer || '',
+    tool_trace: turn?.toolTrace || [],
+    tool_calls: turn?.toolCalls || [],
+    result_snapshot: resultSnapshot,
   }
 }
 
@@ -188,7 +213,7 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
   const items = ref(loadFromLS())
   const storedActiveId = localStorage.getItem(ACTIVE_KEY)
   const activeId = ref(storedActiveId || items.value[0]?.id || null)
-  const pendingCreates = new Set()
+  const pendingCreates = new Map()
 
   watch(items, (value) => {
     try { localStorage.setItem(LS_KEY, JSON.stringify(value)) } catch { /* ignore storage quota */ }
@@ -223,23 +248,34 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
   }
 
   function persistRemote(session) {
-    if (!isLoggedIn()) return
+    if (!isLoggedIn()) return Promise.resolve(session)
     const payload = toPayload(session)
     if (session.serverId != null) {
-      chatApi.updateSession(session.serverId, payload).catch(() => {})
-      return
+      return chatApi.updateSession(session.serverId, payload)
+        .then((row) => {
+          session.contextId = row.context_id || payload.context_id || session.contextId || null
+          return session
+        })
+        .catch(() => session)
     }
-    if (pendingCreates.has(session.id)) return
-    pendingCreates.add(session.id)
-    chatApi.createSession(payload)
+    if (pendingCreates.has(session.id)) return pendingCreates.get(session.id)
+    const task = chatApi.createSession(payload)
       .then((row) => {
         const current = items.value.find((item) => item.id === session.id)
-        if (!current) return
+        if (!current) return session
         current.serverId = row.id
-        return chatApi.updateSession(row.id, toPayload(current)).catch(() => {})
+        current.contextId = row.context_id || payload.context_id || current.contextId || null
+        return chatApi.updateSession(row.id, toPayload(current))
+          .then((updated) => {
+            current.contextId = updated.context_id || current.contextId
+            return current
+          })
+          .catch(() => current)
       })
-      .catch(() => {})
+      .catch(() => session)
       .finally(() => pendingCreates.delete(session.id))
+    pendingCreates.set(session.id, task)
+    return task
   }
 
   function saveThread(turns) {
@@ -250,6 +286,7 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
     const session = upsertLocal({
       ...(existing || {}),
       id: existing?.id || uid(),
+      contextId: existing?.contextId || null,
       serverId: existing?.serverId ?? null,
       ts: existing?.ts || normalizedTurns[0].ts || Math.floor(Date.now() / 1000),
       updatedAt: Math.floor(Date.now() / 1000),
@@ -259,6 +296,13 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
     })
     persistRemote(session)
     return session
+  }
+
+  async function ensureRemote(id = activeId.value) {
+    const session = get(id)
+    if (!session) return null
+    if (!isLoggedIn()) return session
+    return persistRemote(session)
   }
 
   function add(snapshot) {
@@ -351,5 +395,6 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
     activate,
     newSession,
     syncFromServer,
+    ensureRemote,
   }
 })

@@ -20,6 +20,16 @@ _MIGRATIONS: list[str] = [
     "UPDATE stock_daily SET amount = amount * 10000 "
     "WHERE amount IS NOT NULL AND close > 0 AND volume > 0 "
     "AND amount / (close * volume) BETWEEN 0.000001 AND 0.001",
+    # Agent 对话结果后端持久化：Results 页可通过 ctx 恢复当前用户的筛选快照。
+    "ALTER TABLE chat_sessions ADD COLUMN context_id VARCHAR(128)",
+    "ALTER TABLE chat_sessions ADD COLUMN agent_plan JSON",
+    "ALTER TABLE chat_sessions ADD COLUMN agent_answer TEXT",
+    "ALTER TABLE chat_sessions ADD COLUMN tool_trace JSON",
+    "ALTER TABLE chat_sessions ADD COLUMN tool_calls JSON",
+    "ALTER TABLE chat_sessions ADD COLUMN result_snapshot JSON",
+    "ALTER TABLE chat_sessions ADD COLUMN updated_at DATETIME",
+    "CREATE INDEX IF NOT EXISTS ix_chat_sessions_context_id ON chat_sessions(context_id)",
+    "CREATE INDEX IF NOT EXISTS ix_chat_sessions_updated_at ON chat_sessions(updated_at)",
 ]
 
 
