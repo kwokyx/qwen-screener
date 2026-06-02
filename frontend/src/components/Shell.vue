@@ -537,6 +537,26 @@ function handleUserMenu(key) {
   padding: 20px 30px 34px;
 }
 
+@media (max-width: 1200px) {
+  .top-nav-inner {
+    padding: 0 16px;
+    gap: 12px;
+  }
+
+  .nav-menu-wrap :deep(.n-menu-item-content) {
+    padding: 0 8px;
+    font-size: 13px;
+  }
+
+  .nav-search {
+    width: 180px;
+  }
+
+  .user-name {
+    max-width: 58px;
+  }
+}
+
 @media (max-width: 768px) {
   .nav-menu-wrap {
     display: none;
@@ -547,13 +567,13 @@ function handleUserMenu(key) {
     gap: 8px;
   }
 
-  .brand-sub,
-  .nav-actions [data-data-freshness] {
+  .brand-text,
+  .brand-sub {
     display: none;
   }
 
   .nav-search {
-    width: 150px;
+    width: 132px;
   }
 
   .content-container {

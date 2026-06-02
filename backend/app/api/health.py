@@ -151,10 +151,12 @@ def trigger_sync(
                 "meta": meta,
             }
         rv = scheduler.run_async(job_name)
+        queued = rv.get("queued", False) or rv.get("status") == "queued"
+        running = rv.get("running", False) or rv.get("status") == "running"
         return {
             "job": job_name,
-            "queued": rv.get("queued", False),
-            "running": rv.get("running", False),
+            "queued": queued,
+            "running": running,
             "meta": rv.get("meta") or scheduler.get_meta().get(job_name, {}),
         }
     except ValueError as e:
