@@ -607,7 +607,7 @@ const stageColor = (s) => ({
         </div>
 
         <div v-if="phase === 'idle'" :style="{ fontSize: '11px', color: A2.textMuted, lineHeight: 1.6 }">
-          发送一条需求后，这里会显示本轮选择的工具和状态。
+          等待输入
         </div>
 
         <template v-else>
@@ -656,8 +656,8 @@ const stageColor = (s) => ({
 
 <style scoped>
 .chat-workbench {
-  height: calc(100vh - 114px);
-  min-height: 620px;
+  height: clamp(600px, calc(100vh - 114px), 760px);
+  min-height: 0;
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 320px;
   overflow: hidden;
@@ -676,7 +676,7 @@ const stageColor = (s) => ({
 }
 
 .chat-scroll:not(.has-thread) .starter-panel {
-  margin: 24px auto 0;
+  margin: 0 auto 18px;
 }
 
 .starter-grid {
@@ -708,6 +708,7 @@ const stageColor = (s) => ({
 .chat-scroll:not(.has-thread) {
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
 }
 
 .conversation-list {

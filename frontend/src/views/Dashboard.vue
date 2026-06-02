@@ -1,5 +1,5 @@
 <script setup>
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
@@ -11,7 +11,6 @@ import {
   NGrid,
   NSkeleton,
   NSpace,
-  NStatistic,
   NTabPane,
   NTag,
   NTabs,
@@ -24,7 +23,6 @@ import StarButton from '../components/StarButton.vue'
 import { Preview } from '../shared/theme.js'
 import { friendlyError } from '../shared/errors.js'
 import * as marketApi from '../api/market'
-import { useKlineCache } from '../composables/useKlineCache.js'
 
 const router = useRouter()
 
@@ -43,8 +41,6 @@ const errorMsg = ref('')
 
 const moversShown = computed(() => (movers.value ? movers.value[moverTab.value] || [] : []))
 const idxSpark = computed(() => indices.value.map((idx) => idx.spark || []))
-
-const { load: loadMoverKlines, get: moverSpark } = useKlineCache(30)
 
 const sectorsUp = computed(() => [...sectors.value].filter((s) => s.change_pct >= 0).sort((a, b) => b.change_pct - a.change_pct))
 const sectorsDown = computed(() => [...sectors.value].filter((s) => s.change_pct < 0).sort((a, b) => a.change_pct - b.change_pct))
@@ -71,7 +67,6 @@ async function loadAll() {
     marketApi.sectors(20).then((d) => { sectors.value = d }).finally(() => { loadingSectors.value = false }),
     marketApi.movers(10).then((d) => {
       movers.value = d
-      loadMoverKlines((d?.[moverTab.value] || []).map((s) => s.code))
     }).finally(() => { loadingMovers.value = false }),
     marketApi.ticker().then((d) => { tickerInfo.value = d }).catch(() => {}),
   ]).then((rs) => {
@@ -105,6 +100,10 @@ function mono(text, extra = {}) {
 
 function formatAmount(v) {
   return v != null ? `${Number(v).toFixed(1)}亿` : '—'
+}
+
+function formatInt(v) {
+  return String(Math.round(Number(v || 0)))
 }
 
 function formatMarketCap(v) {
@@ -174,18 +173,6 @@ const moverColumns = computed(() => [
     width: 110,
     render: (s) => mono(formatMarketCap(s.market_cap), { color: Preview.textMain }),
   },
-  {
-    title: '所属',
-    key: 'industry',
-    minWidth: 112,
-    render: (s) => h(NTag, { size: 'small', bordered: false }, { default: () => s.industry || '—' }),
-  },
-  {
-    title: '30 日',
-    key: 'trend',
-    width: 100,
-    render: (s) => h(Sparkline, { data: moverSpark(s.code), width: 78, height: 22 }),
-  },
 ])
 
 function moverRowProps(row) {
@@ -248,7 +235,6 @@ const sectorStrengthColumns = [
 ]
 
 onMounted(loadAll)
-watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
 </script>
 
 <template>
@@ -293,11 +279,18 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
             <NSkeleton text :width="120" />
           </NSpace>
           <div v-else class="market-stats">
-            <NStatistic label="上涨" :value="marketStats.advancers" />
-            <NStatistic label="下跌" :value="marketStats.decliners" />
-            <NStatistic label="总成交" :value="marketStats.amount">
-              <template #suffix>亿</template>
-            </NStatistic>
+            <div class="market-metric">
+              <span>上涨</span>
+              <strong>{{ formatInt(marketStats.advancers) }}</strong>
+            </div>
+            <div class="market-metric">
+              <span>下跌</span>
+              <strong>{{ formatInt(marketStats.decliners) }}</strong>
+            </div>
+            <div class="market-metric">
+              <span>总成交</span>
+              <strong>{{ formatInt(marketStats.amount) }}<small>亿</small></strong>
+            </div>
           </div>
         </NCard>
       </div>
@@ -509,14 +502,40 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
 
 .market-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
 }
 
-.market-stats :deep(.n-statistic .n-statistic-value) {
+.market-metric {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.market-metric:last-child {
+  grid-column: 1 / -1;
+}
+
+.market-metric span {
+  color: #71717A;
+  font-size: 12px;
+}
+
+.market-metric strong {
+  min-width: 0;
+  color: #3F3F46;
+  white-space: nowrap;
   font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 17px;
+  font-size: 21px;
   font-weight: 800;
+  line-height: 1.05;
+}
+
+.market-metric small {
+  margin-left: 2px;
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .dashboard-alert {
@@ -577,8 +596,10 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
   cursor: pointer;
 }
 
-.sector-link {
+:deep(.sector-link) {
   width: 100%;
+  display: block;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: transparent;
@@ -586,10 +607,12 @@ watch(moverTab, () => loadMoverKlines(moversShown.value.map((s) => s.code)))
   font: inherit;
   font-weight: 700;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.sector-link:hover {
+:deep(.sector-link:hover) {
   text-decoration: underline;
 }
 

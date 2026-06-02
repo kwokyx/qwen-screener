@@ -112,6 +112,10 @@ function pickStock(stock) {
 async function handleSearch() {
   const q = searchQuery.value.trim()
   if (!q) return
+  if (directCode.value) {
+    openDirectCode()
+    return
+  }
   if (searchItems.value.length) {
     pickStock(searchItems.value[Math.max(0, searchCursor.value)] || searchItems.value[0])
     return
@@ -119,16 +123,15 @@ async function handleSearch() {
   const rows = await runSearch(q)
   if (rows.length) {
     pickStock(rows[0])
-    return
-  }
-  if (directCode.value) {
-    searchQuery.value = ''
-    searchOpen.value = false
-    router.push(`/detail/${directCode.value}`)
   }
 }
 
 function onSearchKeydown(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    void handleSearch()
+    return
+  }
   if (!showSearchPanel.value) return
   if (!searchItems.value.length) {
     if (e.key === 'Escape') searchOpen.value = false
@@ -216,7 +219,6 @@ function handleUserMenu(key) {
                 size="small"
                 clearable
                 @focus="goStockSearch"
-                @keyup.enter="handleSearch"
                 @keydown="onSearchKeydown"
               />
               <div v-if="showSearchPanel" class="nav-search-panel">

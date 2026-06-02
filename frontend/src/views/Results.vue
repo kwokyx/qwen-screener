@@ -796,7 +796,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
   padding-top: 2px;
   flex-wrap: wrap;
 }
@@ -835,7 +835,7 @@ watch(
 
 .empty-results-card {
   display: grid;
-  min-height: 360px;
+  min-height: 260px;
   place-items: center;
   background: #FFFFFF;
   border-radius: 0;

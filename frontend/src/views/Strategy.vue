@@ -578,7 +578,14 @@ onMounted(bootstrap)
           />
           <n-empty v-else-if="!tableLoading" :description="isAgentDesign ? '策略设计请求未执行筛选' : '当前条件没有命中股票'" />
           <div v-else class="table-loading">
-            <n-skeleton text :repeat="8" />
+            <div class="loading-title">正在加载选股结果</div>
+            <div v-for="n in 6" :key="n" class="strategy-skeleton-row">
+              <span class="sk-cell name"></span>
+              <span class="sk-cell industry"></span>
+              <span class="sk-cell num"></span>
+              <span class="sk-cell num"></span>
+              <span class="sk-cell reason"></span>
+            </div>
           </div>
         </n-card>
 
@@ -971,7 +978,51 @@ h1 {
 
 .table-loading,
 .loading-list {
-  padding: 12px;
+  padding: 10px 12px 14px;
+}
+
+.loading-title {
+  margin-bottom: 8px;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.strategy-skeleton-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) 120px 90px 90px minmax(220px, 2fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 34px;
+  border-top: 1px solid #F1F1F1;
+}
+
+.strategy-skeleton-row:first-of-type {
+  border-top: 0;
+}
+
+.sk-cell {
+  display: block;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #EFEFEF 0%, #E0E0E0 48%, #EFEFEF 100%);
+  background-size: 180% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+
+.sk-cell.name { width: 70%; }
+.sk-cell.industry { width: 62%; }
+.sk-cell.num { width: 58px; justify-self: end; }
+.sk-cell.reason { width: 86%; }
+
+@keyframes sk-shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -80% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-cell {
+    animation: none;
+  }
 }
 
 @media (max-width: 960px) {
