@@ -34,6 +34,12 @@ import { useAiStatusStore } from '../stores/aiStatus'
 const aiStatus = useAiStatusStore()
 import { marked } from 'marked'
 import { friendlyError } from '../shared/errors.js'
+import {
+  detailQualityFields,
+  detailQualityRecord,
+  formatCoverage,
+  qualityForRecord,
+} from '../shared/dataQuality.js'
 
 marked.setOptions({ breaks: true, gfm: true })
 import StarButton from '../components/StarButton.vue'
@@ -91,13 +97,9 @@ const intradayKlineRanges = [
   { label: '最近10个交易日', short: '10日', days: 10 },
 ]
 const klineFrequencies = [
-  { label: '5分', value: '5m', frequency: '5', intraday: true },
-  { label: '15分', value: '15m', frequency: '15', intraday: true },
-  { label: '30分', value: '30m', frequency: '30', intraday: true },
-  { label: '60分', value: '60m', frequency: '60', intraday: true },
-  { label: '日K', value: 'day', frequency: 'd', ranges: dailyKlineRanges, defaultRange: 2 },
-  { label: '周K', value: 'week', frequency: 'w', ranges: weeklyKlineRanges, defaultRange: 1 },
-  { label: '月K', value: 'month', frequency: 'm', ranges: monthlyKlineRanges, defaultRange: 2 },
+  { label: '日线', value: 'day', frequency: 'd', ranges: dailyKlineRanges, defaultRange: 2 },
+  { label: '周线', value: 'week', frequency: 'w', ranges: weeklyKlineRanges, defaultRange: 1 },
+  { label: '月线', value: 'month', frequency: 'm', ranges: monthlyKlineRanges, defaultRange: 2 },
 ]
 const klineRange = ref(2)
 const klineFrequency = ref('day')
@@ -186,7 +188,7 @@ function mapIntradayKline(real) {
 }
 
 const isIntradayFrequency = computed(() => klineFrequencies.find((x) => x.value === klineFrequency.value)?.intraday === true)
-const activeKlineFrequency = computed(() => klineFrequencies.find((x) => x.value === klineFrequency.value) || klineFrequencies[4])
+const activeKlineFrequency = computed(() => klineFrequencies.find((x) => x.value === klineFrequency.value) || klineFrequencies[0])
 const activeKlineRanges = computed(() => {
   if (isIntradayFrequency.value) return intradayKlineRanges
   return activeKlineFrequency.value.ranges || dailyKlineRanges
@@ -211,14 +213,14 @@ const klineVisibleBars = computed(() => {
 })
 const klineCaption = computed(() => {
   const range = activeKlineRanges.value[klineRange.value]?.label || ''
-  const freq = activeKlineFrequency.value?.label || '日K'
+  const freq = activeKlineFrequency.value?.label || '日线'
   return `${freq} · ${range} · ${isIntradayFrequency.value ? '不复权' : '前复权'}`
 })
 const klineDataType = computed(() => {
   if (isIntradayFrequency.value) return '分钟K · baostock 分钟线 · 不用日线替代'
-  if (klineFrequency.value === 'week') return '周K · 每根代表一个交易周'
-  if (klineFrequency.value === 'month') return '月K · 每根代表一个交易月'
-  return '日K · 每根代表一个交易日'
+  if (klineFrequency.value === 'week') return '周线 · 每根蜡烛代表一个交易周'
+  if (klineFrequency.value === 'month') return '月线 · 每根蜡烛代表一个交易月'
+  return '日线 · 每根蜡烛代表一个交易日，不是 24h 分时'
 })
 const klineEmptyText = computed(() => {
   if (klineLoading.value) return ''
@@ -458,6 +460,16 @@ onBeforeUnmount(() => {
 watch(code, load)
 
 const displayQuote = computed(() => quote.value || detail.value?.latest || null)
+const detailQuality = computed(() => qualityForRecord(
+  detailQualityRecord(detail.value, quote.value),
+  detailQualityFields,
+))
+const detailQualityPercent = computed(() => Math.round(detailQuality.value.ratio * 100))
+const detailQualityStatus = computed(() => detailQuality.value.tagType)
+const detailMissingText = computed(() => {
+  const labels = detailQuality.value.missingLabels
+  return labels.length ? labels.join('、') : '关键字段完整'
+})
 const change = computed(() => {
   const q = displayQuote.value
   if (!q) return null
@@ -954,6 +966,48 @@ function peerRowProps(row) {
             </NButton>
           </NCard>
 
+          <NCard title="数据状态" size="small" class="section-card">
+            <div class="quality-head">
+              <span>关键字段覆盖</span>
+              <strong>{{ formatCoverage(detailQuality.ratio) }}</strong>
+            </div>
+            <NProgress
+              type="line"
+              :percentage="detailQualityPercent"
+              :height="6"
+              :show-indicator="false"
+              :status="detailQualityStatus"
+            />
+            <div class="quality-meta">
+              <span>最近交易日</span>
+              <strong>{{ detail.latest?.trade_date || '—' }}</strong>
+            </div>
+            <div class="quality-fields">
+              <NTag
+                v-if="!detailQuality.missing.length"
+                size="small"
+                type="success"
+                :bordered="false"
+              >
+                关键字段完整
+              </NTag>
+              <template v-else>
+                <NTag
+                  v-for="field in detailQuality.missing"
+                  :key="field.key"
+                  size="small"
+                  type="warning"
+                  :bordered="false"
+                >
+                  缺 {{ field.label }}
+                </NTag>
+              </template>
+            </div>
+            <p class="quality-note">
+              {{ detailMissingText }}；缺失项会影响相关条件筛选和排序。
+            </p>
+          </NCard>
+
           <NAlert type="warning" :bordered="false" class="risk-note">
             <template #icon><Icon name="shield" :size="11" /></template>
             仅供研究参考，不构成投资建议
@@ -1279,6 +1333,51 @@ function peerRowProps(row) {
 .score-bar-head strong {
   font-family: 'IBM Plex Mono', monospace;
   color: #1F2937;
+}
+
+/* ---- Data Quality ---- */
+.quality-head,
+.quality-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quality-head {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #52525B;
+}
+
+.quality-head strong,
+.quality-meta strong {
+  color: #111111;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.quality-meta {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #71717A;
+}
+
+.quality-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.quality-fields :deep(.n-tag) {
+  border-radius: 4px;
+}
+
+.quality-note {
+  margin: 8px 0 0;
+  color: #71717A;
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 /* ---- AI ---- */

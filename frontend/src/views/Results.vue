@@ -22,6 +22,12 @@ import StarButton from '../components/StarButton.vue'
 import { Preview } from '../shared/theme.js'
 import { screen } from '../api/screener'
 import { useKlineCache } from '../composables/useKlineCache.js'
+import {
+  formatCoverage,
+  qualityForRecord,
+  screeningQualityFields,
+  summarizeQuality,
+} from '../shared/dataQuality.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -190,6 +196,33 @@ const hasRunnableFilter = computed(() => {
 const { load: loadResultKlines, get: resultSpark } = useKlineCache(30)
 watch(items, () => loadResultKlines(items.value.map((s) => s.code)))
 
+const pageCoverage = computed(() => summarizeQuality(items.value, screeningQualityFields))
+const weakCoverageText = computed(() => {
+  const weak = pageCoverage.value.weakFields
+    .filter((field) => field.total > 0)
+    .slice(0, 3)
+    .map((field) => `${field.label} ${formatCoverage(field.ratio)}`)
+  return weak.length ? `缺失集中：${weak.join('、')}` : '当前页关键字段完整'
+})
+
+function rowQuality(row) {
+  return qualityForRecord(row, screeningQualityFields)
+}
+
+function rowQualityLabel(row) {
+  const quality = rowQuality(row)
+  if (!quality.missing.length) return '完整'
+  const shown = quality.missingLabels.slice(0, 2).join('、')
+  const more = quality.missingLabels.length > 2 ? `等${quality.missingLabels.length}项` : ''
+  return `缺 ${shown}${more}`
+}
+
+function rowQualityTitle(row) {
+  const quality = rowQuality(row)
+  if (!quality.missing.length) return 'PE、PB、ROE、市值、股息率字段完整'
+  return `缺失字段：${quality.missingLabels.join('、')}；相关筛选或排序可能受影响`
+}
+
 const stats = computed(() => {
   const arr = items.value
   if (!arr.length) return []
@@ -200,6 +233,7 @@ const stats = computed(() => {
   const fmt = (v, d = 1) => v == null ? '—' : v.toFixed(d)
   return [
     { l: '命中数量', v: total.value, sub: `已展示 ${arr.length} 只`, unit: '只' },
+    { l: '字段覆盖', v: formatCoverage(pageCoverage.value.ratio), sub: weakCoverageText.value, unit: '' },
     { l: '平均 PE', v: fmt(avg('pe')), sub: '当前页均值', unit: 'x' },
     { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '当前页均值', unit: '亿' },
     { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '当前页均值', unit: '%' },
@@ -357,6 +391,21 @@ const columns = computed(() => [
       s.market_cap != null ? Math.round(s.market_cap).toLocaleString() : '—',
       h('span', { style: { color: Preview.textMuted, fontSize: '9px' } }, '亿'),
     ]),
+  },
+  {
+    title: '数据状态',
+    key: 'quality',
+    width: 116,
+    render: (s) => {
+      const quality = rowQuality(s)
+      return h(NTag, {
+        size: 'small',
+        type: quality.tagType,
+        bordered: false,
+        class: 'quality-tag',
+        title: rowQualityTitle(s),
+      }, { default: () => rowQualityLabel(s) })
+    },
   },
   {
     title: '换手率',
@@ -624,6 +673,7 @@ watch(
         </div>
         <div class="result-meta">
           <span>数据日期 {{ tradeDate || '—' }}</span>
+          <span>字段覆盖 {{ formatCoverage(pageCoverage.ratio) }}</span>
           <span>排序 {{ activeSortLabel }}</span>
         </div>
         <div class="sort-controls">
@@ -650,7 +700,7 @@ watch(
       </NAlert>
 
       <!-- Stats -->
-      <NGrid v-if="hasRunnableFilter" cols="2 m:3 l:5" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
+      <NGrid v-if="hasRunnableFilter" cols="2 m:3 l:6" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
         <NGi v-for="s in stats" :key="s.l">
           <NCard size="small" :bordered="false" class="results-card stat-card">
             <NStatistic :label="s.l">
@@ -682,7 +732,7 @@ watch(
           :pagination="false"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1240"
+          :scroll-x="1360"
           size="small"
           remote
           @update:sorter="handleSorterChange"
@@ -869,6 +919,12 @@ watch(
   background: #F5F5F5;
   color: #52525B;
   border-radius: 4px;
+}
+
+.quality-tag {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stat-card :deep(.n-card__content) {

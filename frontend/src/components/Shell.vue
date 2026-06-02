@@ -9,9 +9,9 @@ import {
   NLayoutHeader,
   NMenu,
   NSpace,
-  NTag,
 } from 'naive-ui'
 import Icon from './Icon.vue'
+import DataFreshness from './DataFreshness.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -66,9 +66,7 @@ function handleSearch() {
 
         <div class="nav-actions">
           <n-space align="center" size="small">
-            <n-tag size="small" :bordered="false" class="data-tag">
-              日线数据
-            </n-tag>
+            <DataFreshness />
             <n-input
               class="nav-search"
               v-model:value="searchQuery"
@@ -208,12 +206,6 @@ function handleSearch() {
   width: 260px;
 }
 
-.data-tag {
-  color: #111111;
-  background: #F5F5F5;
-  font-weight: 600;
-}
-
 .nav-actions :deep(.n-input) {
   background: #F5F5F5;
   border-color: transparent;
@@ -257,7 +249,7 @@ function handleSearch() {
   }
 
   .brand-sub,
-  .data-tag {
+  .nav-actions [data-data-freshness] {
     display: none;
   }
 
