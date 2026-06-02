@@ -33,6 +33,8 @@ logger.info("[SCHED] data_provider={}", settings.data_provider)
 
 
 _scheduler: BackgroundScheduler | None = None
+_running_jobs: set[str] = set()
+_running_lock = threading.Lock()
 
 
 _META_TABLE_DDL = """
@@ -68,6 +70,33 @@ def _record(name: str, status: str, duration_ms: int, detail: str = ""):
             ), params)
 
 
+def _reserve_job(name: str) -> bool:
+    """Reserve a job name so manual triggers cannot stack duplicates."""
+    with _running_lock:
+        if name in _running_jobs:
+            return False
+        _running_jobs.add(name)
+        return True
+
+
+def _release_job(name: str):
+    with _running_lock:
+        _running_jobs.discard(name)
+
+
+def _mark_interrupted_jobs():
+    """Mark stale queued/running rows from a previous backend process."""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE sync_meta "
+            "SET last_run_at = :t, status = 'failed', duration_ms = 0, detail = :d "
+            "WHERE status IN ('queued', 'running')"
+        ), {
+            "t": datetime.utcnow(),
+            "d": "服务重启，上一轮后台任务未完成",
+        })
+
+
 def get_meta() -> dict[str, dict]:
     _ensure_meta_table()
     with engine.begin() as conn:
@@ -92,11 +121,17 @@ def get_meta() -> dict[str, dict]:
     return out
 
 
-def _run_with_meta(name: str, fn):
+def _run_with_meta(name: str, fn, *, reserved: bool = False):
+    _ensure_meta_table()
+    if not reserved and not _reserve_job(name):
+        logger.info("[SCHED] {} 已在执行中，跳过重复触发", name)
+        return get_meta().get(name, {"status": "running", "detail": "任务已在执行中"})
+
     t0 = datetime.utcnow()
     detail = ""
     status = "success"
     try:
+        _record(name, "running", 0, "任务执行中")
         rv = fn()
         if rv is not None:
             detail = f"affected={rv}"
@@ -110,6 +145,8 @@ def _run_with_meta(name: str, fn):
             _record(name, status, dur, detail)
         except Exception:
             logger.exception("[SCHED] 写入 sync_meta 失败")
+        _release_job(name)
+    return get_meta().get(name, {})
 
 
 # ---- 各任务（统一入口，内部按 provider 分发）----
@@ -295,11 +332,14 @@ JOBS = {
 
 def run_now(job_name: str) -> dict:
     """同步执行一个任务，返回 meta 信息。"""
+    _ensure_meta_table()
     fn = JOBS.get(job_name)
     if not fn:
         raise ValueError(f"未知任务: {job_name}，支持 {list(JOBS)}")
-    _run_with_meta(job_name, fn)
-    return get_meta().get(job_name, {})
+    if not _reserve_job(job_name):
+        meta = get_meta().get(job_name, {})
+        return {"already_running": True, **meta}
+    return _run_with_meta(job_name, fn, reserved=True)
 
 
 def run_async(job_name: str) -> dict:
@@ -308,17 +348,23 @@ def run_async(job_name: str) -> dict:
     全市场 K 线回填 ≈ 45 分钟，比 HTTP 默认 timeout（10 分钟）长得多，必须 async。
     前端可以隔几秒拉 /health/data 看 sync_meta 里这个任务的最新状态。
     """
+    _ensure_meta_table()
     fn = JOBS.get(job_name)
     if not fn:
         raise ValueError(f"未知任务: {job_name}，支持 {list(JOBS)}")
+    if not _reserve_job(job_name):
+        meta = get_meta().get(job_name, {})
+        return {"queued": False, "running": True, "job": job_name, "meta": meta}
+    _record(job_name, "queued", 0, "任务已排队，后台执行")
     t = threading.Thread(
         target=_run_with_meta,
         args=(job_name, fn),
+        kwargs={"reserved": True},
         name=f"sync-{job_name}",
         daemon=True,
     )
     t.start()
-    return {"queued": True, "job": job_name}
+    return {"queued": True, "running": False, "job": job_name, "meta": get_meta().get(job_name, {})}
 
 
 def start():
@@ -326,6 +372,7 @@ def start():
     if _scheduler is not None:
         return
     _ensure_meta_table()
+    _mark_interrupted_jobs()
     _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
     # 周一-周五 15:30：日K线快照（bs: OHLCV+PE+PB；ak: 新浪 OHLC）

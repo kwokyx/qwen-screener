@@ -1,7 +1,7 @@
 <script setup>
 // 数据新鲜度指示 + 手动同步面板
 // - 收起态：一个小标签显示 "数据：今日 / 1天前 / N天前"
-// - 展开态：4 个任务的卡片，每张有"上次更新"+"立即同步"按钮
+// - 展开态：覆盖率 + 可手动触发的后台同步任务
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -18,16 +18,22 @@ const auth = useAuthStore()
 const open = ref(false)
 const meta = ref({})            // sync_meta
 const counts = ref(null)        // {basic, daily, financial, with_industry}
+const coverage = ref(null)
 const latestDate = ref(null)
+const expectedDate = ref(null)
 const loading = ref(false)
 const running = ref({})         // {jobName: boolean}
 const canSync = computed(() => Boolean(auth.token))
+let poller = null
 
 const JOBS = [
-  { name: 'daily_market',        label: '全市场行情',  desc: '5500+ 只 OHLC + 成交量', eta: '约 1 分钟' },
-  { name: 'daily_value',         label: '估值快照',    desc: '沪深 300 + 中证 500 PE/PB/股息率', eta: '约 5 分钟' },
-  { name: 'weekly_fundamentals', label: '行业 + 财务', desc: '行业标签 + ROE / 营收 / 净利', eta: '约 10 分钟' },
-  { name: 'weekly_basic',        label: '股票池',      desc: '全 A 股代码列表更新', eta: '约 10 秒' },
+  { name: 'daily_market',           label: '日线行情',   desc: '最新交易日行情覆盖', eta: '后台约数分钟' },
+  { name: 'daily_value',            label: '估值数据',   desc: '估值、市值、股息率补全', eta: '后台约数分钟' },
+  { name: 'weekly_fundamentals',    label: '财务指标',   desc: 'ROE、营收、净利等指标', eta: '后台耗时较长' },
+  { name: 'weekly_dividend',        label: '分红数据',   desc: '现金分红与股息率重算', eta: '后台耗时较长' },
+  { name: 'weekly_basic',           label: '股票列表',   desc: '全 A 股代码列表更新', eta: '后台约十几秒' },
+  { name: 'weekly_kline_backfill',  label: 'K线回填',    desc: '补齐近期历史 K 线', eta: '后台耗时较长' },
+  { name: 'db_backup',              label: '数据备份',   desc: '备份当前本地数据库', eta: '后台约数秒' },
 ]
 
 async function refresh() {
@@ -36,7 +42,9 @@ async function refresh() {
     const r = await dataHealth()
     meta.value = r.sync_meta || {}
     counts.value = r.counts
+    coverage.value = r.coverage
     latestDate.value = r.latest_trade_date
+    expectedDate.value = r.expected_trade_date
   } catch (e) {
     /* 静默 */
   } finally {
@@ -51,13 +59,22 @@ async function runJob(name) {
   }
   if (running.value[name]) return
   running.value[name] = true
-  toast.info(`${labelOf(name)} 已开始同步...`)
+  toast.info(`${labelOf(name)} 正在提交后台同步...`)
   try {
     const r = await triggerSync(name)
-    if (r.meta?.status === 'success') {
-      toast.success(`${labelOf(name)} 完成（${r.meta.detail || ''}）`)
+    if (r.meta) {
+      meta.value = { ...meta.value, [name]: r.meta }
+    }
+    if (r.running) {
+      toast.info(`${labelOf(name)} 已在后台执行中`)
+    } else if (r.queued || r.meta?.status === 'queued') {
+      toast.success(`${labelOf(name)} 已排队，稍后自动更新状态`)
+    } else if (r.meta?.status === 'success') {
+      toast.success(`${labelOf(name)} 已完成`)
+    } else if (r.meta?.status === 'failed') {
+      toast.error(`${labelOf(name)} 失败：${r.meta?.detail || '请稍后重试'}`)
     } else {
-      toast.error(`${labelOf(name)} 失败：${r.meta?.detail || ''}`)
+      toast.info(`${labelOf(name)} 状态已更新`)
     }
     await refresh()
   } catch (e) {
@@ -69,6 +86,35 @@ async function runJob(name) {
 
 function labelOf(name) {
   return JOBS.find((j) => j.name === name)?.label || name
+}
+
+function statusOf(name) {
+  if (running.value[name]) return 'queued'
+  return meta.value[name]?.status || ''
+}
+
+function isJobActive(name) {
+  return ['queued', 'running'].includes(statusOf(name))
+}
+
+function statusLabel(status) {
+  if (status === 'queued') return '已排队'
+  if (status === 'running') return '执行中'
+  if (status === 'success') return '成功'
+  if (status === 'failed') return '失败'
+  return '未执行'
+}
+
+function statusStyle(status) {
+  if (status === 'failed') return { background: A2.upSoft, color: A2.up }
+  if (status === 'queued' || status === 'running') return { background: A2.amberSoft, color: A2.amber }
+  if (status === 'success') return { background: A2.downSoft, color: A2.down }
+  return { background: A2.bgDeep, color: A2.textDim }
+}
+
+function pct(value) {
+  if (value == null) return '—'
+  return `${Math.round(Number(value) * 100)}%`
 }
 
 function fmtRel(iso) {
@@ -115,9 +161,13 @@ function onDoc(e) {
 
 onMounted(() => {
   refresh()
+  poller = window.setInterval(refresh, 12000)
   document.addEventListener('mousedown', onDoc)
 })
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
+onBeforeUnmount(() => {
+  if (poller) window.clearInterval(poller)
+  document.removeEventListener('mousedown', onDoc)
+})
 </script>
 
 <template>
@@ -135,7 +185,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
           <div>
             <div :style="{ fontSize: '13px', fontWeight: 700 }">数据状态</div>
             <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '2px' }">
-              <span v-if="latestDate">最新交易日 <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ latestDate }}</strong></span>
+              <span v-if="latestDate">最新 <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ latestDate }}</strong><span v-if="expectedDate"> · 应至 {{ expectedDate }}</span></span>
               <span v-else>未同步</span>
             </div>
           </div>
@@ -147,13 +197,13 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
         <!-- 数据覆盖度 -->
         <div v-if="counts" :style="{ padding: '10px 14px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', borderBottom: `1px solid ${A2.borderHair}`, background: '#FBFBF9' }">
           <div v-for="c in [
-            { l: '全市场', v: counts.daily },
-            { l: '估值面', v: counts.financial },
-            { l: '行业', v: counts.with_industry },
-            { l: '股票池', v: counts.basic },
+            { l: '日线覆盖', v: pct(coverage?.latest_daily) },
+            { l: '估值覆盖', v: pct(coverage?.latest_valuation) },
+            { l: '财务覆盖', v: pct(coverage?.financial) },
+            { l: '股息覆盖', v: pct(coverage?.latest_dividend_yield) },
           ]" :key="c.l" :style="{ textAlign: 'center' }">
             <div :style="{ fontSize: '9.5px', color: A2.textMuted, fontWeight: 600, letterSpacing: '0.4px' }">{{ c.l }}</div>
-            <div :style="{ fontSize: '14px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: A2.text, marginTop: '2px' }">{{ c.v.toLocaleString() }}</div>
+            <div :style="{ fontSize: '14px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: A2.text, marginTop: '2px' }">{{ c.v }}</div>
           </div>
         </div>
 
@@ -172,25 +222,27 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
             <div :style="{ flex: 1, minWidth: 0 }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
                 <span :style="{ fontSize: '12px', fontWeight: 600, color: A2.text }">{{ j.label }}</span>
-                <span v-if="meta[j.name]?.status === 'failed'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.upSoft, color: A2.up, borderRadius: '3px', fontWeight: 700 }">失败</span>
-                <span v-else-if="meta[j.name]?.status === 'success'" :style="{ fontSize: '9px', padding: '1px 5px', background: A2.downSoft, color: A2.down, borderRadius: '3px', fontWeight: 700 }">已同步</span>
+                <span :style="{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 700, ...statusStyle(statusOf(j.name)) }">{{ statusLabel(statusOf(j.name)) }}</span>
               </div>
               <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ j.desc }}</div>
               <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">
                 上次：{{ fmtRel(meta[j.name]?.last_run_at) }}<span v-if="meta[j.name]?.duration_ms"> · {{ (meta[j.name].duration_ms / 1000).toFixed(0) }}s</span>
               </div>
+              <div v-if="meta[j.name]?.status === 'failed' && meta[j.name]?.detail" :style="{ fontSize: '10px', color: A2.up, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
+                {{ meta[j.name].detail }}
+              </div>
             </div>
-            <button @click="runJob(j.name)" :disabled="running[j.name]"
+            <button @click="runJob(j.name)" :disabled="isJobActive(j.name)"
                     :title="`预计 ${j.eta}`"
                     class="btn-outline" :style="{ padding: '5px 10px', fontSize: '11px', whiteSpace: 'nowrap', minWidth: '64px' }">
-              <Icon name="refresh" :size="11" :style="{ animation: running[j.name] ? 'spin 1s linear infinite' : 'none' }" />
-              {{ running[j.name] ? '同步中…' : '立即同步' }}
+              <Icon name="refresh" :size="11" :style="{ animation: isJobActive(j.name) ? 'spin 1s linear infinite' : 'none' }" />
+              {{ isJobActive(j.name) ? '后台执行' : '立即同步' }}
             </button>
           </div>
         </div>
 
         <div :style="{ padding: '8px 14px', fontSize: '10.5px', color: A2.textDim, lineHeight: 1.5, background: '#FBFBF9', borderTop: `1px solid ${A2.borderHair}` }">
-          自动同步按交易日和周末任务执行；手动同步入口与搜索框分离。
+          自动同步按交易日和周末任务执行；长任务会在后台运行，状态会自动刷新。
         </div>
       </div>
     </Transition>

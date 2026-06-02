@@ -144,9 +144,19 @@ def trigger_sync(
     try:
         if wait:
             meta = scheduler.run_now(job_name)
-            return {"job": job_name, "meta": meta}
+            return {
+                "job": job_name,
+                "queued": False,
+                "running": meta.get("already_running") is True or meta.get("status") == "running",
+                "meta": meta,
+            }
         rv = scheduler.run_async(job_name)
-        return {"job": job_name, "queued": True, "meta": rv}
+        return {
+            "job": job_name,
+            "queued": rv.get("queued", False),
+            "running": rv.get("running", False),
+            "meta": rv.get("meta") or scheduler.get_meta().get(job_name, {}),
+        }
     except ValueError as e:
         raise HTTPException(400, str(e))
 
