@@ -280,55 +280,115 @@ def _quality_score(daily: StockDaily | None, previous: StockDaily | None, fin: S
     return round(min(score, 99.0), 1)
 
 
+def _covered_market_date(db: Session, basic_count: int, before=None):
+    """Return the latest market-wide date instead of a sparse backfilled date."""
+    if not basic_count:
+        return None
+    min_rows = max(100, int(basic_count * 0.5))
+
+    latest_date_query = db.query(func.max(StockDaily.trade_date))
+    if before is not None:
+        latest_date_query = latest_date_query.filter(StockDaily.trade_date < before)
+    latest_date = latest_date_query.scalar()
+    if latest_date:
+        count_query = db.query(func.count(StockDaily.id)).filter(StockDaily.trade_date == latest_date)
+        if count_query.scalar() >= min_rows:
+            return latest_date
+
+    grouped_query = db.query(StockDaily.trade_date, func.count(StockDaily.id).label("n"))
+    if before is not None:
+        grouped_query = grouped_query.filter(StockDaily.trade_date < before)
+    row = (
+        grouped_query
+        .group_by(StockDaily.trade_date)
+        .having(func.count(StockDaily.id) >= min_rows)
+        .order_by(StockDaily.trade_date.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
 def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     validate_screen_request(req)
-    # 兼容 SQLite/MySQL：用 group by + max 找最新日期，再 join
-    latest_daily_dates = (
-        db.query(StockDaily.code, func.max(StockDaily.trade_date).label("d"))
-        .group_by(StockDaily.code)
-        .subquery()
-    )
-    previous_daily_dates = (
-        db.query(StockDaily.code, func.max(StockDaily.trade_date).label("d"))
-        .join(latest_daily_dates, latest_daily_dates.c.code == StockDaily.code)
-        .filter(StockDaily.trade_date < latest_daily_dates.c.d)
-        .group_by(StockDaily.code)
-        .subquery()
-    )
     previous_daily = aliased(StockDaily)
     latest_finan_dates = (
         db.query(StockFinancial.code, func.max(StockFinancial.report_date).label("d"))
         .group_by(StockFinancial.code)
         .subquery()
     )
+    basic_count = db.query(func.count(StockBasic.code)).scalar() or 0
+    latest_market_date = _covered_market_date(db, basic_count)
+    previous_market_date = None
+    if latest_market_date:
+        previous_market_date = _covered_market_date(db, basic_count, before=latest_market_date)
 
-    q = (
-        db.query(StockBasic, StockDaily, previous_daily, StockFinancial)
-        .outerjoin(latest_daily_dates, latest_daily_dates.c.code == StockBasic.code)
-        .outerjoin(
-            StockDaily,
-            and_(
-                StockDaily.code == latest_daily_dates.c.code,
-                StockDaily.trade_date == latest_daily_dates.c.d,
-            ),
+    if latest_market_date:
+        q = (
+            db.query(StockBasic, StockDaily, previous_daily, StockFinancial)
+            .outerjoin(
+                StockDaily,
+                and_(
+                    StockDaily.code == StockBasic.code,
+                    StockDaily.trade_date == latest_market_date,
+                ),
+            )
+            .outerjoin(
+                previous_daily,
+                and_(
+                    previous_daily.code == StockBasic.code,
+                    previous_daily.trade_date == previous_market_date,
+                ),
+            )
+            .outerjoin(latest_finan_dates, latest_finan_dates.c.code == StockBasic.code)
+            .outerjoin(
+                StockFinancial,
+                and_(
+                    StockFinancial.code == latest_finan_dates.c.code,
+                    StockFinancial.report_date == latest_finan_dates.c.d,
+                ),
+            )
         )
-        .outerjoin(previous_daily_dates, previous_daily_dates.c.code == StockBasic.code)
-        .outerjoin(
-            previous_daily,
-            and_(
-                previous_daily.code == previous_daily_dates.c.code,
-                previous_daily.trade_date == previous_daily_dates.c.d,
-            ),
+    else:
+        # 回退路径：数据日期稀疏时按每只股票自己的最新记录取值。
+        latest_daily_dates = (
+            db.query(StockDaily.code, func.max(StockDaily.trade_date).label("d"))
+            .group_by(StockDaily.code)
+            .subquery()
         )
-        .outerjoin(latest_finan_dates, latest_finan_dates.c.code == StockBasic.code)
-        .outerjoin(
-            StockFinancial,
-            and_(
-                StockFinancial.code == latest_finan_dates.c.code,
-                StockFinancial.report_date == latest_finan_dates.c.d,
-            ),
+        previous_daily_dates = (
+            db.query(StockDaily.code, func.max(StockDaily.trade_date).label("d"))
+            .join(latest_daily_dates, latest_daily_dates.c.code == StockDaily.code)
+            .filter(StockDaily.trade_date < latest_daily_dates.c.d)
+            .group_by(StockDaily.code)
+            .subquery()
         )
-    )
+        q = (
+            db.query(StockBasic, StockDaily, previous_daily, StockFinancial)
+            .outerjoin(latest_daily_dates, latest_daily_dates.c.code == StockBasic.code)
+            .outerjoin(
+                StockDaily,
+                and_(
+                    StockDaily.code == latest_daily_dates.c.code,
+                    StockDaily.trade_date == latest_daily_dates.c.d,
+                ),
+            )
+            .outerjoin(previous_daily_dates, previous_daily_dates.c.code == StockBasic.code)
+            .outerjoin(
+                previous_daily,
+                and_(
+                    previous_daily.code == previous_daily_dates.c.code,
+                    previous_daily.trade_date == previous_daily_dates.c.d,
+                ),
+            )
+            .outerjoin(latest_finan_dates, latest_finan_dates.c.code == StockBasic.code)
+            .outerjoin(
+                StockFinancial,
+                and_(
+                    StockFinancial.code == latest_finan_dates.c.code,
+                    StockFinancial.report_date == latest_finan_dates.c.d,
+                ),
+            )
+        )
 
     if req.conditions:
         clauses = [_build_clause(c) for c in req.conditions]
@@ -351,7 +411,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     else:
         q = q.order_by(StockBasic.code.asc())
 
-    total = q.order_by(None).count()
+    total = basic_count if not req.conditions else q.order_by(None).count()
     rows = q.offset(req.offset).limit(req.limit).all()
 
     items = [
@@ -378,7 +438,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         )
         for basic, daily, previous, fin in rows
     ]
-    trade_date = db.query(func.max(StockDaily.trade_date)).scalar()
+    trade_date = latest_market_date or db.query(func.max(StockDaily.trade_date)).scalar()
     return ScreenResponse(
         total=total,
         items=items,

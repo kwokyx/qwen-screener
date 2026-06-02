@@ -254,6 +254,16 @@ const resultSubtitle = computed(() => {
   return map[filterMode.value] || '等待筛选条件'
 })
 
+const isInitialLoading = computed(() => hasRunnableFilter.value && loading.value && !items.value.length)
+const isRefreshing = computed(() => hasRunnableFilter.value && loading.value && items.value.length > 0)
+const resultStatusText = computed(() => {
+  if (!hasRunnableFilter.value) return resultSubtitle.value
+  if (isInitialLoading.value) return `正在筛选 · ${resultSubtitle.value}`
+  if (errorMsg.value && !items.value.length) return `加载失败 · ${resultSubtitle.value}`
+  return `共 ${total.value} 只 · ${resultSubtitle.value}`
+})
+const resultTradeDateText = computed(() => isInitialLoading.value ? '加载中' : (tradeDate.value || '—'))
+const resultCoverageText = computed(() => isInitialLoading.value ? '加载中' : formatCoverage(pageCoverage.value.ratio))
 const activeSortLabel = computed(() => `${sortLabels[sortBy.value] || sortBy.value} ${sortDesc.value ? '降序' : '升序'}`)
 const sortOptions = Object.entries(sortLabels).map(([value, label]) => ({ value, label }))
 const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value + 1 : 0)
@@ -624,7 +634,11 @@ watch(
           </NTag>
           <span class="results-total">
             <template v-if="hasRunnableFilter">
-              共 <strong>{{ total }}</strong> 只 · {{ resultSubtitle }}
+              <span v-if="isInitialLoading">{{ resultStatusText }}</span>
+              <span v-else-if="errorMsg && !items.length">{{ resultStatusText }}</span>
+              <span v-else>
+                共 <strong>{{ total }}</strong> 只 · {{ resultSubtitle }}
+              </span>
             </template>
             <template v-else>
               {{ resultSubtitle }}
@@ -672,8 +686,8 @@ watch(
           </template>
         </div>
         <div class="result-meta">
-          <span>数据日期 {{ tradeDate || '—' }}</span>
-          <span>字段覆盖 {{ formatCoverage(pageCoverage.ratio) }}</span>
+          <span>数据日期 {{ resultTradeDateText }}</span>
+          <span>字段覆盖 {{ resultCoverageText }}</span>
           <span>排序 {{ activeSortLabel }}</span>
         </div>
         <div class="sort-controls">
@@ -699,8 +713,12 @@ watch(
         </div>
       </NAlert>
 
+      <NAlert v-if="isRefreshing" type="default" :bordered="false" class="refresh-alert">
+        正在刷新结果，当前列表保留上一次筛选数据。
+      </NAlert>
+
       <!-- Stats -->
-      <NGrid v-if="hasRunnableFilter" cols="2 m:3 l:6" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
+      <NGrid v-if="hasRunnableFilter && stats.length" cols="2 m:3 l:6" responsive="screen" :x-gap="10" :y-gap="10" class="stats-grid">
         <NGi v-for="s in stats" :key="s.l">
           <NCard size="small" :bordered="false" class="results-card stat-card">
             <NStatistic :label="s.l">
@@ -718,7 +736,7 @@ watch(
 
       <!-- Table -->
       <NCard v-if="hasRunnableFilter" :bordered="false" class="results-card table-card">
-        <div v-if="loading" class="results-skeleton">
+        <div v-if="isInitialLoading" class="results-skeleton">
           <div v-for="n in 8" :key="'sk' + n" class="skeleton-row">
             <NSkeleton v-for="(_, ci) in 12" :key="ci" :height="12" :width="55" :sharp="false" />
           </div>
@@ -850,6 +868,7 @@ watch(
 }
 
 .error-alert,
+.refresh-alert,
 .stats-grid {
   margin: 12px 0;
 }
