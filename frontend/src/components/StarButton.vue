@@ -1,5 +1,7 @@
 <script setup>
 import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 import { useWatchlistStore } from '../stores/watchlist'
 import { toast } from '../stores/toast'
 import Icon from './Icon.vue'
@@ -11,11 +13,19 @@ const props = defineProps({
 })
 
 const wl = useWatchlistStore()
+const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
 const active = computed(() => wl.has(props.stock.code))
 
 function onClick(e) {
   e.stopPropagation()
   e.preventDefault()
+  if (!auth.token) {
+    toast.info('登录后可以保存自选股')
+    router.push({ name: 'login', query: { redirect: route.fullPath } })
+    return
+  }
   const wasActive = active.value
   wl.toggle(props.stock)
   const name = props.stock.name || props.stock.code

@@ -5,20 +5,47 @@ import { useChatHistoryStore } from './chatHistory'
 import { useNotificationsStore } from './notifications'
 import { useWatchlistStore } from './watchlist'
 
+const PRIVATE_STORAGE_KEYS = [
+  'qwen.watchlist.v1',
+  'qwen.chat.history.v1',
+  'qwen.chat.activeSession.v1',
+  'qwen.notifications.v1',
+  'qwen.results.agent.v1',
+]
+
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
   const user = ref(JSON.parse(localStorage.getItem('user') || 'null'))
 
+  function clearLocalPrivateState() {
+    for (const key of PRIVATE_STORAGE_KEYS) {
+      localStorage.removeItem(key)
+      sessionStorage.removeItem(key)
+    }
+    try { useWatchlistStore().clear() } catch {}
+    try { useChatHistoryStore().clear() } catch {}
+    try { useNotificationsStore().clear() } catch {}
+  }
+
+  async function syncUserState() {
+    try { await useWatchlistStore().syncFromServer() } catch { /* 静默 */ }
+    try { await useChatHistoryStore().syncFromServer() } catch { /* 静默 */ }
+    try { await useNotificationsStore().syncFromServer() } catch { /* 静默 */ }
+  }
+
   async function login(username, password) {
+    token.value = ''
+    user.value = null
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    clearLocalPrivateState()
+
     const data = await authApi.login(username, password)
     token.value = data.access_token
     user.value = data.user
     localStorage.setItem('token', data.access_token)
     localStorage.setItem('user', JSON.stringify(data.user))
-    // 登录成功后双向同步：拉服务端自选 + 把本地独有的项推上去
-    try { await useWatchlistStore().syncFromServer() } catch { /* 静默 */ }
-    try { await useChatHistoryStore().syncFromServer() } catch { /* 静默 */ }
-    try { await useNotificationsStore().syncFromServer() } catch { /* 静默 */ }
+    await syncUserState()
     return data
   }
 
@@ -26,16 +53,21 @@ export const useAuthStore = defineStore('auth', () => {
     return authApi.register(username, password, email || null)
   }
 
+  async function fetchMe() {
+    if (!token.value) return null
+    const data = await authApi.me()
+    user.value = data
+    localStorage.setItem('user', JSON.stringify(data))
+    return data
+  }
+
   function logout() {
     token.value = ''
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
-    // 清掉内存 + localStorage 中的用户态数据，避免下个账号在同一浏览器登录时混入上个账号数据
-    try { useWatchlistStore().clear() } catch {}
-    try { useChatHistoryStore().clear() } catch {}
-    try { useNotificationsStore().clear() } catch {}
+    clearLocalPrivateState()
   }
 
-  return { token, user, login, register, logout }
+  return { token, user, login, register, fetchMe, syncUserState, logout }
 })

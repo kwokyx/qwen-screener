@@ -3,9 +3,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import { startAlertEngine } from './services/alertEngine'
-import { useWatchlistStore } from './stores/watchlist'
-import { useChatHistoryStore } from './stores/chatHistory'
-import { useNotificationsStore } from './stores/notifications'
+import { useAuthStore } from './stores/auth'
 import { useAiStatusStore } from './stores/aiStatus'
 import { toast } from './stores/toast'
 
@@ -24,10 +22,13 @@ app.config.errorHandler = (err, _vm, info) => {
 
 app.mount('#app')
 
-// 启动后：登录态下从后端拉自选 / 对话历史 / 通知合并到本地
-useWatchlistStore().syncFromServer()
-useChatHistoryStore().syncFromServer()
-useNotificationsStore().syncFromServer()
+// 启动后：登录态下确认 token，并同步自选 / 对话历史 / 通知。
+const auth = useAuthStore()
+if (auth.token) {
+  auth.fetchMe()
+    .then(() => auth.syncUserState())
+    .catch(() => {})
+}
 
 // 启动价格预警轮询
 startAlertEngine()

@@ -2,7 +2,9 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  NAvatar,
   NButton,
+  NDropdown,
   NInput,
   NLayout,
   NLayoutContent,
@@ -12,9 +14,11 @@ import {
 } from 'naive-ui'
 import Icon from './Icon.vue'
 import DataFreshness from './DataFreshness.vue'
+import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const menuOptions = [
   { label: '行情', key: 'dashboard' },
@@ -27,6 +31,13 @@ const menuOptions = [
 const activeKey = computed(() => {
   return route.name || 'dashboard'
 })
+const isLoggedIn = computed(() => Boolean(auth.token))
+const username = computed(() => auth.user?.username || '已登录')
+const userInitial = computed(() => username.value.charAt(0).toUpperCase())
+const userMenuOptions = computed(() => [
+  { key: 'user', label: username.value, disabled: true },
+  { key: 'logout', label: '退出登录' },
+])
 
 function handleMenuSelect(key) {
   router.push({ name: key })
@@ -40,6 +51,18 @@ function handleSearch() {
     router.push({ name: 'detail', params: { code: q } })
     searchQuery.value = ''
   }
+}
+
+function goLogin(mode = 'login') {
+  const query = { redirect: route.fullPath }
+  if (mode === 'register') query.mode = 'register'
+  router.push({ name: 'login', query })
+}
+
+function handleUserMenu(key) {
+  if (key !== 'logout') return
+  auth.logout()
+  router.push('/dashboard')
 }
 </script>
 
@@ -78,6 +101,18 @@ function handleSearch() {
             <n-button size="small" @click="handleSearch">
               <template #icon><Icon name="search" :size="12" /></template>
             </n-button>
+            <template v-if="isLoggedIn">
+              <n-dropdown trigger="click" :options="userMenuOptions" @select="handleUserMenu">
+                <button class="user-chip" type="button" :title="username">
+                  <n-avatar size="small" class="user-avatar">{{ userInitial }}</n-avatar>
+                  <span class="user-name">{{ username }}</span>
+                </button>
+              </n-dropdown>
+            </template>
+            <template v-else>
+              <n-button size="small" quaternary class="auth-link" @click="goLogin('login')">登录</n-button>
+              <n-button size="small" type="primary" class="auth-primary" @click="goLogin('register')">注册</n-button>
+            </template>
           </n-space>
         </div>
       </div>
@@ -225,6 +260,48 @@ function handleSearch() {
   color: #111111;
   border-color: #D8D8D8;
   border-radius: 6px;
+}
+
+.nav-actions :deep(.auth-link.n-button) {
+  border-color: transparent;
+}
+
+.nav-actions :deep(.auth-primary.n-button) {
+  background: #111111;
+  color: #FFFFFF;
+  border-color: #111111;
+}
+
+.user-chip {
+  height: 32px;
+  border: 1px solid #D8D8D8;
+  background: #FFFFFF;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 5px;
+  cursor: pointer;
+  color: #111111;
+}
+
+.user-chip:hover {
+  background: #F7F7F7;
+}
+
+.user-avatar {
+  background: #111111;
+  color: #FFFFFF;
+  font-weight: 700;
+}
+
+.user-name {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .app-content {

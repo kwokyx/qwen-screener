@@ -53,12 +53,12 @@ function navTo(id) {
 
 function logout() {
   auth.logout()
-  router.push('/login')
+  router.push('/dashboard')
 }
 
 function handleUserMenu(key) {
   if (key === 'logout') logout()
-  if (key === 'login') router.push('/login')
+  if (key === 'login') router.push({ name: 'login', query: { redirect: route.fullPath } })
 }
 
 function onKey(e) {

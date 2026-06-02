@@ -4,8 +4,10 @@ import { NConfigProvider, NDialogProvider, NMessageProvider, NNotificationProvid
 import ErrorBoundary from './components/ErrorBoundary.vue'
 import Toaster from './components/Toaster.vue'
 import WatchlistDock from './components/WatchlistDock.vue'
+import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
+const auth = useAuthStore()
 
 const naiveThemeOverrides = {
   common: {
@@ -73,7 +75,7 @@ const naiveThemeOverrides = {
             </RouterView>
           </ErrorBoundary>
           <Toaster />
-          <WatchlistDock v-if="route.name !== 'login'" />
+          <WatchlistDock v-if="route.name !== 'login' && auth.token" />
         </n-notification-provider>
       </n-dialog-provider>
     </n-message-provider>

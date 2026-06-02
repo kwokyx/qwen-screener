@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { A2 } from '../shared/theme.js'
 import Icon from '../components/Icon.vue'
@@ -10,23 +10,51 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const mode = ref('login')
+const mode = ref(route.query.mode === 'register' ? 'register' : 'login')
 const username = ref('')
 const password = ref('')
 const email = ref('')
 const error = ref('')
 const loading = ref(false)
 
+function sanitizeRedirect(value) {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
+    ? value
+    : '/dashboard'
+}
+
+const redirectTarget = computed(() => sanitizeRedirect(route.query.redirect || route.query.next))
+const needsLogin = computed(() => redirectTarget.value !== '/dashboard')
+
+watch(
+  () => route.query.mode,
+  (value) => {
+    mode.value = value === 'register' ? 'register' : 'login'
+  },
+)
+
 async function submit() {
   error.value = ''
+  const name = username.value.trim()
+  const pwd = password.value
+  const mail = email.value.trim()
+
+  if (name.length < 3) {
+    error.value = '用户名至少 3 位'
+    return
+  }
+  if (pwd.length < 6) {
+    error.value = '密码至少 6 位'
+    return
+  }
+
   loading.value = true
   try {
     if (mode.value === 'register') {
-      await auth.register(username.value, password.value, email.value)
+      await auth.register(name, pwd, mail)
     }
-    await auth.login(username.value, password.value)
-    const next = route.query.next || '/dashboard'
-    router.replace(next)
+    await auth.login(name, pwd)
+    router.replace(redirectTarget.value)
   } catch (e) {
     error.value = friendlyError(e)
   } finally {
@@ -83,6 +111,10 @@ function continueAsGuest() {
                   :style="{ flex: 1, padding: '8px', fontSize: '12.5px', fontWeight: mode === m ? 600 : 500, background: mode === m ? A2.surface : 'transparent', border: 'none', cursor: 'pointer', color: mode === m ? A2.text : A2.textMuted, borderRadius: '6px', boxShadow: mode === m ? A2.shadow : 'none', transition: 'all 0.15s' }">
             {{ m === 'login' ? '登录' : '注册' }}
           </button>
+        </div>
+
+        <div v-if="needsLogin" :style="{ background: A2.qwenSoft, color: A2.qwen, padding: '8px 10px', fontSize: '11.5px', borderRadius: '6px', marginBottom: '14px', lineHeight: 1.5 }">
+          登录后继续访问当前业务页面。
         </div>
 
         <form @submit.prevent="submit">
