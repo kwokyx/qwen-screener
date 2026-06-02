@@ -4,18 +4,24 @@
 // - 展开态：4 个任务的卡片，每张有"上次更新"+"立即同步"按钮
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { A2 } from '../shared/theme.js'
 import { dataHealth, triggerSync } from '../api/health'
 import { toast } from '../stores/toast'
 import { friendlyError } from '../shared/errors.js'
+import { useAuthStore } from '../stores/auth'
 import Icon from './Icon.vue'
 
+const router = useRouter()
+const route = useRoute()
+const auth = useAuthStore()
 const open = ref(false)
 const meta = ref({})            // sync_meta
 const counts = ref(null)        // {basic, daily, financial, with_industry}
 const latestDate = ref(null)
 const loading = ref(false)
 const running = ref({})         // {jobName: boolean}
+const canSync = computed(() => Boolean(auth.token))
 
 const JOBS = [
   { name: 'daily_market',        label: '全市场行情',  desc: '5500+ 只 OHLC + 成交量', eta: '约 1 分钟' },
@@ -39,9 +45,13 @@ async function refresh() {
 }
 
 async function runJob(name) {
+  if (!canSync.value) {
+    router.push({ name: 'login', query: { redirect: route.fullPath } })
+    return
+  }
   if (running.value[name]) return
   running.value[name] = true
-  toast.info(`${name} 已开始同步…`)
+  toast.info(`${labelOf(name)} 已开始同步...`)
   try {
     const r = await triggerSync(name)
     if (r.meta?.status === 'success') {
@@ -94,6 +104,10 @@ const summaryColor = computed(() =>
 function close() {
   open.value = false
 }
+
+function goLogin() {
+  router.push({ name: 'login', query: { redirect: route.fullPath } })
+}
 function onDoc(e) {
   if (!open.value) return
   if (!e.target.closest('[data-data-freshness]')) close()
@@ -119,7 +133,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
       <div v-if="open" :style="{ position: 'absolute', top: '32px', right: 0, width: '380px', background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowLg, border: `1px solid ${A2.borderHair}`, zIndex: 50, overflow: 'hidden' }">
         <div :style="{ padding: '12px 14px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
           <div>
-            <div :style="{ fontSize: '13px', fontWeight: 700 }">数据同步</div>
+            <div :style="{ fontSize: '13px', fontWeight: 700 }">数据状态</div>
             <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '2px' }">
               <span v-if="latestDate">最新交易日 <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ latestDate }}</strong></span>
               <span v-else>未同步</span>
@@ -143,8 +157,17 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
           </div>
         </div>
 
+        <div v-if="!canSync" :style="{ padding: '12px 14px', borderTop: `1px solid ${A2.borderHair}` }">
+          <div :style="{ fontSize: '11.5px', color: A2.textSub, lineHeight: 1.6, marginBottom: '10px' }">
+            数据状态可公开查看。手动同步需要登录后执行，避免误触发耗时任务。
+          </div>
+          <button class="btn-outline" :style="{ padding: '6px 10px', fontSize: '11px' }" @click="goLogin">
+            登录后同步
+          </button>
+        </div>
+
         <!-- 任务列表 -->
-        <div :style="{ padding: '6px 0', maxHeight: '380px', overflowY: 'auto' }">
+        <div v-else :style="{ padding: '6px 0', maxHeight: '380px', overflowY: 'auto' }">
           <div v-for="j in JOBS" :key="j.name" :style="{ padding: '10px 14px', borderTop: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', gap: '10px' }">
             <div :style="{ flex: 1, minWidth: 0 }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
@@ -167,7 +190,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
         </div>
 
         <div :style="{ padding: '8px 14px', fontSize: '10.5px', color: A2.textDim, lineHeight: 1.5, background: '#FBFBF9', borderTop: `1px solid ${A2.borderHair}` }">
-          系统每个交易日 15:30（行情）/ 16:00（估值）/ 周末（财务）自动更新，也可以在这里手动触发。
+          自动同步按交易日和周末任务执行；手动同步入口与搜索框分离。
         </div>
       </div>
     </Transition>

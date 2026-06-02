@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NAvatar,
@@ -15,6 +15,7 @@ import {
 import Icon from './Icon.vue'
 import DataFreshness from './DataFreshness.vue'
 import { useAuthStore } from '../stores/auth'
+import * as stockApi from '../api/stock'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,12 +45,129 @@ function handleMenuSelect(key) {
 }
 
 const searchQuery = ref('')
+const searchItems = ref([])
+const searchOpen = ref(false)
+const searchLoading = ref(false)
+const searchCursor = ref(0)
+let searchDebounce = null
+let searchSeq = 0
 
-function handleSearch() {
+const directCode = computed(() => normalizeStockCode(searchQuery.value))
+const showSearchPanel = computed(() => searchOpen.value && Boolean(searchQuery.value.trim()))
+
+function normalizeStockCode(value) {
+  const q = String(value || '').trim().toUpperCase()
+  const full = q.match(/^([0-9]{6})\\.(SH|SZ|BJ)$/)
+  if (full) return `${full[1]}.${full[2]}`
+  if (!/^[0-9]{6}$/.test(q)) return ''
+  if (q.startsWith('6') || q.startsWith('9')) return `${q}.SH`
+  if (q.startsWith('0') || q.startsWith('2') || q.startsWith('3')) return `${q}.SZ`
+  if (q.startsWith('4') || q.startsWith('8')) return `${q}.BJ`
+  return ''
+}
+
+async function runSearch(q) {
+  const text = q.trim()
+  if (!text) {
+    searchItems.value = []
+    return []
+  }
+  const seq = ++searchSeq
+  searchLoading.value = true
+  try {
+    const data = await stockApi.search(text, 8)
+    if (seq !== searchSeq) return searchItems.value
+    const rows = Array.isArray(data) ? data : (data.items || [])
+    searchItems.value = rows
+    searchCursor.value = 0
+    return rows
+  } catch {
+    if (seq === searchSeq) searchItems.value = []
+    return []
+  } finally {
+    if (seq === searchSeq) searchLoading.value = false
+  }
+}
+
+watch(searchQuery, (value) => {
+  searchCursor.value = 0
+  if (searchDebounce) clearTimeout(searchDebounce)
+  const q = value.trim()
+  if (!q) {
+    searchItems.value = []
+    searchLoading.value = false
+    return
+  }
+  searchDebounce = setTimeout(() => runSearch(q), 180)
+})
+
+function pickStock(stock) {
+  if (!stock?.code) return
+  searchQuery.value = ''
+  searchItems.value = []
+  searchOpen.value = false
+  router.push(`/detail/${stock.code}`)
+}
+
+async function handleSearch() {
   const q = searchQuery.value.trim()
-  if (q) {
-    router.push({ name: 'detail', params: { code: q } })
+  if (!q) return
+  if (searchItems.value.length) {
+    pickStock(searchItems.value[Math.max(0, searchCursor.value)] || searchItems.value[0])
+    return
+  }
+  const rows = await runSearch(q)
+  if (rows.length) {
+    pickStock(rows[0])
+    return
+  }
+  if (directCode.value) {
     searchQuery.value = ''
+    searchOpen.value = false
+    router.push(`/detail/${directCode.value}`)
+  }
+}
+
+function onSearchKeydown(e) {
+  if (!showSearchPanel.value) return
+  if (!searchItems.value.length) {
+    if (e.key === 'Escape') searchOpen.value = false
+    return
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    searchCursor.value = Math.min(searchItems.value.length - 1, searchCursor.value + 1)
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    searchCursor.value = Math.max(0, searchCursor.value - 1)
+  } else if (e.key === 'Escape') {
+    searchOpen.value = false
+  }
+}
+
+function openDirectCode() {
+  if (!directCode.value) return
+  const code = directCode.value
+  searchQuery.value = ''
+  searchOpen.value = false
+  router.push(`/detail/${code}`)
+}
+
+function onDocMouseDown(e) {
+  if (!e.target.closest('[data-shell-search]')) searchOpen.value = false
+}
+
+document.addEventListener('mousedown', onDocMouseDown)
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocMouseDown)
+  if (searchDebounce) clearTimeout(searchDebounce)
+})
+
+function goStockSearch() {
+  searchOpen.value = true
+  const q = searchQuery.value.trim()
+  if (q && !searchItems.value.length) {
+    runSearch(q)
   }
 }
 
@@ -90,14 +208,45 @@ function handleUserMenu(key) {
         <div class="nav-actions">
           <n-space align="center" size="small">
             <DataFreshness />
-            <n-input
-              class="nav-search"
-              v-model:value="searchQuery"
-              placeholder="搜索代码 / 名称"
-              size="small"
-              clearable
-              @keyup.enter="handleSearch"
-            />
+            <div class="nav-search-wrap" data-shell-search>
+              <n-input
+                class="nav-search"
+                v-model:value="searchQuery"
+                placeholder="搜索代码 / 名称"
+                size="small"
+                clearable
+                @focus="goStockSearch"
+                @keyup.enter="handleSearch"
+                @keydown="onSearchKeydown"
+              />
+              <div v-if="showSearchPanel" class="nav-search-panel">
+                <div v-if="searchLoading" class="search-state">搜索中...</div>
+                <template v-else-if="searchItems.length">
+                  <button
+                    v-for="(item, idx) in searchItems"
+                    :key="item.code"
+                    type="button"
+                    class="search-item"
+                    :class="{ active: idx === searchCursor }"
+                    @mouseenter="searchCursor = idx"
+                    @click="pickStock(item)"
+                  >
+                    <span>
+                      <strong>{{ item.name || item.code }}</strong>
+                      <small>{{ item.code }}</small>
+                    </span>
+                    <em>{{ item.industry || item.market || '股票' }}</em>
+                  </button>
+                </template>
+                <button v-else-if="directCode" type="button" class="search-item active" @click="openDirectCode">
+                  <span>
+                    <strong>打开 {{ directCode }}</strong>
+                    <small>直接进入股票详情</small>
+                  </span>
+                </button>
+                <div v-else class="search-state">未找到匹配股票</div>
+              </div>
+            </div>
             <n-button size="small" @click="handleSearch">
               <template #icon><Icon name="search" :size="12" /></template>
             </n-button>
@@ -239,6 +388,77 @@ function handleUserMenu(key) {
 
 .nav-search {
   width: 260px;
+}
+
+.nav-search-wrap {
+  position: relative;
+}
+
+.nav-search-panel {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  width: 320px;
+  max-height: 320px;
+  overflow: auto;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.12);
+  z-index: 80;
+  padding: 6px;
+}
+
+.search-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-item:hover,
+.search-item.active {
+  background: #F4F4F5;
+}
+
+.search-item strong {
+  display: block;
+  color: #111111;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.search-item small {
+  display: block;
+  margin-top: 1px;
+  color: #71717A;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+}
+
+.search-item em {
+  flex-shrink: 0;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #71717A;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.search-state {
+  padding: 18px 12px;
+  color: #71717A;
+  font-size: 12px;
+  text-align: center;
 }
 
 .nav-actions :deep(.n-input) {

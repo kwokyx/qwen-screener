@@ -6,8 +6,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.deps import get_current_user
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
+from app.models.user import User
 from app.services import cache, db_backup, qwen_client, scheduler
 
 
@@ -125,10 +127,14 @@ def cache_health():
 
 
 @router.post("/sync/{job_name}")
-def trigger_sync(job_name: str, wait: bool = False):
+def trigger_sync(
+    job_name: str,
+    wait: bool = False,
+    _user: User = Depends(get_current_user),
+):
     """手动触发一个 sync 任务（前端"立即更新"按钮用）。
 
-    默认 async（守护线程后台跑，立即返回）。对全市场 60d K 线回填这种 45 分钟级别
+    需要登录。默认 async（守护线程后台跑，立即返回）。对全市场 60d K 线回填这种 45 分钟级别
     的任务必须 async，否则 HTTP 会超时。前端可隔几秒查 /health/data 看 sync_meta
     里该任务的状态。
     可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_dividend
