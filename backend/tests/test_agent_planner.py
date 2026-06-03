@@ -81,6 +81,7 @@ def test_plan_agent_turn_accepts_valid_screen_and_compact_context(monkeypatch):
     assert "上一轮工具调用" in context_message
     assert "股票筛选完成" in context_message
     assert "limit" not in context_message
+    assert captured["timeout"] == agent_planner._AGENT_PLAN_TIMEOUT_SECONDS
 
 
 def test_plan_agent_turn_supports_dashscope_compatible_function_call(monkeypatch):
@@ -119,6 +120,40 @@ def test_plan_agent_turn_accepts_stock_detail(monkeypatch):
     assert result is not None
     assert result.tool == "stock_detail"
     assert result.extra == {"code": "600036.SH", "name": "招商银行"}
+
+
+def test_plan_agent_turn_accepts_clarification_question_only(monkeypatch):
+    _configure(
+        monkeypatch,
+        "ask_clarification",
+        {"question": "请补充行业、风格或风险偏好。"},
+    )
+
+    result = agent_planner.plan_agent_turn("你好")
+
+    assert result is not None
+    assert result.tool == "ask_clarification"
+    assert result.extra == {
+        "missing_info": [],
+        "question": "请补充行业、风格或风险偏好。",
+    }
+
+
+def test_plan_agent_turn_normalizes_clarification_missing_info(monkeypatch):
+    _configure(
+        monkeypatch,
+        "ask_clarification",
+        {
+            "missing_info": ["股票类型", "风险偏好", "未知类别", "行业板块"],
+            "question": "你更偏向什么风格和行业？",
+        },
+    )
+
+    result = agent_planner.plan_agent_turn("帮我选点好股票")
+
+    assert result is not None
+    assert result.tool == "ask_clarification"
+    assert result.extra["missing_info"] == ["风格偏好", "风险承受", "行业"]
 
 
 @pytest.mark.parametrize(

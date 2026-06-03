@@ -172,8 +172,7 @@ def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, s
     assert any(call.name == "stock_screen" and call.result["total"] == 2 for call in res.tool_calls)
 
 
-def test_chat_agent_prefers_model_fc_for_confirmation_when_available(db, seed_stocks, monkeypatch):
-    captured = {}
+def test_chat_agent_fast_path_skips_model_for_confirmation_when_available(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -181,19 +180,7 @@ def test_chat_agent_prefers_model_fc_for_confirmation_when_available(db, seed_st
     )
 
     def plan_agent_turn(query, context=None):
-        captured["query"] = query
-        captured["context"] = context
-        return AgentPlanResult(
-            tool="stock_screen",
-            tool_label="结构化股票筛选",
-            reasoning="AI 沿用上一轮策略条件",
-            conditions=[
-                FilterCondition(field="pe", op="lt", value=20),
-                FilterCondition(field="roe", op="gt", value=20),
-            ],
-            sort_by="roe",
-            sort_desc=True,
-        )
+        raise AssertionError("confirmation fast-path should not call the model")
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", plan_agent_turn)
     context = {
@@ -206,11 +193,46 @@ def test_chat_agent_prefers_model_fc_for_confirmation_when_available(db, seed_st
 
     res = strategy_selector.run_chat_agent(db, "可以，做吧", context=context, limit=10)
 
-    assert captured == {"query": "可以，做吧", "context": context}
     assert res.plan.tool == "stock_screen"
-    assert res.plan.ai_used is True
+    assert res.plan.ai_used is False
     assert res.screen_result is not None
     assert {item.code for item in res.screen_result.items} == {"000333.SZ", "000596.SZ"}
+    assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+
+
+def test_chat_agent_fast_path_skips_model_for_obvious_local_intents(monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    def fail_plan(_query, _context=None):
+        raise AssertionError("obvious local intents should not call the model")
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+    context = {
+        "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "roe", "sort_desc": True},
+        "last_conditions": [{"field": "pe", "op": "lt", "value": 20}],
+        "last_result": {
+            "total": 1,
+            "items": [{"code": "600036.SH", "name": "招商银行", "pe": 6.5, "roe": 16.5}],
+            "parsed_conditions": [{"field": "pe", "op": "lt", "value": 20}],
+        },
+    }
+
+    cases = [
+        ("你好", {}, "ask_clarification"),
+        ("可以，做吧", context, "stock_screen"),
+        ("查看第一只详情", context, "stock_detail"),
+        ("为什么这些股票排在前面", context, "explain_result"),
+    ]
+
+    for query, ctx, expected_tool in cases:
+        res = strategy_selector.plan_chat_agent(query, context=ctx, limit=10)
+        assert res.plan.tool == expected_tool
+        assert res.plan.ai_used is False
+        assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
 
 
 def test_chat_agent_uses_model_strategy_design_copy(db, seed_stocks, monkeypatch):
@@ -855,7 +877,7 @@ class TestModelPlannerIntegration:
             }
         }
 
-        res = strategy_selector.run_chat_agent(db, "打开招商银行详情", context=context, limit=10)
+        res = strategy_selector.plan_agent_selection("打开招商银行详情", context=context, limit=10)
 
         assert res.plan.tool == "stock_detail"
         assert res.plan.ai_used is True

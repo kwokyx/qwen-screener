@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -79,16 +80,29 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "trade_date": result.trade_date,
         }
 
-    def response_payload(response) -> dict:
+    def response_payload(response, timings: dict | None = None) -> dict:
+        timings = timings or {}
         plan = response.plan
         ai_source = "ai_agent" if plan.ai_used else ("local_fallback" if plan.ai_configured else "local_rules")
+        timing_payload = {
+            "planning_ms": int(timings.get("planning_ms") or 0),
+            "model_ms": int(timings.get("model_ms") or 0),
+            "tool_ms": int(timings.get("tool_ms") or 0),
+            "fallback_reason": timings.get("fallback_reason"),
+        }
         return {
+            "query": response.query,
             "plan": plan.model_dump(),
             "conditions": [c.model_dump() for c in plan.conditions],
             "answer": response.answer,
             "warnings": response.warnings,
             "tool_trace": response.tool_trace,
             "tool_calls": [call.model_dump() for call in response.tool_calls],
+            "timings": timing_payload,
+            "planning_ms": timing_payload["planning_ms"],
+            "model_ms": timing_payload["model_ms"],
+            "tool_ms": timing_payload["tool_ms"],
+            "fallback_reason": timing_payload["fallback_reason"],
             "ai_status": {
                 "configured": plan.ai_configured,
                 "used": plan.ai_used,
@@ -101,41 +115,70 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
     def _stage_text(tool: str, source: str) -> str:
         """Return truthful SSE stage text for each tool."""
         labels = {
-            "stock_screen": "正在执行筛选",
-            "strategy_design": "正在生成策略",
-            "strategy_select": "正在执行策略选股",
-            "explain_result": "正在解释结果",
-            "stock_detail": "正在定位详情页",
-            "ask_clarification": "正在请求补充信息",
+            "stock_screen": "股票筛选",
+            "strategy_design": "策略设计",
+            "strategy_select": "策略选股",
+            "explain_result": "结果解释",
+            "stock_detail": "详情页定位",
+            "ask_clarification": "补充追问",
         }
-        return f"{labels.get(tool, '正在处理')}（{source}）…\n"
+        if tool in {"stock_screen", "strategy_select"}:
+            return f"正在执行本地工具：{labels.get(tool, '处理')}…\n"
+        return f"正在整理响应：{labels.get(tool, '处理')}（{source}）…\n"
+
+    def _fallback_reason(response) -> str | None:
+        plan = response.plan
+        if plan.ai_used:
+            return None
+        if response.tool_trace and response.tool_trace[0].startswith("本地快速路径命中"):
+            return "local_fast_path"
+        if response.warnings:
+            return response.warnings[0]
+        if plan.ai_configured:
+            return "local_rules"
+        return None
 
     def gen():
-        yield event({"type": "thinking", "text": "正在判断需求…\n"})
+        timings = {
+            "planning_ms": 0,
+            "model_ms": 0,
+            "tool_ms": 0,
+            "fallback_reason": None,
+        }
+        yield event({"type": "thinking", "text": "正在选择工具（优先本地快速判断，必要时调用模型）…\n"})
         try:
+            planning_started = time.perf_counter()
             response = strategy_selector.plan_chat_agent(
                 req.query,
                 context=req.context or {},
                 limit=50,
             )
+            timings["planning_ms"] = int((time.perf_counter() - planning_started) * 1000)
         except Exception as e:
             logger.exception("Agent 规划失败")
             yield event({"type": "error", "message": f"智能筛选规划失败: {e}"})
             return
 
         plan = response.plan
+        model_attempted = plan.ai_used or any("模型" in warning for warning in response.warnings)
+        timings["model_ms"] = timings["planning_ms"] if model_attempted else 0
+        timings["fallback_reason"] = _fallback_reason(response)
         source = "AI 模型" if plan.ai_used else "本地规则"
         effective_limit = min(max(plan.limit, 1), 50)
         logger.info(
-            "Agent SSE 规划完成: tool={} source={} validated=true conditions={}",
+            "Agent SSE 规划完成: tool={} source={} validated=true conditions={} planning_ms={} model_ms={} fallback_reason={}",
             plan.tool,
             "model" if plan.ai_used else "local",
             len(plan.conditions),
+            timings["planning_ms"],
+            timings["model_ms"],
+            timings["fallback_reason"],
         )
-        yield event({"type": "thinking", "text": f"已选择工具：{plan.tool_label}（{source}）\n"})
+        yield event({"type": "thinking", "text": f"已选择工具：{plan.tool_label}（{source}，模型耗时 {timings['model_ms']}ms）\n"})
         yield event({"type": "thinking", "text": "参数校验已完成\n"})
 
-        common = response_payload(response)
+        common = response_payload(response, timings)
+        yield event({"type": "planning", **common})
         for call in response.tool_calls:
             yield event({"type": "tool_call", "tool_call": call.model_dump()})
 
@@ -175,7 +218,9 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 },
             })
             try:
+                tool_started = time.perf_counter()
                 response = strategy_selector.execute_agent_plan(db, response, limit=effective_limit)
+                timings["tool_ms"] = int((time.perf_counter() - tool_started) * 1000)
             except Exception as e:
                 logger.exception("结构化股票筛选失败")
                 yield event({"type": "error", "message": f"筛选工具执行失败: {e}"})
@@ -184,12 +229,13 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 yield event({"type": "error", "message": "筛选工具没有返回结果"})
                 return
             logger.info(
-                "Agent SSE 工具完成: tool=stock_screen total={}",
+                "Agent SSE 工具完成: tool=stock_screen total={} tool_ms={}",
                 response.screen_result.total,
+                timings["tool_ms"],
             )
             yield event({
                 "type": "result",
-                **response_payload(response),
+                **response_payload(response, timings),
                 **screen_result_payload(response.screen_result),
             })
             yield event({"type": "thinking", "text": "已生成结果\n"})
@@ -227,14 +273,17 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 },
             })
             try:
+                tool_started = time.perf_counter()
                 response = strategy_selector.execute_agent_plan(db, response, limit=effective_limit)
+                timings["tool_ms"] = int((time.perf_counter() - tool_started) * 1000)
             except Exception as e:
                 logger.exception("策略选股失败")
                 yield event({"type": "error", "message": f"策略选股执行失败: {e}"})
                 return
             logger.info(
-                "Agent SSE 工具完成: tool=strategy_select total={}",
+                "Agent SSE 工具完成: tool=strategy_select total={} tool_ms={}",
                 response.strategy_result.total if response.strategy_result else 0,
+                timings["tool_ms"],
             )
 
         # explain_result / stock_detail / ask_clarification are non-executing
@@ -242,7 +291,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             logger.info("Agent SSE 跳过执行: tool={} reason=non-executing", plan.tool)
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
 
-        payload = {"type": "agent", **response_payload(response)}
+        payload = {"type": "agent", **response_payload(response, timings)}
         if response.strategy_result is not None:
             payload["result"] = strategy_result_payload(response.strategy_result)
         yield event(payload)

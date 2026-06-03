@@ -143,6 +143,53 @@ function zeroResultHintFor(turn) {
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
 const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
 const sourceLabel = computed(() => agentSourceLabel(agentPlan.value, screenMeta.value?.ai_status))
+function fmtRuntimeMs(ms) {
+  const n = Number(ms || 0)
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}s`
+  return `${Math.max(0, Math.round(n))}ms`
+}
+function fallbackReasonText(reason) {
+  if (!reason) return ''
+  if (reason === 'local_fast_path') return '本地快速路径'
+  if (reason === 'local_rules') return '本地规则'
+  const text = String(reason)
+  return text.length > 42 ? `${text.slice(0, 42)}…` : text
+}
+const runtimeRows = computed(() => {
+  const turn = latestTurn.value
+  const meta = turn?.screenMeta || screenMeta.value || {}
+  const timings = meta.timings || meta
+  const hasTiming = (
+    timings.planning_ms != null ||
+    timings.model_ms != null ||
+    timings.tool_ms != null ||
+    timings.fallback_reason != null
+  )
+  if (!hasTiming) return []
+  const tool = meta.tool || turn?.agentPlan?.tool || agentPlan.value?.tool
+  const modelMs = Number(timings.model_ms || 0)
+  const toolMs = Number(timings.tool_ms || 0)
+  const usedModel = meta.ai_status?.used === true || meta.ai_status?.source === 'ai_agent'
+  const rows = [
+    {
+      label: '工具选择',
+      value: usedModel ? `模型规划 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`,
+      state: usedModel ? 'model' : 'local',
+    },
+  ]
+  if (tool === 'stock_screen' || tool === 'strategy_select') {
+    rows.push({
+      label: '本地工具',
+      value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : (phase.value === 'screening' ? '执行中…' : '0ms'),
+      state: phase.value === 'screening' ? 'running' : 'local',
+    })
+  } else {
+    rows.push({ label: '本地工具', value: '未执行筛选', state: 'skip' })
+  }
+  const reason = fallbackReasonText(timings.fallback_reason)
+  if (reason) rows.push({ label: '兜底原因', value: reason, state: 'skip' })
+  return rows
+})
 const aiStatusLine = computed(() => {
   if (!aiStatus.configured) return 'AI 未配置 · 本地规则'
   if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 本地规则兜底`
@@ -490,7 +537,7 @@ const stageColor = (s) => ({
                 {{ aiStatusLine }}
               </span>
               <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">
-                {{ phase === 'thinking' ? '判断中…' : phase === 'screening' ? '执行中…' : aiStatusLine }}
+                {{ phase === 'thinking' ? '选择工具中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
               </span>
               <div style="flex:1" />
               <button v-if="isStreaming" @click="stop"
@@ -549,7 +596,7 @@ const stageColor = (s) => ({
                 <div class="thinking-card">
                   <div class="thinking-head">
                     <Icon name="brain" :size="11" :color="A2.qwen" />
-                    <span>正在判断工具调用…</span>
+                    <span>正在选择工具…</span>
                     <span class="dot-flow"><i></i><i></i><i></i></span>
                   </div>
                   <pre v-if="turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
@@ -667,6 +714,13 @@ const stageColor = (s) => ({
         </div>
 
         <template v-else>
+          <div v-if="runtimeRows.length" class="runtime-list">
+            <div v-for="row in runtimeRows" :key="row.label" class="runtime-row" :class="row.state">
+              <span>{{ row.label }}</span>
+              <strong>{{ row.value }}</strong>
+            </div>
+          </div>
+
           <div v-if="toolCallRows.length" class="tool-call-list">
             <div v-for="call in toolCallRows" :key="call.id" class="tool-call-row" :style="{ '--state': toolStatusColor(call.status) }">
               <div class="tool-call-head">
@@ -1220,6 +1274,46 @@ const stageColor = (s) => ({
 }
 .history-item:hover .history-del { display: inline-flex; }
 .history-del:hover { background: rgba(200, 49, 42, 0.10); color: #C8312A; }
+
+.runtime-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.runtime-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #EDEDED;
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.runtime-row span {
+  color: #A1A1AA;
+  font-weight: 600;
+}
+
+.runtime-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #2F3137;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-row.model { border-color: rgba(36, 86, 216, 0.22); }
+.runtime-row.local { border-color: rgba(45, 125, 82, 0.22); }
+.runtime-row.running { border-color: rgba(36, 86, 216, 0.32); background: rgba(36, 86, 216, 0.05); }
+.runtime-row.skip { background: #F7F7F7; }
 
 .tool-call-list {
   display: grid;

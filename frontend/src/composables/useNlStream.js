@@ -42,6 +42,35 @@ function normalizeTurn(raw = {}) {
   }
 }
 
+function extractTimingMeta(ev = {}, previousMeta = {}) {
+  const source = ev.timings || {}
+  const hasTiming = (
+    ev.planning_ms != null ||
+    ev.model_ms != null ||
+    ev.tool_ms != null ||
+    ev.fallback_reason != null ||
+    source.planning_ms != null ||
+    source.model_ms != null ||
+    source.tool_ms != null ||
+    source.fallback_reason != null
+  )
+  if (!hasTiming) return {}
+  const previous = previousMeta.timings || {}
+  const timings = {
+    planning_ms: ev.planning_ms ?? source.planning_ms ?? previous.planning_ms ?? previousMeta.planning_ms ?? 0,
+    model_ms: ev.model_ms ?? source.model_ms ?? previous.model_ms ?? previousMeta.model_ms ?? 0,
+    tool_ms: ev.tool_ms ?? source.tool_ms ?? previous.tool_ms ?? previousMeta.tool_ms ?? 0,
+    fallback_reason: ev.fallback_reason ?? source.fallback_reason ?? previous.fallback_reason ?? previousMeta.fallback_reason ?? null,
+  }
+  return {
+    timings,
+    planning_ms: timings.planning_ms,
+    model_ms: timings.model_ms,
+    tool_ms: timings.tool_ms,
+    fallback_reason: timings.fallback_reason,
+  }
+}
+
 function loadCurrentThread() {
   try {
     const raw = sessionStorage.getItem(CURRENT_THREAD_KEY) || localStorage.getItem(CURRENT_THREAD_KEY)
@@ -281,6 +310,7 @@ export function useNlStream(historyStore, hooks = {}) {
     }
     screenMeta.value = {
       ...previousMeta,
+      ...extractTimingMeta(ev, previousMeta),
       mode: ev.plan?.tool || 'agent',
       tool: ev.plan?.tool || 'agent',
       tool_label: ev.plan?.tool_label || 'Agent',
@@ -360,6 +390,8 @@ export function useNlStream(historyStore, hooks = {}) {
           applyAgentMeta(ev)
           phase.value = 'parsed'
           tParsed.value = Date.now()
+        } else if (ev.type === 'planning') {
+          applyAgentMeta(ev)
         } else if (ev.type === 'design') {
           applyAgentMeta(ev)
           phase.value = 'done'
@@ -386,6 +418,7 @@ export function useNlStream(historyStore, hooks = {}) {
           if (ev.tool_call) mergeToolCall(ev.tool_call)
           screenMeta.value = {
             ...(screenMeta.value || {}),
+            ...extractTimingMeta(ev, screenMeta.value || {}),
             tool: ev.tool || screenMeta.value?.tool || 'stock_screen',
             tool_label: ev.tool_label || screenMeta.value?.tool_label || '股票筛选',
             tool_calls: cloneJson(toolCalls.value, []),

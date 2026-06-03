@@ -16,6 +16,8 @@ from app.config import settings
 from app.schemas.screener import ALLOWED_FIELDS, FilterCondition
 from .transport import openai_client
 
+_AGENT_PLAN_TIMEOUT_SECONDS = 10.0
+
 # ---------------------------------------------------------------------------
 # 六个模型可见工具
 # ---------------------------------------------------------------------------
@@ -189,10 +191,12 @@ TOOLS: list[dict] = [
                 "properties": {
                     "missing_info": {
                         "type": "array",
-                        "description": "需要用户补充的信息类别",
+                        "description": (
+                            "需要用户补充的信息类别。建议值：行业、风格偏好、估值范围、持有周期、风险承受。"
+                            "不确定时可以省略或传空数组。"
+                        ),
                         "items": {
                             "type": "string",
-                            "enum": ["行业", "风格偏好", "估值范围", "持有周期", "风险承受"],
                         },
                     },
                     "question": {
@@ -200,7 +204,6 @@ TOOLS: list[dict] = [
                         "description": "向用户提出的具体澄清问题",
                     },
                 },
-                "required": ["missing_info"],
             },
         },
     },
@@ -214,6 +217,29 @@ STRING_FIELDS: frozenset[str] = frozenset({"industry", "market"})
 VALID_STRATEGY_IDS: frozenset[str] = frozenset({
     "turtle_breakout", "ma_volume", "rps_breakout", "high_tight_flag",
 })
+VALID_MISSING_INFO: frozenset[str] = frozenset({
+    "行业", "风格偏好", "估值范围", "持有周期", "风险承受",
+})
+MISSING_INFO_ALIASES: dict[str, str] = {
+    "行业板块": "行业",
+    "板块": "行业",
+    "赛道": "行业",
+    "主题": "行业",
+    "股票类型": "风格偏好",
+    "类型": "风格偏好",
+    "风格": "风格偏好",
+    "投资风格": "风格偏好",
+    "指标偏好": "风格偏好",
+    "估值": "估值范围",
+    "估值水平": "估值范围",
+    "价格范围": "估值范围",
+    "周期": "持有周期",
+    "投资周期": "持有周期",
+    "时间周期": "持有周期",
+    "风险": "风险承受",
+    "风险偏好": "风险承受",
+    "风险承受能力": "风险承受",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -324,16 +350,32 @@ class StockDetailArgs(_StrictArgs):
 
 
 class AskClarificationArgs(_StrictArgs):
-    missing_info: list[str] = Field(default_factory=list, max_length=5)
+    missing_info: list[str] = Field(default_factory=list)
     question: str = Field(default="", max_length=300)
+
+    @field_validator("missing_info", mode="before")
+    @classmethod
+    def _coerce_missing_info(cls, value: Any) -> list[Any]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return value
+        return []
 
     @field_validator("missing_info")
     @classmethod
-    def _valid_missing_info(cls, value: list[str]) -> list[str]:
-        allowed = {"行业", "风格偏好", "估值范围", "持有周期", "风险承受"}
-        if any(item not in allowed for item in value):
-            raise ValueError("missing_info 包含未知类别")
-        return value
+    def _normalize_missing_info(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if not text:
+                continue
+            text = MISSING_INFO_ALIASES.get(text, text)
+            if text in VALID_MISSING_INFO and text not in normalized:
+                normalized.append(text)
+        return normalized[:5]
 
 
 TOOL_ARGS_SCHEMA: dict[str, type[BaseModel]] = {
@@ -398,7 +440,7 @@ def plan_agent_turn(
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",
-            timeout=30.0,
+            timeout=_AGENT_PLAN_TIMEOUT_SECONDS,
         )
     except Exception as e:
         logger.info("Agent FC 不可用，回退本地规则: {}", str(e)[:120])
@@ -493,6 +535,8 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
         "调整排序时只修改 sort_by/sort_desc；换一批时沿用条件并增加 offset；"
         "查看第一只/第二只详情时使用 stock_detail；追问命中原因时使用 explain_result，不要重新筛选。"
         "如果上下文不足，使用 ask_clarification。\n"
+        "ask_clarification 的 missing_info 只使用：行业、风格偏好、估值范围、持有周期、风险承受；"
+        "不确定时省略 missing_info，只给 question。\n"
         "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；"
         "成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；"
         "小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"

@@ -621,25 +621,39 @@ def preview_chat_plan(
 ) -> StrategyAgentPlan:
     """Return a fast local routing preview for progressive SSE feedback."""
     context = context or {}
-    if is_adjustment_query(query):
-        return build_adjust_conditions_response(query, context, ai_configured=_ai_configured()).plan
-    if is_result_page_query(query):
-        return build_context_page_response(query, context, limit=limit, ai_configured=_ai_configured()).plan
-    if is_result_sort_query(query):
-        return build_context_sort_response(query, context, ai_configured=_ai_configured()).plan
-    if is_confirmation_query(query):
-        return build_context_screen_response(query, context, ai_configured=_ai_configured()).plan
-    if is_stock_detail_query(query):
-        return build_stock_detail_response(query, context, ai_configured=_ai_configured()).plan
-    if is_result_explanation_query(query):
-        if is_explain_result_query(query, context):
-            return build_explain_result_response(query, context, ai_configured=_ai_configured()).plan
-        return build_missing_context_response(query, ai_configured=_ai_configured()).plan
+    fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=_ai_configured())
+    if fast_path is not None:
+        return fast_path.plan
     if is_strategy_design_query(query):
         return build_strategy_design_response(query, ai_configured=_ai_configured()).plan
-    if is_clarification_query(query):
-        return build_clarification_response(query, ai_configured=_ai_configured()).plan
     return _plan_agent_locally(query, limit, _ai_configured())
+
+
+def _plan_chat_fast_path(
+    query: str,
+    context: dict[str, Any],
+    *,
+    limit: int,
+    ai_configured: bool,
+) -> StrategyAgentResponse | None:
+    """Resolve deterministic chat intents before asking the remote model."""
+    if is_adjustment_query(query):
+        return build_adjust_conditions_response(query, context, ai_configured=ai_configured)
+    if is_result_page_query(query):
+        return build_context_page_response(query, context, limit=limit, ai_configured=ai_configured)
+    if is_result_sort_query(query):
+        return build_context_sort_response(query, context, ai_configured=ai_configured)
+    if is_confirmation_query(query):
+        return build_context_screen_response(query, context, ai_configured=ai_configured)
+    if is_stock_detail_query(query):
+        return build_stock_detail_response(query, context, ai_configured=ai_configured)
+    if is_result_explanation_query(query):
+        if is_explain_result_query(query, context):
+            return build_explain_result_response(query, context, ai_configured=ai_configured)
+        return build_missing_context_response(query, ai_configured=ai_configured)
+    if is_clarification_query(query):
+        return build_clarification_response(query, ai_configured=ai_configured)
+    return None
 
 
 def plan_chat_agent(
@@ -649,6 +663,12 @@ def plan_chat_agent(
 ) -> StrategyAgentResponse:
     """Route and plan a chat turn without executing stock tools."""
     context = context or {}
+    ai_configured = _ai_configured()
+    fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=ai_configured)
+    if fast_path is not None:
+        fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
+        return fast_path
+
     model_fallback: StrategyAgentResponse | None = None
     ai_status = _ai_status()
     if ai_status.get("configured") and ai_status.get("ok"):
@@ -656,25 +676,6 @@ def plan_chat_agent(
         if model_fallback.plan.ai_used:
             return model_fallback
 
-    def local_response(response: StrategyAgentResponse) -> StrategyAgentResponse:
-        if model_fallback is not None:
-            response.warnings = [*model_fallback.warnings, *response.warnings]
-        return response
-
-    if is_adjustment_query(query):
-        return local_response(build_adjust_conditions_response(query, context, ai_configured=_ai_configured()))
-    if is_result_page_query(query):
-        return local_response(build_context_page_response(query, context, limit=limit, ai_configured=_ai_configured()))
-    if is_result_sort_query(query):
-        return local_response(build_context_sort_response(query, context, ai_configured=_ai_configured()))
-    if is_confirmation_query(query):
-        return local_response(build_context_screen_response(query, context, ai_configured=_ai_configured()))
-    if is_stock_detail_query(query):
-        return local_response(build_stock_detail_response(query, context, ai_configured=_ai_configured()))
-    if is_result_explanation_query(query):
-        if is_explain_result_query(query, context):
-            return local_response(build_explain_result_response(query, context, ai_configured=_ai_configured()))
-        return local_response(build_missing_context_response(query, ai_configured=_ai_configured()))
     return model_fallback or plan_agent_selection(query, limit=limit, context=context)
 
 

@@ -107,12 +107,6 @@ def _freshness_diagnostics(
             f"{latest_trade_date}；这通常来自详情页懒加载或同步尚未完成。"
         )
         recommended_jobs = ["daily_market", "daily_value"]
-    elif sync_warnings:
-        reason_code = "sync_issue"
-        label = f"落后 {max(lag_days or 0, 1)} 天"
-        severity = "stale"
-        message = "全市场行情落后，且有同步任务异常；请查看异常任务后重新同步。"
-        recommended_jobs = ["daily_market", "daily_value"]
     elif active_jobs:
         reason_code = "sync_running"
         label = "同步中"
@@ -123,7 +117,10 @@ def _freshness_diagnostics(
         reason_code = "stale"
         label = f"落后 {max(lag_days or 0, 1)} 天"
         severity = "stale"
-        message = "全市场行情落后于最近应有交易日，请优先运行日线行情同步。"
+        if sync_warnings:
+            message = "全市场行情落后于最近应有交易日，且有同步任务异常；请查看异常任务后重新同步。"
+        else:
+            message = "全市场行情落后于最近应有交易日，请优先运行日线行情同步。"
         recommended_jobs = ["daily_market", "daily_value"]
 
     return {

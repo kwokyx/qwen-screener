@@ -156,30 +156,38 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     client = TestClient(app)
     context = {}
     cases = [
-        ("低估值高分红的银行股", "stock_screen", True, "result"),
-        ("为什么这些股票排在前面", "explain_result", False, "agent"),
-        ("按股息率排序", "stock_screen", True, "result"),
-        ("换一批", "stock_screen", True, "result"),
-        ("查看第一只详情", "stock_detail", False, "agent"),
-        ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design"),
-        ("现在执行", "stock_screen", True, "result"),
-        ("你好", "ask_clarification", False, "agent"),
-        ("可以，做吧", "ask_clarification", False, "agent"),
+        ("低估值高分红的银行股", "stock_screen", True, "result", True, 1),
+        ("为什么这些股票排在前面", "explain_result", False, "agent", False, 0),
+        ("按股息率排序", "stock_screen", True, "result", False, 1),
+        ("换一批", "stock_screen", True, "result", False, 1),
+        ("查看第一只详情", "stock_detail", False, "agent", False, 0),
+        ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", True, 0),
+        ("现在执行", "stock_screen", True, "result", False, 0),
+        ("你好", "ask_clarification", False, "agent", False, 0),
+        ("可以，做吧", "ask_clarification", False, "agent", False, 0),
     ]
 
-    for query, expected_tool, should_screen, terminal_type in cases:
+    for query, expected_tool, should_screen, terminal_type, expected_ai_used, min_total in cases:
         events = _stream_events(client, query, context=context)
         event_types = _event_types(events)
         terminal = next(event for event in reversed(events) if event["type"] == terminal_type)
 
         assert terminal["plan"]["tool"] == expected_tool
-        assert terminal["plan"]["ai_used"] is True
+        assert terminal["plan"]["ai_used"] is expected_ai_used
+        assert "planning" in event_types
+        assert isinstance(terminal["model_ms"], int)
+        assert isinstance(terminal["tool_ms"], int)
+        if expected_ai_used:
+            assert terminal["fallback_reason"] is None
+        else:
+            assert terminal["model_ms"] == 0
+            assert terminal["fallback_reason"] == "local_fast_path"
         assert event_types[-1] == "done"
         assert ("screening" in event_types) is should_screen
         assert ("result" in event_types) is should_screen
         if should_screen:
             assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
-            assert terminal["total"] >= 1
+            assert terminal["total"] >= min_total
             assert any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
         else:
             assert "parsed" not in event_types
@@ -498,7 +506,7 @@ def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, m
     assert "screening" not in event_types
     assert "result" not in event_types
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在定位详情页" in t for t in thinking_texts)
+    assert any("正在整理响应：详情页定位" in t for t in thinking_texts)
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "stock_detail"
     detail_call = next(call for call in agent["tool_calls"] if call["name"] == "stock_detail")
@@ -571,7 +579,7 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
     assert any("已选择工具" in t for t in thinking_texts)
     assert any("参数校验已完成" in t for t in thinking_texts)
-    assert any("正在执行筛选" in t for t in thinking_texts)
+    assert any("正在执行本地工具：股票筛选" in t for t in thinking_texts)
     assert any("已生成结果" in t for t in thinking_texts)
 
     parsed = next(event for event in events if event["type"] == "parsed")
@@ -586,7 +594,12 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
         "fallback": False,
     }
     assert parsed["tool_calls"]
+    assert parsed["model_ms"] >= 0
+    assert parsed["tool_ms"] == 0
     assert result["total"] == 1
+    assert result["model_ms"] >= 0
+    assert result["tool_ms"] >= 0
+    assert result["fallback_reason"] is None
     assert result["items"][0]["code"] == "600036.SH"
     assert any(call["name"] == "stock_screen" and call["result"]["total"] == 1 for call in result["tool_calls"])
 
@@ -626,14 +639,14 @@ def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
     assert any("已选择工具" in t for t in thinking_texts)
     assert any("参数校验已完成" in t for t in thinking_texts)
-    assert any("正在生成策略" in t for t in thinking_texts)
+    assert any("正在整理响应：策略设计" in t for t in thinking_texts)
 
     design = next(event for event in events if event["type"] == "design")
     assert design["plan"]["tool"] == "strategy_design"
     assert design["plan"]["ai_used"] is True
 
 
-def test_nl_stream_model_chooses_explain_result_skips_screening(db, seed_stocks, monkeypatch):
+def test_nl_stream_fast_path_explain_result_skips_screening(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -674,11 +687,13 @@ def test_nl_stream_model_chooses_explain_result_skips_screening(db, seed_stocks,
     assert "result" not in event_types
 
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在解释结果" in t for t in thinking_texts)
+    assert any("正在整理响应：结果解释" in t for t in thinking_texts)
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "explain_result"
-    assert agent["plan"]["ai_used"] is True
+    assert agent["plan"]["ai_used"] is False
+    assert agent["model_ms"] == 0
+    assert agent["fallback_reason"] == "local_fast_path"
 
 
 def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
@@ -738,10 +753,10 @@ def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypa
 
     events = _events(body)
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在判断需求" in t for t in thinking_texts)
+    assert any("正在选择工具" in t for t in thinking_texts)
     assert any("已选择工具" in t for t in thinking_texts)
     assert any("参数校验已完成" in t for t in thinking_texts)
-    assert any("正在执行筛选" in t for t in thinking_texts)
+    assert any("正在执行本地工具：股票筛选" in t for t in thinking_texts)
     assert any("已生成结果" in t for t in thinking_texts)
     # Should mention local rule source
     assert any("本地规则" in t for t in thinking_texts)
