@@ -336,6 +336,83 @@ const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value
 
 const fmtNum = (v, d = 2) => v != null ? v.toFixed(d) : '—'
 const fmtPositive = (v, d = 2) => v != null && v > 0 ? v.toFixed(d) : '—'
+const metricUnits = {
+  roe: '%',
+  dividend_yield: '%',
+  revenue_yoy: '%',
+  profit_yoy: '%',
+  gross_margin: '%',
+  debt_ratio: '%',
+  market_cap: '亿',
+  turnover: '%',
+}
+
+function rowValue(row, field) {
+  if (field === 'market') return null
+  return row?.[field]
+}
+
+function shortMetricLabel(field) {
+  return (fieldLabels[field] || field).replace('(TTM)', '')
+}
+
+function formatReasonValue(field, value) {
+  if (value == null || value === '') return null
+  if (typeof value === 'number') {
+    const unit = metricUnits[field] || ''
+    return `${Number(value).toFixed(field === 'market_cap' ? 0 : 2)}${unit}`
+  }
+  return String(value)
+}
+
+function conditionMatches(row, condition) {
+  const value = rowValue(row, condition.field)
+  if (value == null) return false
+  if (condition.op === 'eq') return String(value).includes(String(condition.value))
+  if (condition.op === 'in') return Array.isArray(condition.value) && condition.value.some((v) => String(value).includes(String(v)))
+  const n = Number(value)
+  if (!Number.isFinite(n)) return false
+  if (condition.op === 'gt') return n > Number(condition.value)
+  if (condition.op === 'gte') return n >= Number(condition.value)
+  if (condition.op === 'lt') return n < Number(condition.value)
+  if (condition.op === 'lte') return n <= Number(condition.value)
+  if (condition.op === 'between' && Array.isArray(condition.value)) {
+    return n >= Number(condition.value[0]) && n <= Number(condition.value[1])
+  }
+  return false
+}
+
+function conditionReason(row, condition) {
+  if (!conditionMatches(row, condition)) return null
+  const value = rowValue(row, condition.field)
+  const label = shortMetricLabel(condition.field)
+  const formatted = formatReasonValue(condition.field, value)
+  if (!formatted) return null
+  if (condition.field === 'industry') return `行业 ${formatted}`
+  return `${label} ${formatted}`
+}
+
+function fallbackReasons(row) {
+  return [
+    row.score >= 75 ? `综合分 ${row.score.toFixed(1)}` : null,
+    row.pe != null && row.pe > 0 && row.pe < 15 ? `低 PE ${row.pe.toFixed(2)}` : null,
+    row.pb != null && row.pb < 1.5 ? `低 PB ${row.pb.toFixed(2)}` : null,
+    row.roe != null && row.roe >= 15 ? `ROE ${row.roe.toFixed(2)}%` : null,
+    row.dividend_yield != null && row.dividend_yield >= 4 ? `股息 ${row.dividend_yield.toFixed(2)}%` : null,
+    row.market_cap != null && row.market_cap >= 1000 ? `市值 ${Math.round(row.market_cap).toLocaleString()}亿` : null,
+  ].filter(Boolean)
+}
+
+function hitReasons(row) {
+  const conditions = filterMode.value === 'agent'
+    ? (agentContext.value?.conditions || [])
+    : (conditionSets[filterMode.value] || [])
+  const matched = conditions
+    .map((condition) => conditionReason(row, condition))
+    .filter(Boolean)
+  const reasons = matched.length ? matched : fallbackReasons(row)
+  return reasons.slice(0, 3)
+}
 
 function remoteSort(key) {
   return {
@@ -382,6 +459,22 @@ const columns = computed(() => [
     key: 'industry',
     minWidth: 90,
     render: (s) => h(NTag, { size: 'small', bordered: false, style: { maxWidth: '118px' } }, { default: () => s.industry || '—' }),
+  },
+  {
+    title: '命中原因',
+    key: 'reason',
+    minWidth: 176,
+    render: (s) => {
+      const reasons = hitReasons(s)
+      if (!reasons.length) {
+        return h('span', { class: 'reason-muted' }, '查看详情')
+      }
+      return h('div', { class: 'hit-reasons' }, reasons.map((reason) => h(NTag, {
+        size: 'small',
+        bordered: false,
+        class: 'hit-reason-tag',
+      }, { default: () => reason })))
+    },
   },
   {
     title: '综合分',
@@ -829,7 +922,7 @@ watch(
           :pagination="false"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1360"
+          :scroll-x="1520"
           size="small"
           remote
           @update:sorter="handleSorterChange"
@@ -1023,6 +1116,29 @@ watch(
   max-width: 96px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.hit-reasons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.hit-reason-tag {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 4px;
+  background: #F5F7FA;
+  color: #334155;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+}
+
+.reason-muted {
+  color: #A1A1AA;
+  font-size: 12px;
 }
 
 .stat-card :deep(.n-card__content) {

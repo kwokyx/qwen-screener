@@ -107,6 +107,15 @@ const klineLoading = ref(false)
 const klineError = ref('')
 const indicators = ['MA', 'BOLL', 'MACD', 'KDJ', 'RSI']
 const activeIndicator = ref(0)
+const indicatorHints = {
+  MA: '均线趋势',
+  BOLL: '布林区间',
+  MACD: '趋势动能',
+  KDJ: '短线摆动',
+  RSI: '强弱指标',
+}
+const activeIndicatorName = computed(() => indicators[activeIndicator.value] || indicators[0])
+const activeIndicatorHint = computed(() => indicatorHints[activeIndicatorName.value] || '技术指标')
 const detailTabs = ['财务摘要', '估值', '同行对比', '基本信息']
 const detailTab = ref(0)
 const baselineDailyBars = 240
@@ -795,6 +804,9 @@ function peerRowProps(row) {
             </div>
             <div class="kline-meta">
               <span class="kline-mode">{{ klineDataType }}</span>
+              <span class="kline-indicator">
+                指标 <strong>{{ activeIndicatorName }}</strong> · {{ activeIndicatorHint }}
+              </span>
               <span
                 v-for="item in klineStats"
                 :key="item.label"
@@ -811,7 +823,7 @@ function peerRowProps(row) {
                 v-if="chartDisplayData.length"
                 :data="chartDisplayData"
                 :height="390"
-                :indicator="indicators[activeIndicator]"
+                :indicator="activeIndicatorName"
                 :visible-bars="klineVisibleBars"
                 :period="klineFrequency"
               />
@@ -1190,6 +1202,7 @@ function peerRowProps(row) {
 }
 
 .kline-mode,
+.kline-indicator,
 .kline-stat {
   font-size: 10.5px;
   color: #71717A;
@@ -1206,6 +1219,18 @@ function peerRowProps(row) {
   border: 1px solid #E5E7EB;
   border-radius: 4px;
   background: #FFFFFF;
+}
+
+.kline-indicator {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #EEF4FF;
+  color: #2456D8;
+}
+
+.kline-indicator strong {
+  font-family: 'IBM Plex Mono', monospace;
+  color: #1D4ED8;
 }
 
 .kline-stat strong {

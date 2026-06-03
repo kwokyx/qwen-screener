@@ -145,6 +145,31 @@ def test_eval_vague_question_asks_for_clarification(db, seed_stocks, monkeypatch
     assert "我先不筛股票" in result.answer
 
 
+@pytest.mark.parametrize("query", ["你好", "谢谢", "随便聊聊"])
+def test_eval_smalltalk_never_screens_market(db, seed_stocks, query, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("闲聊语不应调用筛选工具")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    result = strategy_selector.run_agent_selection(db, query, limit=10)
+
+    assert result.plan.tool == "ask_clarification"
+    assert result.screen_result is None
+    assert len(result.plan.conditions) == 0
+    _assert_not_implicit_full_market(result)
+
+
+def test_eval_explicit_all_market_is_allowed(db, seed_stocks):
+    result = strategy_selector.run_agent_selection(db, "显示全市场股票", limit=10)
+
+    assert result.plan.tool == "stock_screen"
+    assert len(result.plan.conditions) == 0
+    assert result.screen_result is not None
+    assert result.screen_result.total >= 1
+    assert any(call.name == "stock_screen" for call in result.tool_calls)
+    _assert_not_implicit_full_market(result)
+
+
 def test_eval_sort_request_reuses_previous_conditions(db, seed_stocks):
     context = {
         "last_plan": {"tool": "stock_screen", "logic": "AND"},

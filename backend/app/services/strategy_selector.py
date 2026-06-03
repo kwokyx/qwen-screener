@@ -634,6 +634,14 @@ def is_clarification_query(query: str) -> bool:
     if is_confirmation_query(query):
         return True
 
+    normalized = "".join(ch for ch in q if ch not in "，。！？!?、,. ")
+    smalltalk_terms = {
+        "你好", "您好", "hello", "hi", "嗨", "谢谢", "感谢", "辛苦了",
+        "随便聊聊", "聊聊", "在吗", "你是谁",
+    }
+    if normalized in smalltalk_terms:
+        return True
+
     vague_terms = (
         "帮我选点", "帮我选一些", "帮我选几个", "推荐点", "推荐几个", "推荐一些",
         "有什么股票", "买什么", "可以买", "好股票", "随便选", "来几个",
