@@ -194,7 +194,9 @@ health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发
 | 周日 03:00 | `weekly_kline_backfill` | 全市场 60d K 线回填 |
 | 每 6h | `db_backup` | SQLite 冷备份 → `/app/data/backups/` |
 
-任务执行结果落 `sync_meta` 表，前端 `/health/data` 可查「最后更新于…」。接口会同时返回 `freshness` 诊断对象，区分全市场行情落后、详情页稀疏新数据、同步任务异常和后台同步中。
+任务执行结果落 `sync_meta` 表，前端 `/health/data` 可查「最后更新于…」。接口会同时返回 `freshness` 诊断对象，区分全市场行情落后、详情页稀疏新数据和后台同步中。
+
+`fresh=true` 只表示全市场日线已覆盖到 `expected_trade_date`，不代表所有后台任务都成功。若同时存在 `sync_warnings`，前端会继续展示异常任务；财务、分红、K 线回填等异常可能影响 ROE、同比、股息率或历史 K 线相关功能，但不会伪造成数据新鲜。
 
 手动触发：
 ```bash
@@ -212,6 +214,14 @@ curl -s http://127.0.0.1:8080/api/v1/health/ai
 curl -s http://127.0.0.1:8080/api/v1/health/data
 python3 backend/scripts/agent_smoke.py
 ```
+
+交付前 release smoke：
+
+```bash
+python3 backend/scripts/release_smoke.py
+```
+
+`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`，不会伪装成模型正常。`agent_smoke.py` 是手动真实 Agent 回归，会逐轮输出 `tool`、`screened/result/done`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时，便于定位慢在模型规划还是本地工具。
 
 提交前可做一次定向密钥扫描：
 

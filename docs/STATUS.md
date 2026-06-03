@@ -125,7 +125,10 @@ OPENAI_RESPONSES_ENABLED=false
 ```bash
 curl -s http://127.0.0.1:8080/api/v1/health/ai
 python3 backend/scripts/agent_smoke.py
+python3 backend/scripts/release_smoke.py
 ```
+
+`release_smoke.py` 是 P0 交付封版检查：确认 Docker 服务健康、AI/数据健康、SSE fast-path 不走模型、`stock_detail` 不筛选、真实筛选返回结果，并执行定向密钥扫描。若 `/health/ai` 返回 `ok=false`，脚本会以 `WARN` 明示上游不可达并继续验证本地兜底链路；若 `/health/data` 返回 `fresh=true` 但 `sync_warnings` 非空，应按异常任务处理补充数据问题，不要把它解读成所有同步任务都成功。
 
 ### 🔧 4.2 「价值分」不是 AI 评分
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)

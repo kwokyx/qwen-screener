@@ -123,7 +123,7 @@ def test_ai_health_reports_runtime_status_without_secret(monkeypatch):
     monkeypatch.setattr(
         health.qwen_client,
         "probe_health",
-        lambda: {
+        lambda timeout=6.0: {
             "ok": False,
             "latency_ms": 321,
             "reason": "上游网关推理端不可用: HTTP 503",

@@ -1,4 +1,5 @@
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,23 @@ def test_plan_agent_turn_accepts_valid_screen_and_compact_context(monkeypatch):
     assert "股票筛选完成" in context_message
     assert "limit" not in context_message
     assert captured["timeout"] == agent_planner._AGENT_PLAN_TIMEOUT_SECONDS
+
+
+def test_plan_agent_turn_hard_times_out_slow_model(monkeypatch):
+    def create(**_kwargs):
+        time.sleep(0.08)
+        return _fake_client("ask_clarification", {"question": "迟到的响应"}).chat.completions.create()
+
+    monkeypatch.setattr(agent_planner.settings, "ai_backend", "openai")
+    monkeypatch.setattr(agent_planner.settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(agent_planner, "_AGENT_PLAN_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        agent_planner,
+        "openai_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+    )
+
+    assert agent_planner.plan_agent_turn("你好") is None
 
 
 def test_plan_agent_turn_supports_dashscope_compatible_function_call(monkeypatch):

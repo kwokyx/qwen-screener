@@ -70,7 +70,7 @@ def _user_friendly_error(exc: Exception) -> str:
 
 # ---------------------- Health probe ----------------------
 
-def probe_health(timeout: float = 15.0) -> dict:
+def probe_health(timeout: float = 6.0) -> dict:
     """轻量探测当前配置的 AI 后端是否真的可用。"""
     global _health_cache, _last_health_ok
     with _health_probe_lock:

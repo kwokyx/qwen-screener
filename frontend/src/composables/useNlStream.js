@@ -268,11 +268,19 @@ export function useNlStream(historyStore, hooks = {}) {
     return lastQuery.value ? snapshotCurrentTurn() : null
   }
 
+  function latestResultTurn() {
+    for (let i = thread.value.length - 1; i >= 0; i--) {
+      const turn = thread.value[i]
+      if (turn.result) return turn
+    }
+    return result.value ? snapshotCurrentTurn() : null
+  }
+
   function buildContext() {
     const sessionId = historyStore?.activeId && historyStore.activeId !== '__new__'
       ? historyStore.activeId
       : null
-    return turnToContext(latestContextTurn(), thread.value, sessionId) || {
+    const context = turnToContext(latestContextTurn(), thread.value, sessionId) || {
       session_id: sessionId,
       last_query: '',
       last_plan: null,
@@ -281,6 +289,17 @@ export function useNlStream(historyStore, hooks = {}) {
       last_result: null,
       recent_turns: [],
     }
+    const resultContext = turnToContext(latestResultTurn(), [], sessionId)
+    if (resultContext?.last_result && !context.last_result) {
+      context.last_result = resultContext.last_result
+    }
+    if (resultContext?.last_conditions?.length && !context.last_conditions?.length) {
+      context.last_conditions = resultContext.last_conditions
+    }
+    if (resultContext?.last_screen_meta && !context.last_screen_meta) {
+      context.last_screen_meta = resultContext.last_screen_meta
+    }
+    return context
   }
 
   function commitCurrentTurn(turnPhase = 'done') {

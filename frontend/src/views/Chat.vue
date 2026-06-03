@@ -191,6 +191,10 @@ const runtimeRows = computed(() => {
   return rows
 })
 const aiStatusLine = computed(() => {
+  if (!aiStatus.lastChecked) return 'AI 检测中…'
+  if (!aiStatus.configured && aiStatus.reason && !aiStatus.reason.includes('未配置')) {
+    return 'AI 探测失败 · 本地规则兜底'
+  }
   if (!aiStatus.configured) return 'AI 未配置 · 本地规则'
   if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 本地规则兜底`
   return `AI Agent 就绪 · ${[aiStatus.backend, aiStatus.model].filter(Boolean).join(' / ')}`

@@ -649,7 +649,8 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 - `sync_running`：行情落后但同步任务正在后台执行
 - `partial_newer_data`：存在更晚的少量个股数据，但全市场快照仍未覆盖
 - `stale`：行情落后，建议运行日线/估值同步
-- `sync_issue`：行情落后且同步任务失败或卡住
+
+`sync_warnings` 与 `freshness.reason_code` 是两层信息：`fresh=true` 表示全市场日线已覆盖到 `expected_trade_date`，但仍可能存在财务、分红或历史 K 线回填等后台任务异常。交付检查应同时查看 `fresh`、`freshness.message`、`sync_has_issue` 和 `sync_warnings`，不要把同步异常隐藏为“已完全正常”。
 
 ---
 

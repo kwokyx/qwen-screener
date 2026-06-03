@@ -22,8 +22,6 @@ QUERIES = [
     "按股息率排序",
     "换一批",
     "查看第一只详情",
-    "帮我设计一个稳健的选股策略，先别执行",
-    "现在执行",
     "你好",
     "可以，做吧",
 ]
@@ -93,13 +91,19 @@ def main() -> int:
         plan = terminal.get("plan") or {}
         event_types = [event.get("type") for event in events]
         screened = "result" in event_types
+        result_event = terminal.get("type") == "result"
+        done = "done" in event_types
         total = terminal.get("total")
         tool = plan.get("tool")
         ai_used = plan.get("ai_used")
+        model_ms = terminal.get("model_ms")
+        tool_ms = terminal.get("tool_ms")
+        fallback_reason = terminal.get("fallback_reason") or "-"
         elapsed = time.time() - started
         print(
-            f"{query} -> tool={tool} screened={screened} ai_used={ai_used} "
-            f"total={total} elapsed={elapsed:.1f}s",
+            f"{query} -> tool={tool} screened={screened} result={result_event} done={done} "
+            f"ai_used={ai_used} total={total} model_ms={model_ms} tool_ms={tool_ms} "
+            f"fallback_reason={fallback_reason} elapsed={elapsed:.1f}s",
             flush=True,
         )
         context = _context_from_events(events)

@@ -176,6 +176,28 @@ const recommendedJobLabels = computed(() =>
   (freshness.value?.recommended_jobs || []).map(labelOf).join('、')
 )
 
+const warningJobLabels = computed(() =>
+  warnings.value.map((w) => w.label || labelOf(w.job)).filter(Boolean).join('、')
+)
+
+const syncImpactMessage = computed(() => {
+  if (!hasSyncIssue.value) return ''
+  const warningJobs = new Set(warnings.value.map((w) => w.job))
+  if (fresh.value) {
+    if (warningJobs.has('daily_market') || warningJobs.has('daily_value')) {
+      return '行情日期已达到应有交易日，但行情或估值同步任务仍有异常；涉及价格、估值或股息率的筛选建议先重试对应任务。'
+    }
+    return '行情日期已达到应有交易日；这些异常主要影响财务、分红或历史 K 线等补充数据，基础行情筛选仍可用。'
+  }
+  return '行情尚未达到应有交易日且存在同步异常；请先重试异常任务，再查看新鲜度是否恢复。'
+})
+
+const syncNextStepMessage = computed(() => {
+  if (warningJobLabels.value) return `下一步：重试 ${warningJobLabels.value}。`
+  if (recommendedJobLabels.value) return `下一步：运行 ${recommendedJobLabels.value}。`
+  return ''
+})
+
 function close() {
   open.value = false
 }
@@ -255,8 +277,14 @@ onBeforeUnmount(() => {
 
         <div v-if="hasSyncIssue" :style="{ padding: '10px 14px', borderBottom: `1px solid ${A2.borderHair}`, background: A2.upSoft }">
           <div :style="{ fontSize: '11px', fontWeight: 700, color: A2.up, marginBottom: '4px' }">同步异常</div>
+          <div v-if="syncImpactMessage" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55, marginBottom: '4px' }">
+            {{ syncImpactMessage }}
+          </div>
           <div v-for="w in warnings.slice(0, 3)" :key="w.job" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55 }">
             {{ w.label }}：{{ w.message || '任务异常，请重试' }}
+          </div>
+          <div v-if="syncNextStepMessage" :style="{ fontSize: '10.5px', color: A2.up, lineHeight: 1.55, marginTop: '4px', fontWeight: 600 }">
+            {{ syncNextStepMessage }}
           </div>
         </div>
 

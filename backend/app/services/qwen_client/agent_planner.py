@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any
 
 from loguru import logger
@@ -435,13 +436,10 @@ def plan_agent_turn(
 
     messages = _build_messages(query, context)
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            timeout=_AGENT_PLAN_TIMEOUT_SECONDS,
-        )
+        resp = _create_chat_completion_with_timeout(client, model, messages)
+    except FutureTimeoutError:
+        logger.info("Agent FC 超过 {} 秒，回退本地规则", _AGENT_PLAN_TIMEOUT_SECONDS)
+        return None
     except Exception as e:
         logger.info("Agent FC 不可用，回退本地规则: {}", str(e)[:120])
         return None
@@ -492,7 +490,7 @@ def _agent_chat_client():
         if not settings.openai_api_key:
             return None
         try:
-            return openai_client(), settings.openai_model, "openai"
+            return _single_try_client(openai_client()), settings.openai_model, "openai"
         except RuntimeError as e:
             logger.info("Agent FC OpenAI 客户端不可用，回退本地规则: {}", str(e)[:120])
             return None
@@ -501,13 +499,44 @@ def _agent_chat_client():
         if not settings.dashscope_api_key:
             return None
         try:
-            return _dashscope_openai_client(), settings.qwen_model, "dashscope"
+            return _single_try_client(_dashscope_openai_client()), settings.qwen_model, "dashscope"
         except RuntimeError as e:
             logger.info("Agent FC DashScope 客户端不可用，回退本地规则: {}", str(e)[:120])
             return None
 
     logger.info("Agent FC 暂不支持当前 AI provider={}，回退本地规则", backend)
     return None
+
+
+def _single_try_client(client):
+    """Disable SDK retries for planning; local rules are the retry/fallback path."""
+    with_options = getattr(client, "with_options", None)
+    if callable(with_options):
+        return with_options(max_retries=0)
+    return client
+
+
+def _create_chat_completion_with_timeout(client, model: str, messages: list[dict]):
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-plan")
+    future = executor.submit(
+        client.chat.completions.create,
+        model=model,
+        messages=messages,
+        tools=TOOLS,
+        tool_choice="auto",
+        timeout=_AGENT_PLAN_TIMEOUT_SECONDS,
+    )
+    try:
+        result = future.result(timeout=_AGENT_PLAN_TIMEOUT_SECONDS)
+    except FutureTimeoutError:
+        future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    except Exception:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown(wait=False)
+    return result
 
 
 def _dashscope_openai_client():
