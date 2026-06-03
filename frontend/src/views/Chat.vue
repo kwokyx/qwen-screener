@@ -115,16 +115,24 @@ const isDesignTurn = (turn) => turn?.agentPlan?.tool === 'strategy_design'
 const isTextOnlyTurn = (turn) => textOnlyTools.includes(turn?.agentPlan?.tool) && !turn?.result
 const turnAgentTitle = (turn) => turn?.agentPlan?.tool_label || 'Agent 结论'
 const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '股票筛选' : '待判断')
-const turnSourceLabel = (turn) => turn?.agentPlan?.ai_used
-  ? 'AI FC'
-  : (turn?.agentPlan?.ai_configured ? '本地规则' : '本地规则')
+function agentSourceLabel(plan, aiRuntime = null) {
+  if (aiRuntime?.source === 'ai_agent' || aiRuntime?.used === true) return 'AI Agent'
+  if (aiRuntime?.source === 'local_fallback' || aiRuntime?.fallback) return '本地规则兜底'
+  if (aiRuntime?.source === 'local_rules' || aiRuntime?.configured === false) return '本地规则'
+  if (aiRuntime?.label) return aiRuntime.label
+  if (plan?.ai_configured) return '本地规则兜底'
+  return '本地规则'
+}
+const turnSourceLabel = (turn) => agentSourceLabel(turn?.agentPlan, turn?.screenMeta?.ai_status || turn?.aiStatus)
 const turnConditionIntro = (turn) => {
   if (turn?.agentPlan?.tool === 'strategy_design') return '建议量化条件'
   if (turn?.agentPlan?.tool === 'explain_result') return '上一轮条件'
   return turn?.result ? `筛选条件 · 命中 ${turn.result.total} 只` : '识别条件'
 }
 const turnResultTitle = (turn) => turn?.agentPlan?.tool === 'strategy_select' ? '策略选股结果' : '筛选结果'
+const emptyResultTitleFor = (turn) => turn?.result?.total > 0 ? '当前页没有更多结果' : '没有命中任何股票'
 function zeroResultHintFor(turn) {
+  if (turn?.result?.total > 0 && !turn?.result?.items?.length) return '可以打开完整列表查看已有结果，或继续调整排序条件'
   const cs = turn?.parsedConditions || []
   if (!cs.length) return '试着把条件描述得更具体一些'
   const enumCond = cs.find((c) => c.field === 'industry' || c.field === 'market')
@@ -134,9 +142,12 @@ function zeroResultHintFor(turn) {
 }
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
 const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
-const sourceLabel = computed(() => agentPlan.value?.ai_used
-  ? 'AI Function Calling'
-  : (agentPlan.value?.ai_configured ? '本地规则 fallback' : '本地规则'))
+const sourceLabel = computed(() => agentSourceLabel(agentPlan.value, screenMeta.value?.ai_status))
+const aiStatusLine = computed(() => {
+  if (!aiStatus.configured) return 'AI 未配置 · 本地规则'
+  if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 本地规则兜底`
+  return `AI Agent 就绪 · ${[aiStatus.backend, aiStatus.model].filter(Boolean).join(' / ')}`
+})
 const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
 const agentAnswerTitle = computed(() => agentPlan.value?.tool_label || 'Agent 结论')
 const agentToolLabel = computed(() => agentPlan.value?.tool_label || (result.value ? '股票筛选' : '待判断'))
@@ -461,9 +472,11 @@ const stageColor = (s) => ({
             <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
               <span v-if="!aiStatus.isUp" :style="{ fontSize: '10px', color: A2.amber, display: 'flex', alignItems: 'center', gap: '4px' }">
                 <span :style="{ width: '6px', height: '6px', borderRadius: '50%', background: A2.amber }" />
-                AI 不可用，使用本地规则
+                {{ aiStatusLine }}
               </span>
-              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">{{ phase === 'thinking' ? '判断中…' : phase === 'screening' ? '执行中…' : '就绪' }}</span>
+              <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">
+                {{ phase === 'thinking' ? '判断中…' : phase === 'screening' ? '执行中…' : aiStatusLine }}
+              </span>
               <div style="flex:1" />
               <button v-if="isStreaming" @click="stop"
                       :style="{ padding: '7px 14px', background: '#3F3D38', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)' }">
@@ -484,8 +497,8 @@ const stageColor = (s) => ({
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
             <span style="flex:1">
-              <strong>AI 服务暂时不可达</strong>
-              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || '上游网络异常' }} · 当前将自动使用本地规则 Agent</span>
+              <strong>本地规则兜底</strong>
+              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || 'AI 服务暂时不可达' }}</span>
             </span>
             <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">
               <Icon name="refresh" :size="11" /> 重新检测
@@ -612,7 +625,7 @@ const stageColor = (s) => ({
                     <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
                   </button>
                 </div>
-                <EmptyState v-else icon="filter" title="没有命中任何股票" :subtitle="zeroResultHintFor(turn)" />
+                <EmptyState v-else icon="filter" :title="emptyResultTitleFor(turn)" :subtitle="zeroResultHintFor(turn)" />
               </div>
             </article>
           </div>

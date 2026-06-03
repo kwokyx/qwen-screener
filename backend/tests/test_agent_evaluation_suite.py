@@ -67,7 +67,7 @@ def test_eval_confirmation_with_context_executes_previous_conditions(db, seed_st
         ],
     }
 
-    result = strategy_selector.run_chat_agent(db, "可以，做吧", context=context, limit=10)
+    result = strategy_selector.run_chat_agent(db, "现在执行", context=context, limit=10)
 
     assert result.plan.tool == "stock_screen"
     assert result.plan.sort_by == "roe"

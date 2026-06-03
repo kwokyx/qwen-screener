@@ -77,3 +77,36 @@ def test_data_health_is_public_but_manual_sync_requires_login(db, monkeypatch):
         )
         assert r.status_code == 200
         assert r.json()["queued"] is True
+
+
+def test_ai_health_reports_runtime_status_without_secret(monkeypatch):
+    monkeypatch.setattr(health.settings, "ai_backend", "openai")
+    monkeypatch.setattr(health.settings, "openai_model", "model-test")
+    monkeypatch.setattr(health.settings, "openai_api_key", "secret-key")
+    monkeypatch.setattr(
+        health.qwen_client,
+        "probe_health",
+        lambda: {
+            "ok": False,
+            "latency_ms": 321,
+            "reason": "上游网关推理端不可用: HTTP 503",
+            "backend": "openai",
+            "model": "model-test",
+            "configured": True,
+            "fallback": True,
+            "mode": "local_fallback",
+        },
+    )
+
+    with TestClient(app) as c:
+        r = c.get("/api/v1/health/ai")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["configured"] is True
+    assert body["backend"] == "openai"
+    assert body["model"] == "model-test"
+    assert body["mode"] == "local_fallback"
+    assert body["fallback"] is True
+    assert "secret-key" not in r.text
+    assert "api_key" not in r.text.lower()

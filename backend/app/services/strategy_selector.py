@@ -528,8 +528,26 @@ def execute_agent_plan(
     )
     tool_trace.append(f"调用 screener_engine.screen(conditions={len(req.conditions)}, limit={effective_limit})")
     result = screener_engine.screen(db, req)
+    page_reset = False
+    if is_result_page_query(response.query) and result.total > 0 and not result.items and req.offset >= result.total:
+        req = ScreenRequest(
+            conditions=plan.conditions,
+            logic=req.logic,
+            sort_by=req.sort_by,
+            sort_desc=req.sort_desc,
+            offset=0,
+            limit=effective_limit,
+        )
+        plan.offset = 0
+        page_reset = True
+        tool_trace.append("结果翻页已到末尾，回到第一批结果")
+        result = screener_engine.screen(db, req)
     result.parsed_conditions = req.conditions
-    answer = _summarize_screen_agent(response.query, plan, result.total, [item.name or item.code for item in result.items[:5]])
+    names = [item.name or item.code for item in result.items[:5]]
+    answer = _summarize_screen_agent(response.query, plan, result.total, names)
+    if page_reset:
+        picked = "、".join(names) if names else "暂无命中"
+        answer = f"上一轮已经到最后一批，已回到第一批结果。当前共 {result.total} 只，前排结果：{picked}。"
     return StrategyAgentResponse(
         query=response.query,
         plan=plan,
@@ -539,6 +557,18 @@ def execute_agent_plan(
         tool_trace=tool_trace,
         tool_calls=[
             *response.tool_calls,
+            *(
+                [
+                    _tool_call(
+                        "result_pagination_reset",
+                        "结果分页",
+                        params={"offset": 0, "limit": req.limit},
+                        message="下一批已到末尾，回到第一批结果",
+                    )
+                ]
+                if page_reset
+                else []
+            ),
             _tool_call(
                 "stock_screen",
                 "股票筛选",
@@ -666,6 +696,7 @@ def is_confirmation_query(query: str) -> bool:
     return normalized in {
         "可以", "可以做吧", "可以执行", "做吧", "按这个来", "按这个做",
         "执行吧", "执行", "继续", "继续吧", "开始吧", "就这样", "确认",
+        "现在执行", "执行一下", "现在跑", "跑一下",
     }
 
 
@@ -717,7 +748,10 @@ def is_result_page_query(query: str) -> bool:
 def is_strategy_design_query(query: str) -> bool:
     """Return True when the user asks for a strategy plan rather than execution."""
     q = query.strip().lower()
-    explicit_design_only = ("只列", "只设计", "不要筛", "不筛选", "不用筛", "不执行", "先别跑")
+    explicit_design_only = (
+        "只列", "只设计", "不要筛", "不筛选", "不用筛",
+        "不执行", "不要执行", "别执行", "先别执行", "暂不执行", "先别跑",
+    )
     if any(k in q for k in explicit_design_only):
         return True
 

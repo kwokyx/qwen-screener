@@ -75,10 +75,10 @@ def probe_health(timeout: float = 4.0) -> dict:
     global _health_cache, _last_health_ok
     with _health_probe_lock:
         now = time.monotonic()
-        if _health_cache and now < _health_cache[0]:
-            return dict(_health_cache[1])
-
         backend = (settings.ai_backend or "openai").lower()
+        if _health_cache and now < _health_cache[0]:
+            return _with_runtime_status(backend, _health_cache[1])
+
         status = _probe_backend_health(backend, timeout)
 
         if status.get("ok"):
@@ -93,9 +93,33 @@ def probe_health(timeout: float = 4.0) -> dict:
                 if status.get("ok"):
                     _last_health_ok = (now + _HEALTH_OK_GRACE_SECONDS, dict(status))
 
+        status = _with_runtime_status(backend, status)
         cache_seconds = _HEALTH_FAILURE_CACHE_SECONDS if _is_transient_health_status(status) else _HEALTH_CACHE_SECONDS
         _health_cache = (now + cache_seconds, dict(status))
         return status
+
+
+def _model_for_backend(backend: str) -> str:
+    return settings.qwen_model if backend == "dashscope" else settings.openai_model
+
+
+def _configured_for_backend(backend: str) -> bool:
+    if backend == "dashscope":
+        return bool(settings.dashscope_api_key)
+    return bool(settings.openai_api_key)
+
+
+def _with_runtime_status(backend: str, status: dict) -> dict:
+    """Attach non-secret runtime metadata for UI and Agent fallback decisions."""
+    result = dict(status)
+    configured = _configured_for_backend(backend)
+    ok = bool(result.get("ok"))
+    result.setdefault("backend", backend)
+    result.setdefault("model", _model_for_backend(backend))
+    result["configured"] = configured
+    result["fallback"] = not ok
+    result["mode"] = "ai_agent" if ok else ("local_fallback" if configured else "local_rules")
+    return result
 
 
 def _probe_backend_health(backend: str, timeout: float) -> dict:

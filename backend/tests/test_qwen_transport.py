@@ -60,6 +60,7 @@ def _reset_health_cache(monkeypatch):
 def test_probe_health_dispatches_dashscope(monkeypatch):
     _reset_health_cache(monkeypatch)
     monkeypatch.setattr(transport.settings, "ai_backend", "dashscope")
+    monkeypatch.setattr(transport.settings, "dashscope_api_key", "dash-key")
     monkeypatch.setattr(
         transport,
         "_probe_dashscope_health",
@@ -68,12 +69,22 @@ def test_probe_health_dispatches_dashscope(monkeypatch):
 
     result = transport.probe_health(3)
 
-    assert result == {"ok": True, "latency_ms": 3, "reason": None}
+    assert result == {
+        "ok": True,
+        "latency_ms": 3,
+        "reason": None,
+        "backend": "dashscope",
+        "model": "qwen-plus",
+        "configured": True,
+        "fallback": False,
+        "mode": "ai_agent",
+    }
 
 
 def test_probe_health_reuses_short_cache(monkeypatch):
     _reset_health_cache(monkeypatch)
     monkeypatch.setattr(transport.settings, "ai_backend", "openai")
+    monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     calls = []
     monkeypatch.setattr(
         transport,
@@ -84,13 +95,23 @@ def test_probe_health_reuses_short_cache(monkeypatch):
     first = transport.probe_health(3)
     second = transport.probe_health(3)
 
-    assert first == second == {"ok": True, "latency_ms": 123, "reason": None}
+    assert first == second == {
+        "ok": True,
+        "latency_ms": 123,
+        "reason": None,
+        "backend": "openai",
+        "model": "gpt-5.4-mini",
+        "configured": True,
+        "fallback": False,
+        "mode": "ai_agent",
+    }
     assert calls == [3]
 
 
 def test_probe_health_keeps_recent_success_on_transient_failure(monkeypatch):
     _reset_health_cache(monkeypatch)
     monkeypatch.setattr(transport.settings, "ai_backend", "openai")
+    monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     results = [
         {"ok": True, "latency_ms": 123, "reason": None},
         {"ok": False, "latency_ms": None, "reason": "上游网络不可达"},
@@ -103,11 +124,13 @@ def test_probe_health_keeps_recent_success_on_transient_failure(monkeypatch):
 
     assert degraded["ok"] is True
     assert degraded["stale"] is True
+    assert degraded["mode"] == "ai_agent"
 
 
 def test_probe_health_retries_initial_transient_failure(monkeypatch):
     _reset_health_cache(monkeypatch)
     monkeypatch.setattr(transport.settings, "ai_backend", "openai")
+    monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     monkeypatch.setattr(transport.time, "sleep", lambda _seconds: None)
     results = [
         {"ok": False, "latency_ms": None, "reason": "上游网络不可达"},
@@ -117,7 +140,10 @@ def test_probe_health_retries_initial_transient_failure(monkeypatch):
 
     result = transport.probe_health(3)
 
-    assert result == {"ok": True, "latency_ms": 456, "reason": None}
+    assert result["ok"] is True
+    assert result["latency_ms"] == 456
+    assert result["reason"] is None
+    assert result["mode"] == "ai_agent"
     assert results == []
 
 

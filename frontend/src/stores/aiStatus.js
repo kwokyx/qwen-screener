@@ -9,6 +9,11 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
   const isUp = ref(true)        // 默认乐观；首次探之前不要禁用按钮
   const reason = ref('')
   const latencyMs = ref(null)
+  const configured = ref(false)
+  const backend = ref('')
+  const model = ref('')
+  const mode = ref('')
+  const fallback = ref(false)
   const lastChecked = ref(0)
   let timer = null
   let retryTimer = null
@@ -32,10 +37,20 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
       isUp.value = !!data.ok
       reason.value = data.reason || ''
       latencyMs.value = data.latency_ms
+      configured.value = !!data.configured
+      backend.value = data.backend || ''
+      model.value = data.model || ''
+      mode.value = data.mode || ''
+      fallback.value = !!data.fallback
     } catch {
       isUp.value = false
       reason.value = '后端无响应'
       latencyMs.value = null
+      configured.value = false
+      backend.value = ''
+      model.value = ''
+      mode.value = 'local_rules'
+      fallback.value = true
     } finally {
       lastChecked.value = Date.now()
       if (isUp.value) clearRetry()
@@ -57,5 +72,8 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
   // 每次发起 AI 调用前/后都可以手动让前端立刻重测
   async function recheck() { await check() }
 
-  return { isUp, reason, latencyMs, lastChecked, check, recheck, startAutoProbe, stopAutoProbe }
+  return {
+    isUp, reason, latencyMs, configured, backend, model, mode, fallback, lastChecked,
+    check, recheck, startAutoProbe, stopAutoProbe,
+  }
 })

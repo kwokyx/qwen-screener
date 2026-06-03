@@ -122,6 +122,25 @@ def test_chat_agent_asks_when_confirmation_has_no_previous_conditions(db, seed_s
     assert "还没有可以直接执行的上一轮条件" in res.answer
 
 
+def test_chat_agent_design_with_deferred_execution_does_not_screen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("strategy design should not execute screen")
+
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.run_chat_agent(db, "帮我设计一个稳健的选股策略，先别执行", context={}, limit=10)
+
+    assert res.plan.tool == "strategy_design"
+    assert res.screen_result is None
+    assert res.plan.conditions
+    assert "先不执行筛选" in res.answer
+
+
 def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
@@ -141,7 +160,7 @@ def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, s
         ],
     }
 
-    res = strategy_selector.run_chat_agent(db, "可以，做吧", context=context, limit=10)
+    res = strategy_selector.run_chat_agent(db, "现在执行", context=context, limit=10)
 
     assert res.plan.tool == "stock_screen"
     assert res.plan.ai_used is False
@@ -324,6 +343,34 @@ def test_chat_agent_next_page_uses_previous_offset(db, seed_stocks, monkeypatch)
     assert "下一批结果" in res.answer
     assert "转换为" not in res.answer
     assert any(call.name == "result_sort" and call.label == "结果分页" for call in res.tool_calls)
+
+
+def test_chat_agent_next_page_rolls_over_when_past_end(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
+    context = {
+        "last_plan": {"tool": "stock_screen", "logic": "AND", "sort_by": "score", "sort_desc": True},
+        "last_conditions": [{"field": "pe", "op": "lt", "value": 500}],
+        "last_result": {
+            "total": 5,
+            "offset": 4,
+            "limit": 2,
+            "parsed_conditions": [{"field": "pe", "op": "lt", "value": 500}],
+        },
+    }
+
+    res = strategy_selector.run_chat_agent(db, "换一批", context=context, limit=2)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.offset == 0
+    assert res.screen_result is not None
+    assert res.screen_result.offset == 0
+    assert res.screen_result.items
+    assert "已回到第一批结果" in res.answer
+    assert any(call.name == "result_pagination_reset" for call in res.tool_calls)
 
 
 def test_next_page_summary_handles_past_end():

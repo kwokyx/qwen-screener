@@ -81,6 +81,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
 
     def response_payload(response) -> dict:
         plan = response.plan
+        ai_source = "ai_agent" if plan.ai_used else ("local_fallback" if plan.ai_configured else "local_rules")
         return {
             "plan": plan.model_dump(),
             "conditions": [c.model_dump() for c in plan.conditions],
@@ -88,6 +89,13 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "warnings": response.warnings,
             "tool_trace": response.tool_trace,
             "tool_calls": [call.model_dump() for call in response.tool_calls],
+            "ai_status": {
+                "configured": plan.ai_configured,
+                "used": plan.ai_used,
+                "source": ai_source,
+                "label": "AI Agent" if plan.ai_used else ("本地规则兜底" if plan.ai_configured else "本地规则"),
+                "fallback": plan.ai_configured and not plan.ai_used,
+            },
         }
 
     def _stage_text(tool: str, source: str) -> str:

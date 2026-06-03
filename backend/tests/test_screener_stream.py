@@ -356,6 +356,13 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
     result = next(event for event in events if event["type"] == "result")
     assert parsed["plan"]["tool"] == "stock_screen"
     assert parsed["plan"]["ai_used"] is True
+    assert parsed["ai_status"] == {
+        "configured": True,
+        "used": True,
+        "source": "ai_agent",
+        "label": "AI Agent",
+        "fallback": False,
+    }
     assert parsed["tool_calls"]
     assert result["total"] == 1
     assert result["items"][0]["code"] == "600036.SH"
@@ -516,3 +523,11 @@ def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypa
     assert any("已生成结果" in t for t in thinking_texts)
     # Should mention local rule source
     assert any("本地规则" in t for t in thinking_texts)
+    parsed = next(event for event in events if event["type"] == "parsed")
+    assert parsed["ai_status"] == {
+        "configured": True,
+        "used": False,
+        "source": "local_fallback",
+        "label": "本地规则兜底",
+        "fallback": True,
+    }
