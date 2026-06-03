@@ -30,6 +30,43 @@ def test_data_health_treats_friday_close_as_fresh_on_sunday(db, monkeypatch):
     assert result["fresh"] is True
     assert result["expected_trade_date"] == "2026-05-29"
     assert result["latest_trade_date"] == "2026-05-29"
+    assert result["freshness"]["reason_code"] == "fresh"
+    assert result["freshness"]["recommended_jobs"] == []
+
+
+def test_data_health_explains_stale_market_snapshot(db, monkeypatch):
+    monkeypatch.setattr(health, "_latest_expected_weekday", lambda: date(2026, 6, 3))
+    db.add(StockBasic(code="600036.SH", name="招商银行"))
+    db.add(StockDaily(code="600036.SH", trade_date=date(2026, 6, 2), close=40))
+    db.commit()
+
+    result = health.data_health(db)
+
+    assert result["fresh"] is False
+    assert result["latest_trade_date"] == "2026-06-02"
+    assert result["freshness"]["reason_code"] == "stale"
+    assert result["freshness"]["lag_days"] == 1
+    assert "daily_market" in result["freshness"]["recommended_jobs"]
+
+
+def test_data_health_distinguishes_sparse_newer_rows_from_market_freshness(db, monkeypatch):
+    monkeypatch.setattr(health, "_latest_expected_weekday", lambda: date(2026, 6, 3))
+    for idx in range(120):
+        code = f"60{idx:04d}.SH"
+        db.add(StockBasic(code=code, name=f"股票{idx}"))
+        db.add(StockDaily(code=code, trade_date=date(2026, 6, 2), close=10))
+    db.add(StockDaily(code="600000.SH", trade_date=date(2026, 6, 3), close=11))
+    db.commit()
+
+    result = health.data_health(db)
+
+    assert result["fresh"] is False
+    assert result["latest_trade_date"] == "2026-06-02"
+    assert result["newest_trade_date"] == "2026-06-03"
+    assert result["counts"]["market_coverage_threshold"] == 100
+    assert result["freshness"]["reason_code"] == "partial_newer_data"
+    assert result["freshness"]["has_sparse_newer_data"] is True
+    assert result["freshness"]["latest_coverage_rows"] == 120
 
 
 def test_data_health_reports_stuck_sync_job(db):

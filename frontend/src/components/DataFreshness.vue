@@ -21,11 +21,17 @@ const counts = ref(null)        // {basic, daily, financial, with_industry}
 const coverage = ref(null)
 const latestDate = ref(null)
 const expectedDate = ref(null)
+const fresh = ref(false)
+const freshness = ref(null)
 const warnings = ref([])
 const loading = ref(false)
 const running = ref({})         // {jobName: boolean}
 const canSync = computed(() => Boolean(auth.token))
-const hasIssue = computed(() => warnings.value.length > 0)
+const hasSyncIssue = computed(() => warnings.value.length > 0)
+const hasIssue = computed(() => {
+  const code = freshness.value?.reason_code
+  return hasSyncIssue.value || ['empty_basic', 'empty_daily', 'sync_issue', 'stale'].includes(code)
+})
 let poller = null
 
 const JOBS = [
@@ -47,6 +53,8 @@ async function refresh() {
     coverage.value = r.coverage
     latestDate.value = r.latest_trade_date
     expectedDate.value = r.expected_trade_date
+    fresh.value = !!r.fresh
+    freshness.value = r.freshness || null
     warnings.value = Array.isArray(r.sync_warnings) ? r.sync_warnings : []
   } catch (e) {
     /* 静默 */
@@ -121,6 +129,11 @@ function pct(value) {
   return `${Math.round(Number(value) * 100)}%`
 }
 
+function shortDate(value) {
+  if (!value) return ''
+  return String(value).slice(5)
+}
+
 function fmtRel(iso) {
   if (!iso) return '从未'
   const t = new Date(iso).getTime()
@@ -133,6 +146,9 @@ function fmtRel(iso) {
 }
 
 const summary = computed(() => {
+  if (freshness.value?.reason_code === 'fresh') return { label: '已最新', tone: 'fresh' }
+  if (freshness.value?.reason_code === 'partial_newer_data') return { label: `至 ${shortDate(latestDate.value)}`, tone: 'meh' }
+  if (freshness.value?.label) return { label: freshness.value.label, tone: freshness.value.severity || (fresh.value ? 'fresh' : 'stale') }
   if (!latestDate.value) return { label: '加载中', tone: 'muted' }
   const d = new Date(latestDate.value)
   const today = new Date()
@@ -150,6 +166,14 @@ const summaryColor = computed(() =>
   summary.value.tone === 'meh' ? A2.amber :
   summary.value.tone === 'stale' ? A2.up :
   A2.textMuted
+)
+
+const activeJobLabels = computed(() =>
+  (freshness.value?.active_jobs || []).map(labelOf).join('、')
+)
+
+const recommendedJobLabels = computed(() =>
+  (freshness.value?.recommended_jobs || []).map(labelOf).join('、')
 )
 
 function close() {
@@ -185,13 +209,16 @@ onBeforeUnmount(() => {
     </button>
 
     <Transition name="page-fade">
-      <div v-if="open" :style="{ position: 'absolute', top: '32px', right: 0, width: '380px', background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowLg, border: `1px solid ${A2.borderHair}`, zIndex: 50, overflow: 'hidden' }">
+      <div v-if="open" :style="{ position: 'absolute', top: '32px', right: 0, width: 'min(380px, calc(100vw - 24px))', background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowLg, border: `1px solid ${A2.borderHair}`, zIndex: 50, overflow: 'hidden' }">
         <div :style="{ padding: '12px 14px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }">
           <div>
             <div :style="{ fontSize: '13px', fontWeight: 700 }">数据状态</div>
             <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '2px' }">
               <span v-if="latestDate">最新 <strong :style="{ color: A2.text, fontFamily: 'IBM Plex Mono, monospace' }">{{ latestDate }}</strong><span v-if="expectedDate"> · 应至 {{ expectedDate }}</span></span>
               <span v-else>未同步</span>
+            </div>
+            <div v-if="freshness?.message" :style="{ fontSize: '10.5px', color: A2.textSub, marginTop: '5px', lineHeight: 1.45, maxWidth: '300px' }">
+              {{ freshness.message }}
             </div>
           </div>
           <button class="btn-ghost" :style="{ width: '28px', height: '28px' }" @click="refresh" title="刷新状态">
@@ -200,7 +227,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 数据覆盖度 -->
-        <div v-if="counts" :style="{ padding: '10px 14px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', borderBottom: `1px solid ${A2.borderHair}`, background: '#FBFBF9' }">
+        <div v-if="counts" :style="{ padding: '10px 14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(72px, 1fr))', gap: '8px', borderBottom: `1px solid ${A2.borderHair}`, background: '#FBFBF9' }">
           <div v-for="c in [
             { l: '日线覆盖', v: pct(coverage?.latest_daily) },
             { l: '估值覆盖', v: pct(coverage?.latest_valuation) },
@@ -212,7 +239,21 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="hasIssue" :style="{ padding: '10px 14px', borderBottom: `1px solid ${A2.borderHair}`, background: A2.upSoft }">
+        <div v-if="freshness && freshness.reason_code !== 'fresh'" :style="{ padding: '10px 14px', borderBottom: `1px solid ${A2.borderHair}`, background: freshness.severity === 'stale' ? A2.upSoft : A2.amberSoft }">
+          <div :style="{ fontSize: '11px', fontWeight: 700, color: freshness.severity === 'stale' ? A2.up : A2.amber, marginBottom: '4px' }">新鲜度诊断</div>
+          <div :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55 }">
+            全市场覆盖 {{ freshness.latest_coverage_rows || 0 }} / {{ counts?.basic || 0 }}，达标阈值 {{ freshness.coverage_threshold || counts?.market_coverage_threshold || 0 }}。
+            <span v-if="freshness.lag_days != null">落后 {{ Math.max(freshness.lag_days, 0) }} 个自然日。</span>
+          </div>
+          <div v-if="activeJobLabels" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55, marginTop: '3px' }">
+            后台执行中：{{ activeJobLabels }}
+          </div>
+          <div v-if="recommendedJobLabels" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55, marginTop: '3px' }">
+            建议同步：{{ recommendedJobLabels }}
+          </div>
+        </div>
+
+        <div v-if="hasSyncIssue" :style="{ padding: '10px 14px', borderBottom: `1px solid ${A2.borderHair}`, background: A2.upSoft }">
           <div :style="{ fontSize: '11px', fontWeight: 700, color: A2.up, marginBottom: '4px' }">同步异常</div>
           <div v-for="w in warnings.slice(0, 3)" :key="w.job" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55 }">
             {{ w.label }}：{{ w.message || '任务异常，请重试' }}

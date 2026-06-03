@@ -1,6 +1,6 @@
 # 实现状态与交接清单
 
-最后更新：2026-06-01 · 测试套件：**70/70 通过**
+最后更新：2026-06-03 · 测试套件：**166/166 通过**
 
 ---
 
@@ -107,16 +107,25 @@ AKShare 没提供涨跌停限价数据，**该字段未展示**（代码里有�
 ### 🔧 4.1 OpenAI 兼容网关需要匹配账号可用模型
 **文件**：[`backend/.env.example`](../backend/.env.example)
 
-默认值如下，已在当前示例网关用最小请求验证可用：
+当前示例默认走 OpenCode Go 的 OpenAI-compatible Chat Completions 接口：
 ```env
-OPENAI_BASE_URL=https://api2.up.railway.app   # 第三方中转网关，可能下线
-OPENAI_MODEL=gpt-5.4-mini                     # 当前 ChatGPT/Codex 账号实测可用
+AI_BACKEND=openai
+OPENAI_BASE_URL=https://opencode.ai/zen/go/v1
+OPENAI_MODEL=qwen3.6-plus
+OPENAI_RESPONSES_ENABLED=false
 ```
 
 第三方网关或账号权限变化时，三选一：
-- 改 `OPENAI_BASE_URL=https://api.openai.com` + 真实 OpenAI Key + `OPENAI_MODEL=gpt-4o-mini`
-- 切到 dashscope：`AI_BACKEND=dashscope` + `DASHSCOPE_API_KEY=sk-xxx`
+- 继续使用 OpenCode Go：确认套餐包含当前 Qwen 模型，并保持 `OPENAI_RESPONSES_ENABLED=false`
+- 改 `OPENAI_BASE_URL=https://api.openai.com/v1` + 真实 OpenAI Key + 账号可用模型
+- 切到 dashscope：`AI_BACKEND=dashscope` + `DASHSCOPE_API_KEY=your-dashscope-key`
 - 用自己的 OpenAI 兼容网关，相应填 URL + MODEL
+
+验证：
+```bash
+curl -s http://127.0.0.1:8080/api/v1/health/ai
+python3 backend/scripts/agent_smoke.py
+```
 
 ### 🔧 4.2 「价值分」不是 AI 评分
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)
@@ -195,13 +204,13 @@ docker 内强制覆盖为 `sqlite:////app/data/stock.db`（挂载卷），本地
 | health | ✅ `test_health_api.py` | — | 手动验证 |
 | watchlist | ✅ `test_watchlist_sync.py` | — | — |
 
-**全部 70 个测试用例通过**（2026-06-01 Docker 环境执行 `pytest -q`）。
+**全部 166 个测试用例通过**（2026-06-03 Docker 环境执行 `docker compose exec -T backend pytest`）。
 
 ---
 
 ## 7. 接手快速上手清单
 
-1. **跑测试** `cd backend && pytest tests/ -v` → 应见 70 passed
+1. **跑测试** `docker compose exec -T backend pytest` → 应见 166 passed
 2. **改 `.env`**：见 4.1，至少能调通一种 AI 后端
 3. **拉数据**：`python -m scripts.sync_data full` → Baostock 全 A 基础信息、日线、财务与分红
 4. **启动**：`uvicorn app.main:app --reload` + `cd frontend && npm run dev`

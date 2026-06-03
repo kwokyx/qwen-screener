@@ -64,7 +64,7 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 # 1. 配置环境变量
 cp backend/.env.example backend/.env
 # 编辑 backend/.env，至少填一项 AI 后端：
-#   - OPENAI_API_KEY + OPENAI_BASE_URL  （走 OpenAI 兼容网关）
+#   - OPENAI_API_KEY  （默认走 OpenCode Go/Qwen OpenAI 兼容网关）
 #   - 或 AI_BACKEND=dashscope + DASHSCOPE_API_KEY  （阿里云百炼）
 
 # 2. 启动全栈
@@ -115,14 +115,15 @@ npm run dev                                     # → http://localhost:5173
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | JWT 有效期 |
 | **`AI_BACKEND`** | `openai` | `openai` 或 `dashscope` |
 | `OPENAI_API_KEY` | — | OpenAI 或兼容网关的 Key |
-| `OPENAI_BASE_URL` | `https://api2.up.railway.app` | 中转网关地址；填 `https://api.openai.com` 走官方 |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | 模型名；当前示例中转网关已实测可用，走官方或自建网关时按账号权限调整 |
-| `OPENAI_REASONING` | `high` | Responses API reasoning effort（不支持则自动忽略） |
+| `OPENAI_BASE_URL` | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 OpenAI 兼容接口；也可换成官方或自建兼容网关 |
+| `OPENAI_MODEL` | `qwen3.6-plus` | OpenCode Go 当前示例模型 |
+| `OPENAI_REASONING` | `high` | Responses API reasoning effort（Chat Completions 兼容模式不会使用） |
+| `OPENAI_RESPONSES_ENABLED` | `false` | OpenCode Go/Qwen 走 Chat Completions 时保持关闭，避免先探测不支持的 Responses API |
 | `DASHSCOPE_API_KEY` | — | 阿里云百炼 Key（[控制台](https://bailian.console.aliyun.com)） |
 | `QWEN_MODEL` | `qwen-plus` | dashscope 模型 |
 | `CORS_ORIGINS` | `http://localhost:5173` | 多个用逗号分隔 |
 
-> **AI 后端两种配法选其一即可**。`OPENAI_BASE_URL` 默认指向一个中转网关，仅作示例——生产/正式使用请改成 `https://api.openai.com` 或自建网关，并相应调整 `OPENAI_MODEL`。
+> **AI 后端两种配法选其一即可**。OpenCode Go 属于 OpenAI-compatible Chat Completions 网关，因此 `AI_BACKEND=openai`、`OPENAI_RESPONSES_ENABLED=false`。不要把真实 Key 提交进仓库。
 
 ---
 
@@ -193,7 +194,7 @@ health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发
 | 周日 03:00 | `weekly_kline_backfill` | 全市场 60d K 线回填 |
 | 每 6h | `db_backup` | SQLite 冷备份 → `/app/data/backups/` |
 
-任务执行结果落 `sync_meta` 表，前端 `/health/data` 可查「最后更新于…」。
+任务执行结果落 `sync_meta` 表，前端 `/health/data` 可查「最后更新于…」。接口会同时返回 `freshness` 诊断对象，区分全市场行情落后、详情页稀疏新数据、同步任务异常和后台同步中。
 
 手动触发：
 ```bash
@@ -202,6 +203,20 @@ curl -X POST http://localhost:8000/api/v1/health/sync/daily_market
 
 # 同步（短任务用）
 curl -X POST 'http://localhost:8000/api/v1/health/sync/db_backup?wait=true'
+```
+
+健康检查和 Agent smoke：
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/health/ai
+curl -s http://127.0.0.1:8080/api/v1/health/data
+python3 backend/scripts/agent_smoke.py
+```
+
+提交前可做一次定向密钥扫描：
+
+```bash
+rg -n "OPENAI_API_KEY=.*[A-Za-z0-9]{20}|DASHSCOPE_API_KEY=.*[A-Za-z0-9]{20}|sk-[A-Za-z0-9]{20,}" backend/app backend/tests frontend/src docker-compose.yml README.md docs backend/.env.example || true
 ```
 
 ---
@@ -318,7 +333,7 @@ qwen-stock-screener/
 | 后端 Dockerfile 多阶段 + healthcheck | ✅ | [`backend/Dockerfile`](backend/Dockerfile) |
 | 前端 Dockerfile (node builder + nginx runtime) | ✅ | [`frontend/Dockerfile`](frontend/Dockerfile) |
 | nginx SSE 反代（buffering off + 30 分钟超时） | ✅ | [`frontend/nginx.conf`](frontend/nginx.conf) |
-| pytest 70 个用例全通过 | ✅ | [`backend/tests/`](backend/tests/) |
+| pytest 166 个用例全通过 | ✅ | [`backend/tests/`](backend/tests/) |
 | 接口文档 | ✅ | [`docs/API.md`](docs/API.md) |
 | 学年设计 docx | ✅ | [`docs/`](docs/) |
 
@@ -330,6 +345,12 @@ qwen-stock-screener/
 cd backend
 source .venv/bin/activate
 pytest tests/ -v
+```
+
+Docker 环境可直接运行：
+
+```bash
+docker compose exec -T backend pytest
 ```
 
 涵盖：

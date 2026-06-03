@@ -574,35 +574,82 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 
 **响应** `200`
 ```json
-{ "ok": true, "latency_ms": 234, "reason": null }
+{
+  "ok": true,
+  "latency_ms": 8349,
+  "reason": null,
+  "backend": "openai",
+  "model": "qwen3.6-plus",
+  "configured": true,
+  "fallback": false,
+  "mode": "ai_agent"
+}
 ```
 或
 ```json
-{ "ok": false, "latency_ms": null, "reason": "上游网络不可达" }
+{
+  "ok": false,
+  "latency_ms": null,
+  "reason": "上游网络不可达",
+  "configured": true,
+  "fallback": true,
+  "mode": "local_fallback"
+}
 ```
 
 ---
 
 ### GET `/health/data`
-数据健康度：表内行数 + 最近一次同步状态。
+数据健康度：表内行数、全市场行情覆盖、最近一次同步状态和新鲜度诊断。
 
 **响应** `200`
 ```json
 {
   "fresh": true,
-  "latest_trade_date": "2026-05-01",
+  "expected_trade_date": "2026-06-03",
+  "latest_trade_date": "2026-06-03",
+  "newest_trade_date": "2026-06-03",
   "counts": {
     "basic": 5512,
-    "daily": 300,
-    "financial": 300,
-    "with_industry": 300
+    "daily": 460945,
+    "financial": 5510,
+    "with_industry": 5357,
+    "latest_daily": 5512,
+    "market_coverage_threshold": 2756
+  },
+  "coverage": {
+    "latest_daily": 1.0,
+    "latest_valuation": 1.0,
+    "financial": 0.9973
+  },
+  "freshness": {
+    "reason_code": "fresh",
+    "label": "已最新",
+    "severity": "fresh",
+    "message": "全市场日线已覆盖到最近应有交易日。",
+    "lag_days": 0,
+    "expected_basis": "weekday_close_after_16_no_holidays",
+    "coverage_threshold": 2756,
+    "latest_coverage_rows": 5512,
+    "has_sparse_newer_data": false,
+    "active_jobs": [],
+    "recommended_jobs": []
   },
   "sync_meta": {
-    "daily_sina": { "last_run_at": "2026-05-01T07:30:08", "status": "success", "duration_ms": 38420, "detail": "" },
+    "daily_market": { "last_run_at": "2026-06-03 16:10:08", "status": "success", "duration_ms": 38420, "detail": "" },
     "weekly_kline_backfill": { ... }
-  }
+  },
+  "sync_warnings": [],
+  "sync_has_issue": false
 }
 ```
+
+`freshness.reason_code` 常见值：
+- `fresh`：全市场覆盖已达到最近应有交易日
+- `sync_running`：行情落后但同步任务正在后台执行
+- `partial_newer_data`：存在更晚的少量个股数据，但全市场快照仍未覆盖
+- `stale`：行情落后，建议运行日线/估值同步
+- `sync_issue`：行情落后且同步任务失败或卡住
 
 ---
 

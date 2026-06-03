@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +14,10 @@ from app.services import cache, db_backup, qwen_client, scheduler
 
 
 router = APIRouter(prefix="/health", tags=["health"])
+
+
+def _market_row_threshold(basic_cnt: int) -> int:
+    return max(100, int(basic_cnt * 0.5)) if basic_cnt else 100
 
 
 def _latest_expected_weekday(day=None):
@@ -38,7 +42,7 @@ def _covered_latest_trade_date(db: Session, basic_cnt: int):
     that sparse date as "latest data" makes the health page look fresher than
     the market-wide dataset actually is.
     """
-    min_rows = max(100, int(basic_cnt * 0.5)) if basic_cnt else 100
+    min_rows = _market_row_threshold(basic_cnt)
     cnt = func.count(StockDaily.id)
     row = (
         db.query(StockDaily.trade_date, cnt.label("n"))
@@ -48,6 +52,94 @@ def _covered_latest_trade_date(db: Session, basic_cnt: int):
         .first()
     )
     return row[0] if row else db.query(func.max(StockDaily.trade_date)).scalar()
+
+
+def _active_sync_jobs(sync_meta: dict[str, dict]) -> list[str]:
+    active = []
+    for name, meta in (sync_meta or {}).items():
+        status = meta.get("display_status") or meta.get("status")
+        if status in {"queued", "running"}:
+            active.append(name)
+    return active
+
+
+def _freshness_diagnostics(
+    *,
+    latest_trade_date: date | None,
+    newest_trade_date: date | None,
+    expected_trade_date: date,
+    latest_daily_cnt: int,
+    basic_cnt: int,
+    sync_meta: dict[str, dict],
+    sync_warnings: list[dict[str, str]],
+) -> dict:
+    """Explain data freshness without weakening the actual freshness check."""
+    threshold = _market_row_threshold(basic_cnt)
+    active_jobs = _active_sync_jobs(sync_meta)
+    lag_days = (expected_trade_date - latest_trade_date).days if latest_trade_date else None
+    sparse_newer = bool(newest_trade_date and latest_trade_date and newest_trade_date > latest_trade_date)
+    coverage = round(latest_daily_cnt / basic_cnt, 4) if basic_cnt else 0
+
+    if not basic_cnt:
+        reason_code = "empty_basic"
+        label = "未建股票池"
+        severity = "stale"
+        message = "股票基础列表为空，请先同步股票列表。"
+        recommended_jobs = ["weekly_basic"]
+    elif not latest_trade_date:
+        reason_code = "empty_daily"
+        label = "未同步行情"
+        severity = "stale"
+        message = "还没有日线行情数据，请先同步日线行情。"
+        recommended_jobs = ["daily_market"]
+    elif latest_trade_date >= expected_trade_date:
+        reason_code = "fresh"
+        label = "已最新"
+        severity = "fresh"
+        message = "全市场日线已覆盖到最近应有交易日。"
+        recommended_jobs = []
+    elif sparse_newer:
+        reason_code = "partial_newer_data"
+        label = f"全市场至 {latest_trade_date}"
+        severity = "meh"
+        message = (
+            f"数据库存在 {newest_trade_date} 的少量个股日线，但全市场覆盖仍停留在 "
+            f"{latest_trade_date}；这通常来自详情页懒加载或同步尚未完成。"
+        )
+        recommended_jobs = ["daily_market", "daily_value"]
+    elif sync_warnings:
+        reason_code = "sync_issue"
+        label = f"落后 {max(lag_days or 0, 1)} 天"
+        severity = "stale"
+        message = "全市场行情落后，且有同步任务异常；请查看异常任务后重新同步。"
+        recommended_jobs = ["daily_market", "daily_value"]
+    elif active_jobs:
+        reason_code = "sync_running"
+        label = "同步中"
+        severity = "meh"
+        message = "全市场行情尚未达到最近应有交易日，相关同步任务正在后台执行。"
+        recommended_jobs = []
+    else:
+        reason_code = "stale"
+        label = f"落后 {max(lag_days or 0, 1)} 天"
+        severity = "stale"
+        message = "全市场行情落后于最近应有交易日，请优先运行日线行情同步。"
+        recommended_jobs = ["daily_market", "daily_value"]
+
+    return {
+        "reason_code": reason_code,
+        "label": label,
+        "severity": severity,
+        "message": message,
+        "lag_days": lag_days,
+        "expected_basis": "weekday_close_after_16_no_holidays",
+        "coverage_threshold": threshold,
+        "latest_coverage_rows": latest_daily_cnt,
+        "latest_coverage": coverage,
+        "has_sparse_newer_data": sparse_newer,
+        "active_jobs": active_jobs,
+        "recommended_jobs": recommended_jobs,
+    }
 
 
 @router.get("/ai")
@@ -93,6 +185,15 @@ def data_health(db: Session = Depends(get_db)):
     fresh = False
     if latest_trade_date:
         fresh = latest_trade_date >= expected_trade_date
+    freshness = _freshness_diagnostics(
+        latest_trade_date=latest_trade_date,
+        newest_trade_date=newest_trade_date,
+        expected_trade_date=expected_trade_date,
+        latest_daily_cnt=latest_daily_cnt,
+        basic_cnt=basic_cnt,
+        sync_meta=sync_meta,
+        sync_warnings=sync_warnings,
+    )
 
     return {
         "fresh": fresh,
@@ -106,6 +207,7 @@ def data_health(db: Session = Depends(get_db)):
             "financial": fin_cnt,
             "with_industry": industry_cnt,
             "latest_daily": latest_daily_cnt,
+            "market_coverage_threshold": _market_row_threshold(basic_cnt),
             "latest_valuation": valuation_cnt,
             "dividend_records": db.query(StockDividend).count(),
             "latest_dividend_yield": dividend_yield_cnt,
@@ -120,6 +222,7 @@ def data_health(db: Session = Depends(get_db)):
         "sync_meta": sync_meta,
         "sync_warnings": sync_warnings,
         "sync_has_issue": bool(sync_warnings),
+        "freshness": freshness,
     }
 
 
