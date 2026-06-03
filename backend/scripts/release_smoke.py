@@ -42,6 +42,10 @@ class SmokeFailure(Exception):
     pass
 
 
+STATS = {"pass": 0, "warn": 0, "fail": 0}
+WARNINGS: list[str] = []
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -135,13 +139,30 @@ def _require(condition: bool, message: str) -> None:
 
 
 def _pass(name: str, detail: str = "") -> None:
+    STATS["pass"] += 1
     suffix = f" - {detail}" if detail else ""
     print(f"[PASS] {name}{suffix}", flush=True)
 
 
 def _warn(name: str, detail: str = "") -> None:
+    STATS["warn"] += 1
     suffix = f" - {detail}" if detail else ""
+    WARNINGS.append(f"{name}{suffix}")
     print(f"[WARN] {name}{suffix}", flush=True)
+
+
+def _fail(message: str) -> None:
+    STATS["fail"] += 1
+    print(f"[FAIL] {message}", flush=True)
+
+
+def _print_summary() -> None:
+    print(
+        f"[SUMMARY] pass={STATS['pass']} warn={STATS['warn']} fail={STATS['fail']}",
+        flush=True,
+    )
+    if WARNINGS:
+        print("[NEXT] Review WARN lines above before demo; rerun this script after upstream/sync status changes.", flush=True)
 
 
 def _check_compose(cwd: Path) -> None:
@@ -163,15 +184,36 @@ def _check_health(base_url: str) -> None:
     if ai.get("ok") is True:
         _pass("health/ai", f"ok=true latency_ms={ai.get('latency_ms')}")
     else:
-        _warn("health/ai", f"configured=true fallback=true reason={ai.get('reason') or 'unknown'}")
+        _warn(
+            "health/ai",
+            f"configured=true fallback=true reason={ai.get('reason') or 'unknown'}; "
+            "next=rerun after OpenCode Go/Qwen upstream recovers",
+        )
 
     data = _http_json(base_url, "/health/data")
     _require(data.get("fresh") is True, f"/health/data fresh=false: {data.get('freshness', {}).get('message')}")
     _require(data.get("expected_trade_date") == data.get("latest_trade_date"), "/health/data latest date is behind expected date")
+    sync_warnings = data.get("sync_warnings") or []
     _pass(
         "health/data",
-        f"fresh=true latest={data.get('latest_trade_date')} warnings={len(data.get('sync_warnings') or [])}",
+        f"fresh=true latest={data.get('latest_trade_date')} warnings={len(sync_warnings)}",
     )
+    if sync_warnings:
+        labels = [
+            f"{item.get('label') or item.get('job')}:{item.get('status') or 'unknown'}"
+            for item in sync_warnings
+            if isinstance(item, dict)
+        ]
+        _warn(
+            "health/data sync_warnings",
+            f"{', '.join(labels)}; next=retry failed sync jobs when no heavy sync is running",
+        )
+    active_jobs = (data.get("freshness") or {}).get("active_jobs") or []
+    if active_jobs:
+        _warn(
+            "health/data active_jobs",
+            f"{', '.join(active_jobs)} running; next=poll /health/data before starting heavy backfills",
+        )
 
 
 def _check_fast_path(base_url: str) -> None:
@@ -255,9 +297,11 @@ def main() -> int:
         try:
             check()
         except SmokeFailure as exc:
-            print(f"[FAIL] {exc}", flush=True)
+            _fail(str(exc))
+            _print_summary()
             return 1
-    print("[PASS] release smoke complete", flush=True)
+    _pass("release smoke complete")
+    _print_summary()
     return 0
 
 

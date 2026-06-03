@@ -221,7 +221,7 @@ python3 backend/scripts/agent_smoke.py
 python3 backend/scripts/release_smoke.py
 ```
 
-`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`，不会伪装成模型正常。`agent_smoke.py` 是手动真实 Agent 回归，会逐轮输出 `tool`、`screened/result/done`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时，便于定位慢在模型规划还是本地工具。
+`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_smoke.py` 是手动真实 Agent 回归，会逐轮输出 `tool`、`screened/result/done`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时，便于定位慢在模型规划还是本地工具。
 
 提交前可做一次定向密钥扫描：
 
