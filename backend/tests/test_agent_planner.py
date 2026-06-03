@@ -107,6 +107,20 @@ def test_plan_agent_turn_supports_dashscope_compatible_function_call(monkeypatch
     assert captured["tools"] == agent_planner.TOOLS
 
 
+def test_plan_agent_turn_accepts_stock_detail(monkeypatch):
+    _configure(
+        monkeypatch,
+        "stock_detail",
+        {"code": "600036.SH", "name": "招商银行"},
+    )
+
+    result = agent_planner.plan_agent_turn("打开招商银行详情")
+
+    assert result is not None
+    assert result.tool == "stock_detail"
+    assert result.extra == {"code": "600036.SH", "name": "招商银行"}
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

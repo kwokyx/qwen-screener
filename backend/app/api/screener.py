@@ -105,6 +105,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "strategy_design": "正在生成策略",
             "strategy_select": "正在执行策略选股",
             "explain_result": "正在解释结果",
+            "stock_detail": "正在定位详情页",
             "ask_clarification": "正在请求补充信息",
         }
         return f"{labels.get(tool, '正在处理')}（{source}）…\n"
@@ -236,8 +237,8 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 response.strategy_result.total if response.strategy_result else 0,
             )
 
-        # explain_result / ask_clarification are non-executing
-        if plan.tool in ("explain_result", "ask_clarification"):
+        # explain_result / stock_detail / ask_clarification are non-executing
+        if plan.tool in ("explain_result", "stock_detail", "ask_clarification"):
             logger.info("Agent SSE 跳过执行: tool={} reason=non-executing", plan.tool)
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
 

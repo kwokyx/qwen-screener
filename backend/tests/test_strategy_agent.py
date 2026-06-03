@@ -611,7 +611,7 @@ def test_list_agent_tools_documents_screen_fields():
 
     assert {
         "strategy_design", "stock_screen", "industry_match", "result_sort",
-        "strategy_select", "explain_result", "ask_clarification",
+        "strategy_select", "explain_result", "stock_detail", "ask_clarification",
     } <= set(by_id)
     assert "不调用 screener_engine" in " ".join(by_id["strategy_design"].data_notes)
     assert by_id["stock_screen"].fields
@@ -621,7 +621,97 @@ def test_list_agent_tools_documents_screen_fields():
     assert "分页前执行" in " ".join(by_id["result_sort"].data_notes)
     assert "收益回测" in " ".join(by_id["strategy_select"].data_notes)
     assert "上一轮结果" in by_id["explain_result"].description
+    assert "不会调用 screener_engine" in " ".join(by_id["stock_detail"].data_notes)
     assert "不调用 screener_engine" in " ".join(by_id["ask_clarification"].data_notes)
+
+
+def test_chat_agent_stock_detail_from_previous_result_without_screen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("stock_detail must not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
+
+    context = {
+        "last_result": {
+            "items": [
+                {"code": "600036.SH", "name": "招商银行"},
+                {"code": "688981.SH", "name": "中芯国际"},
+            ],
+            "parsed_conditions": [{"field": "pe", "op": "lt", "value": 15}],
+        }
+    }
+
+    res = strategy_selector.run_chat_agent(db, "查看第一只详情", context=context, limit=10)
+
+    assert res.plan.tool == "stock_detail"
+    assert res.screen_result is None
+    detail_call = next(call for call in res.tool_calls if call.name == "stock_detail")
+    assert detail_call.result == {
+        "code": "600036.SH",
+        "name": "招商银行",
+        "url": "/detail/600036.SH",
+    }
+    assert "未重新筛选" in " ".join(res.tool_trace)
+
+
+def test_chat_agent_stock_detail_by_code_without_context(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("stock_detail by code must not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    res = strategy_selector.run_chat_agent(db, "查看 600036.SH 详情", context={}, limit=10)
+
+    assert res.plan.tool == "stock_detail"
+    assert res.screen_result is None
+    detail_call = next(call for call in res.tool_calls if call.name == "stock_detail")
+    assert detail_call.result["code"] == "600036.SH"
+
+
+def test_chat_agent_stock_detail_supports_bj_code(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("stock_detail by BJ code must not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    res = strategy_selector.run_chat_agent(db, "查看 920111.BJ 详情", context={}, limit=10)
+
+    assert res.plan.tool == "stock_detail"
+    detail_call = next(call for call in res.tool_calls if call.name == "stock_detail")
+    assert detail_call.result["code"] == "920111.BJ"
+
+
+def test_chat_agent_stock_detail_without_target_asks_clarification(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("missing detail target must not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    res = strategy_selector.run_chat_agent(db, "打开股票详情", context={}, limit=10)
+
+    assert res.plan.tool == "ask_clarification"
+    assert res.screen_result is None
+    assert "还没有定位到要查看的股票" in res.answer
 
 
 # ---------------------------------------------------------------------------
@@ -734,6 +824,44 @@ class TestModelPlannerIntegration:
         assert res.screen_result is None
         assert res.strategy_result is None
         assert "我先不筛股票" in res.answer
+
+    def test_model_chooses_stock_detail_does_not_screen(self, db, seed_stocks, monkeypatch):
+        def fail_screen(*_args, **_kwargs):
+            raise AssertionError("stock_detail should not execute screen")
+
+        monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+        monkeypatch.setattr(
+            strategy_selector,
+            "_ai_status",
+            lambda: {"configured": True, "ok": True, "reason": None},
+        )
+        monkeypatch.setattr(
+            strategy_selector.qwen_client,
+            "plan_agent_turn",
+            lambda _query, _context=None: AgentPlanResult(
+                tool="stock_detail",
+                tool_label="个股详情",
+                reasoning="查看详情",
+                extra={"name": "招商银行"},
+            ),
+        )
+        context = {
+            "last_result": {
+                "items": [
+                    {"code": "600036.SH", "name": "招商银行"},
+                    {"code": "688981.SH", "name": "中芯国际"},
+                ],
+                "parsed_conditions": [{"field": "pe", "op": "lt", "value": 15}],
+            }
+        }
+
+        res = strategy_selector.run_chat_agent(db, "打开招商银行详情", context=context, limit=10)
+
+        assert res.plan.tool == "stock_detail"
+        assert res.plan.ai_used is True
+        assert res.screen_result is None
+        detail_call = next(call for call in res.tool_calls if call.name == "stock_detail")
+        assert detail_call.result["url"] == "/detail/600036.SH"
 
     def test_model_fallback_on_invalid_tool_name(self, db, seed_stocks, monkeypatch):
         monkeypatch.setattr(

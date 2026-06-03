@@ -2,7 +2,7 @@
 
 公开能力：
 - parse_nl_query(query)           自然语言 → ScreenRequest（FC + 缓存 + JSON 模式兜底）
-- plan_agent_turn(query, context) 模型 FC Agent 规划（五工具，校验后返回）
+- plan_agent_turn(query, context) 模型 FC Agent 规划（六工具，校验后返回）
 - analyze_stock(snapshot)         基于基本面数据生成投资分析（缓存）
 - stream_analyze_stock(snapshot)  流式版本，yields 字符串 chunks
 - stream_call(prompt)             裸流式调用（不预设 prompt 模板）

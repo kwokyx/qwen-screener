@@ -48,6 +48,7 @@ def _mock_http(monkeypatch, responses, *, reset_breaker=True):
     _FakeClient.responses = list(responses)
     _FakeClient.calls = []
     monkeypatch.setattr(httpx, "Client", _FakeClient)
+    monkeypatch.setattr(transport.settings, "openai_responses_enabled", True)
     if reset_breaker:
         monkeypatch.setattr(transport, "_responses_unavailable_until", 0.0)
 
@@ -85,6 +86,7 @@ def test_probe_health_reuses_short_cache(monkeypatch):
     _reset_health_cache(monkeypatch)
     monkeypatch.setattr(transport.settings, "ai_backend", "openai")
     monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(transport.settings, "openai_model", "gpt-5.4-mini")
     calls = []
     monkeypatch.setattr(
         transport,
@@ -181,8 +183,22 @@ def test_openai_probe_skips_responses_during_breaker(monkeypatch):
     monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
     monkeypatch.setattr(transport.settings, "openai_model", "test-model")
+    monkeypatch.setattr(transport.settings, "openai_responses_enabled", True)
     monkeypatch.setattr(transport, "_responses_unavailable_until", time.monotonic() + 60)
     _mock_http(monkeypatch, [_FakeResponse(200)], reset_breaker=False)
+
+    result = transport._probe_openai_health(3)
+
+    assert result["ok"] is True
+    assert _FakeClient.calls == ["https://example.test/v1/chat/completions"]
+
+
+def test_openai_probe_skips_responses_when_disabled(monkeypatch):
+    monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
+    monkeypatch.setattr(transport.settings, "openai_model", "test-model")
+    _mock_http(monkeypatch, [_FakeResponse(200)])
+    monkeypatch.setattr(transport.settings, "openai_responses_enabled", False)
 
     result = transport._probe_openai_health(3)
 
@@ -202,7 +218,27 @@ def test_openai_call_skips_responses_during_breaker(monkeypatch):
         )
 
     monkeypatch.setattr(transport.settings, "openai_model", "test-model")
+    monkeypatch.setattr(transport.settings, "openai_responses_enabled", True)
     monkeypatch.setattr(transport, "_responses_unavailable_until", time.monotonic() + 60)
+    monkeypatch.setattr(transport, "openai_client", lambda: _FakeOpenAI())
+
+    assert transport._openai_call_once("hello") == "ok"
+
+
+def test_openai_call_skips_responses_when_disabled(monkeypatch):
+    class _FakeOpenAI:
+        responses = SimpleNamespace(create=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should skip")))
+        chat = SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_kwargs: SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(transport.settings, "openai_model", "test-model")
+    monkeypatch.setattr(transport.settings, "openai_responses_enabled", False)
+    monkeypatch.setattr(transport, "_responses_unavailable_until", 0.0)
     monkeypatch.setattr(transport, "openai_client", lambda: _FakeOpenAI())
 
     assert transport._openai_call_once("hello") == "ok"

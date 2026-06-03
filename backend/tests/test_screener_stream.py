@@ -283,6 +283,50 @@ def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks,
     assert "不重新筛选" in agent["answer"]
 
 
+def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("stock_detail should not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+    )
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={
+            "query": "查看第一只详情",
+            "context": {
+                "last_result": {
+                    "total": 2,
+                    "items": [
+                        {"code": "600036.SH", "name": "招商银行"},
+                        {"code": "688981.SH", "name": "中芯国际"},
+                    ],
+                    "parsed_conditions": [{"field": "pe", "op": "lt", "value": 15}],
+                }
+            },
+        },
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert "agent" in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
+    assert any("正在定位详情页" in t for t in thinking_texts)
+    agent = next(event for event in events if event["type"] == "agent")
+    assert agent["plan"]["tool"] == "stock_detail"
+    detail_call = next(call for call in agent["tool_calls"] if call["name"] == "stock_detail")
+    assert detail_call["result"]["url"] == "/detail/600036.SH"
+
+
 def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api2.up.railway.app"
     openai_model: str = "gpt-5.4-mini"
     openai_reasoning: str = "high"
+    openai_responses_enabled: bool = True
 
     # 阿里云百炼 dashscope（备用）
     dashscope_api_key: str = ""

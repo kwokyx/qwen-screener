@@ -104,7 +104,7 @@ const thinkingPreview = computed(() => {
   if (s.length <= 200) return s
   return '…' + s.slice(-200)
 })
-const textOnlyTools = ['strategy_design', 'ask_clarification', 'explain_result']
+const textOnlyTools = ['strategy_design', 'ask_clarification', 'explain_result', 'stock_detail']
 const turnResultItems = (turn) => (turn?.result?.items || []).slice(0, 6)
 const turnAnswerLines = (turn) => (turn?.agentAnswer || '').split('\n').filter(Boolean)
 const turnThinkingPreview = (turn) => {
@@ -163,6 +163,7 @@ function historyBadge(c) {
   if (tool === 'strategy_design') return '策略'
   if (tool === 'ask_clarification') return '追问'
   if (tool === 'explain_result') return '解释'
+  if (tool === 'stock_detail') return '详情'
   return `${c.total} 只`
 }
 function historyTitle(c) {
@@ -181,6 +182,7 @@ function traceDisplay(trace) {
     .replace('选择工具：stock_screen', '选择工具：股票筛选')
     .replace('选择工具：strategy_select', '选择工具：策略选股')
     .replace('选择工具：explain_result', '选择工具：结果解释')
+    .replace('选择工具：stock_detail', '选择工具：个股详情')
     .replace('选择工具：ask_clarification', '选择工具：补充追问')
     .replace(/^调用 screener_engine\.screen/, '执行股票筛选')
     .replace(/^调用 strategy_selector\.run_strategy_selection/, '执行策略选股')
@@ -207,10 +209,23 @@ function toolParamText(call) {
   const result = call?.result || {}
   if (call?.name === 'stock_screen' && result.total != null) return `命中 ${result.total} 只`
   if (call?.name === 'strategy_select' && result.total != null) return `命中 ${result.total} 只`
+  if (call?.name === 'stock_detail' && result.code) return `目标 ${result.name || result.code}`
   if (call?.name === 'condition_parser') return call.message || '已生成筛选条件'
   if (call?.name === 'result_sort') return call.message || '已调整结果范围'
   if (call?.message) return call.message.length > 42 ? `${call.message.slice(0, 42)}…` : call.message
   return ''
+}
+
+function detailTargetFromToolCalls(calls = []) {
+  return (calls || []).find((call) => call?.name === 'stock_detail' && call?.result?.code)?.result || null
+}
+
+function turnDetailTarget(turn) {
+  return detailTargetFromToolCalls(turn?.toolCalls)
+}
+
+function openDetailTarget(target) {
+  if (target?.code) router.push(`/detail/${target.code}`)
 }
 
 async function send() {
@@ -567,6 +582,14 @@ const stageColor = (s) => ({
                 <div v-for="(line, i) in turnAnswerLines(turn)" :key="i" class="agent-answer-line">
                   {{ line }}
                 </div>
+                <button
+                  v-if="turnDetailTarget(turn)"
+                  type="button"
+                  class="agent-detail-button"
+                  @click="openDetailTarget(turnDetailTarget(turn))"
+                >
+                  打开详情 <Icon name="arrowRight" :size="12" />
+                </button>
               </div>
 
               <div v-if="turn.phase === 'screening'" class="screening-card">
@@ -948,6 +971,28 @@ const stageColor = (s) => ({
 
 .agent-answer-line + .agent-answer-line {
   margin-top: 4px;
+}
+
+.agent-detail-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid #D8D8D8;
+  border-radius: 4px;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+
+.agent-detail-button:hover {
+  border-color: #B8B8B8;
+  background: #F5F5F5;
+  color: #111111;
 }
 
 .result-preview {

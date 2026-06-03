@@ -1,6 +1,6 @@
 """模型 Function Calling Agent 规划适配器。
 
-向模型暴露五个工具，由模型自主选择并生成结构化参数；
+向模型暴露六个工具，由模型自主选择并生成结构化参数；
 后端校验通过后才使用，否则回退本地规则 Agent。
 """
 
@@ -17,7 +17,7 @@ from app.schemas.screener import ALLOWED_FIELDS, FilterCondition
 from .transport import openai_client
 
 # ---------------------------------------------------------------------------
-# 五个模型可见工具
+# 六个模型可见工具
 # ---------------------------------------------------------------------------
 
 TOOLS: list[dict] = [
@@ -147,6 +147,30 @@ TOOLS: list[dict] = [
                     "focus": {
                         "type": "string",
                         "description": "用户想重点了解的方向",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stock_detail",
+            "description": (
+                "定位某只股票的详情页，不重新执行筛选。"
+                "当用户明确要求查看/打开某只股票详情，或说查看第一只/第二只详情时使用。"
+                "如果无法从用户输入或上下文确定股票，应使用 ask_clarification。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "股票代码，如 600036.SH；无法确定时留空",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "股票名称，如 招商银行；无法确定时留空",
                     },
                 },
             },
@@ -294,6 +318,11 @@ class ExplainResultArgs(_StrictArgs):
     focus: str = Field(default="", max_length=200)
 
 
+class StockDetailArgs(_StrictArgs):
+    code: str = Field(default="", max_length=16)
+    name: str = Field(default="", max_length=40)
+
+
 class AskClarificationArgs(_StrictArgs):
     missing_info: list[str] = Field(default_factory=list, max_length=5)
     question: str = Field(default="", max_length=300)
@@ -312,6 +341,7 @@ TOOL_ARGS_SCHEMA: dict[str, type[BaseModel]] = {
     "strategy_design": StrategyDesignArgs,
     "strategy_select": StrategySelectArgs,
     "explain_result": ExplainResultArgs,
+    "stock_detail": StockDetailArgs,
     "ask_clarification": AskClarificationArgs,
 }
 
@@ -320,6 +350,7 @@ TOOL_LABELS: dict[str, str] = {
     "strategy_design": "策略设计",
     "strategy_select": "策略选股",
     "explain_result": "结果解释",
+    "stock_detail": "个股详情",
     "ask_clarification": "补充追问",
 }
 
@@ -455,11 +486,12 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
         "2. 明确说「只列/设计/不执行/先别跑」 → strategy_design\n"
         "3. 提到海龟/突破/均线/放量/RPS/强势/窄幅整理 → strategy_select\n"
         "4. 追问为什么/怎么看/分析结果（有上下文时）→ explain_result\n"
-        "5. 模糊无具体条件 → ask_clarification\n"
-        "6. 「全部股票/全市场/不设条件」→ stock_screen with conditions=[]\n"
-        "7. 结合对话上下文处理承接语：确认执行时沿用上一轮条件；"
+        "5. 明确要求查看/打开某只股票详情页 → stock_detail\n"
+        "6. 模糊无具体条件 → ask_clarification\n"
+        "7. 「全部股票/全市场/不设条件」→ stock_screen with conditions=[]\n"
+        "8. 结合对话上下文处理承接语：确认执行时沿用上一轮条件；"
         "调整排序时只修改 sort_by/sort_desc；换一批时沿用条件并增加 offset；"
-        "追问命中原因时使用 explain_result，不要重新筛选。"
+        "查看第一只/第二只详情时使用 stock_detail；追问命中原因时使用 explain_result，不要重新筛选。"
         "如果上下文不足，使用 ask_clarification。\n"
         "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；"
         "成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；"
@@ -572,6 +604,15 @@ def _to_plan_result(
             tool_label=label,
             reasoning="用户追问上一轮结果，基于上下文解释。",
             extra={"focus": args.focus},
+        )
+
+    if tool_name == "stock_detail":
+        args: StockDetailArgs
+        return AgentPlanResult(
+            tool=tool_name,
+            tool_label=label,
+            reasoning="用户要求查看某只股票详情，定位详情页目标。",
+            extra={"code": args.code, "name": args.name},
         )
 
     # ask_clarification

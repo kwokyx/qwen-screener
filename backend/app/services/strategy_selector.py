@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import re
 from statistics import mean
 import time
 from typing import Any
@@ -164,6 +165,16 @@ def list_agent_tools() -> list[StrategyToolInfo]:
             data_notes=["依赖前端传回的上一轮结果；上下文为空时会转为补充追问。"],
         ),
         StrategyToolInfo(
+            id="stock_detail",
+            label="个股详情",
+            category="对话工具",
+            description="当用户明确要求查看某只股票详情时使用；只定位详情页目标，不重新筛选。",
+            inputs=["query", "last_result"],
+            outputs=["股票代码", "详情页路径"],
+            examples=["查看第一只详情", "打开招商银行详情", "看 600036.SH 详情"],
+            data_notes=["依赖用户输入的股票代码/名称或上一轮结果顺序；不会调用 screener_engine。"],
+        ),
+        StrategyToolInfo(
             id="ask_clarification",
             label="补充追问",
             category="对话工具",
@@ -320,6 +331,14 @@ def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
                 message="基于上一轮上下文解释结果",
             )
         )
+    elif plan.tool == "stock_detail":
+        calls.append(
+            _tool_call(
+                "stock_detail",
+                "个股详情",
+                message="已定位详情页目标",
+            )
+        )
     return calls
 
 
@@ -335,7 +354,8 @@ def _mark_model_response(
     response.plan.ai_used = True
     response.plan.reasoning = model_plan.reasoning
     response.tool_trace = ["模型 FC Agent 已选择工具并校验通过", *response.tool_trace]
-    response.tool_calls = _planned_tool_calls(response.plan)
+    if response.plan.tool != "stock_detail":
+        response.tool_calls = _planned_tool_calls(response.plan)
     return response
 
 
@@ -373,6 +393,15 @@ def _build_non_executing_model_response(
             response = build_explain_result_response(query, context or {}, ai_configured=True)
         else:
             response = build_missing_context_response(query, ai_configured=True)
+        return _mark_model_response(response, model_plan)
+    if model_plan.tool == "stock_detail":
+        response = build_stock_detail_response(
+            query,
+            context or {},
+            ai_configured=True,
+            code=str(model_plan.extra.get("code") or ""),
+            name=str(model_plan.extra.get("name") or ""),
+        )
         return _mark_model_response(response, model_plan)
     return None
 
@@ -600,6 +629,8 @@ def preview_chat_plan(
         return build_context_sort_response(query, context, ai_configured=_ai_configured()).plan
     if is_confirmation_query(query):
         return build_context_screen_response(query, context, ai_configured=_ai_configured()).plan
+    if is_stock_detail_query(query):
+        return build_stock_detail_response(query, context, ai_configured=_ai_configured()).plan
     if is_result_explanation_query(query):
         if is_explain_result_query(query, context):
             return build_explain_result_response(query, context, ai_configured=_ai_configured()).plan
@@ -638,6 +669,8 @@ def plan_chat_agent(
         return local_response(build_context_sort_response(query, context, ai_configured=_ai_configured()))
     if is_confirmation_query(query):
         return local_response(build_context_screen_response(query, context, ai_configured=_ai_configured()))
+    if is_stock_detail_query(query):
+        return local_response(build_stock_detail_response(query, context, ai_configured=_ai_configured()))
     if is_result_explanation_query(query):
         if is_explain_result_query(query, context):
             return local_response(build_explain_result_response(query, context, ai_configured=_ai_configured()))
@@ -743,6 +776,13 @@ def is_result_sort_query(query: str) -> bool:
 def is_result_page_query(query: str) -> bool:
     q = "".join(ch for ch in query.strip().lower() if ch not in "，。！？!?、,. ")
     return q in {"换一批", "下一页", "下页", "再来一批", "继续看", "更多"}
+
+
+def is_stock_detail_query(query: str) -> bool:
+    q = query.strip().lower()
+    if _extract_stock_code(query):
+        return any(term in q for term in ("详情", "详细", "打开", "查看", "看一下", "看下", "进入"))
+    return any(term in q for term in ("详情", "详细资料", "详情页", "打开", "进入"))
 
 
 def is_strategy_design_query(query: str) -> bool:
@@ -1030,6 +1070,64 @@ def build_context_page_response(
                 message="已确定下一批结果范围",
             ),
             *_planned_tool_calls_without(plan, {"result_sort"}),
+        ],
+    )
+
+
+def build_stock_detail_response(
+    query: str,
+    context: dict[str, Any],
+    ai_configured: bool = False,
+    *,
+    code: str = "",
+    name: str = "",
+) -> StrategyAgentResponse:
+    target = _resolve_stock_detail_target(query, context, code=code, name=name)
+    if not target:
+        response = build_clarification_response(query, ai_configured=ai_configured)
+        response.answer = "我还没有定位到要查看的股票。可以说“查看第一只详情”，或直接输入股票代码，例如“查看 600036.SH 详情”。"
+        response.tool_trace = [
+            "tool_router -> ask_clarification",
+            "未打开详情页：缺少股票代码、名称或上一轮结果",
+        ]
+        response.tool_calls = _planned_tool_calls(response.plan)
+        return response
+
+    target_name = target.get("name") or target["code"]
+    detail_url = f"/detail/{target['code']}"
+    plan = StrategyAgentPlan(
+        tool="stock_detail",
+        tool_label="个股详情",
+        reasoning="用户要求查看某只股票详情；基于输入或上一轮结果定位详情页，不重新筛选。",
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=f"已定位 {target_name}（{target['code']}）的详情页。",
+        tool_trace=[
+            "tool_router -> stock_detail",
+            f"返回详情页目标：{target['code']}，未重新筛选",
+        ],
+        tool_calls=[
+            _tool_call(
+                "tool_router",
+                "意图判断",
+                result={"tool": "stock_detail", "label": "个股详情"},
+                message=plan.reasoning,
+            ),
+            _tool_call(
+                "parameter_validation",
+                "参数校验",
+                message="详情页目标已校验",
+            ),
+            _tool_call(
+                "stock_detail",
+                "个股详情",
+                result={"code": target["code"], "name": target.get("name"), "url": detail_url},
+                message="已定位详情页目标",
+            ),
         ],
     )
 
@@ -1392,6 +1490,74 @@ def _context_items(context: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         return []
     return [item for item in items if isinstance(item, dict)]
+
+
+def _extract_stock_code(text: str) -> str | None:
+    match = re.search(r"(?i)\b(?:(sh|sz|bj)\s*)?(\d{6})(?:\s*[.。]\s*(sh|sz|bj))?\b", text or "")
+    if not match:
+        return None
+    prefix, digits, suffix = match.groups()
+    market = (suffix or prefix or "").upper()
+    if not market:
+        if digits.startswith(("4", "8")):
+            market = "BJ"
+        else:
+            market = "SH" if digits.startswith(("5", "6", "9")) else "SZ"
+    return f"{digits}.{market}"
+
+
+def _detail_ordinal_index(query: str) -> int | None:
+    q = "".join(ch for ch in query.strip().lower() if ch not in "，。！？!?、,. ")
+    mapping = [
+        (("第一只", "第一支", "第一个", "第一家", "第一"), 0),
+        (("第二只", "第二支", "第二个", "第二家", "第二"), 1),
+        (("第三只", "第三支", "第三个", "第三家", "第三"), 2),
+        (("第四只", "第四支", "第四个", "第四家", "第四"), 3),
+        (("第五只", "第五支", "第五个", "第五家", "第五"), 4),
+    ]
+    for terms, index in mapping:
+        if any(term in q for term in terms):
+            return index
+    return None
+
+
+def _resolve_stock_detail_target(
+    query: str,
+    context: dict[str, Any],
+    *,
+    code: str = "",
+    name: str = "",
+) -> dict[str, Any] | None:
+    items = _context_items(context)
+    requested_code = _extract_stock_code(code) or _extract_stock_code(query)
+    if requested_code:
+        for item in items:
+            if str(item.get("code") or "").upper() == requested_code:
+                return {"code": requested_code, "name": item.get("name")}
+        return {"code": requested_code, "name": name or None}
+
+    requested_name = (name or "").strip()
+    if not requested_name:
+        for item in items:
+            item_name = str(item.get("name") or "").strip()
+            if item_name and item_name in query:
+                requested_name = item_name
+                break
+    if requested_name:
+        for item in items:
+            item_name = str(item.get("name") or "").strip()
+            if item_name and (requested_name in item_name or item_name in requested_name):
+                item_code = str(item.get("code") or "").upper()
+                if item_code:
+                    return {"code": item_code, "name": item_name}
+
+    ordinal = _detail_ordinal_index(query)
+    if ordinal is not None and 0 <= ordinal < len(items):
+        item = items[ordinal]
+        item_code = str(item.get("code") or "").upper()
+        if item_code:
+            return {"code": item_code, "name": item.get("name")}
+    return None
 
 
 def _context_conditions(context: dict[str, Any]) -> list[FilterCondition]:
