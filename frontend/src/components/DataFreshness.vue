@@ -180,6 +180,33 @@ const warningJobLabels = computed(() =>
   warnings.value.map((w) => w.label || labelOf(w.job)).filter(Boolean).join('、')
 )
 
+const activeSyncJobs = computed(() =>
+  JOBS.filter((j) => isJobActive(j.name)).map((j) => j.name)
+)
+
+const activeSyncJobLabels = computed(() =>
+  activeSyncJobs.value.map(labelOf).join('、')
+)
+
+const retryableWarnings = computed(() =>
+  JOBS
+    .map((j) => warnings.value.find((w) => w.job === j.name))
+    .filter((w) => {
+      if (!w?.job) return false
+      const status = statusOf(w.job) || w.status
+      return ['failed', 'stuck'].includes(status)
+    })
+)
+
+const nextRetryJob = computed(() => retryableWarnings.value[0]?.job || '')
+const nextRetryJobLabel = computed(() => nextRetryJob.value ? labelOf(nextRetryJob.value) : '')
+
+const retryWarningMessage = computed(() => {
+  if (!retryableWarnings.value.length) return ''
+  if (activeSyncJobLabels.value) return `已有同步任务执行中：${activeSyncJobLabels.value}。完成后再重试异常任务。`
+  return `将先重试 ${nextRetryJobLabel.value}，其余异常任务请等待当前任务完成后再继续。`
+})
+
 const syncImpactMessage = computed(() => {
   if (!hasSyncIssue.value) return ''
   const warningJobs = new Set(warnings.value.map((w) => w.job))
@@ -204,6 +231,22 @@ function close() {
 
 function goLogin() {
   router.push({ name: 'login', query: { redirect: route.fullPath } })
+}
+
+async function retryNextWarningJob() {
+  if (!canSync.value) {
+    goLogin()
+    return
+  }
+  if (activeSyncJobLabels.value) {
+    toast.info(`已有同步任务执行中：${activeSyncJobLabels.value}`)
+    return
+  }
+  if (!nextRetryJob.value) {
+    toast.info('当前没有可重试的异常任务')
+    return
+  }
+  await runJob(nextRetryJob.value)
 }
 function onDoc(e) {
   if (!open.value) return
@@ -286,6 +329,18 @@ onBeforeUnmount(() => {
           <div v-if="syncNextStepMessage" :style="{ fontSize: '10.5px', color: A2.up, lineHeight: 1.55, marginTop: '4px', fontWeight: 600 }">
             {{ syncNextStepMessage }}
           </div>
+          <div v-if="retryWarningMessage" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55, marginTop: '4px' }">
+            {{ retryWarningMessage }}
+          </div>
+          <button v-if="canSync && retryableWarnings.length"
+                  class="btn-outline"
+                  :disabled="Boolean(activeSyncJobLabels) || !nextRetryJob"
+                  :title="activeSyncJobLabels ? '已有同步任务执行中' : '按顺序重试，避免并发重任务'"
+                  :style="{ marginTop: '8px', padding: '5px 9px', fontSize: '11px', background: A2.surface, maxWidth: '100%' }"
+                  @click="retryNextWarningJob">
+            <Icon name="refresh" :size="11" :style="{ animation: activeSyncJobLabels ? 'spin 1s linear infinite' : 'none' }" />
+            重试下一个异常
+          </button>
         </div>
 
         <div v-if="!canSync" :style="{ padding: '12px 14px', borderTop: `1px solid ${A2.borderHair}` }">
