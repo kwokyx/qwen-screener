@@ -17,15 +17,18 @@
 供前端 /health/data 显示"最后更新于..."。
 """
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import func, text
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal, engine
+from app.models.stock import StockBasic, StockDaily, StockFinancial
 from app.services import data_sync, db_backup
 
 USE_BAOSTOCK = settings.data_provider == "baostock"
@@ -47,6 +50,9 @@ _JOB_STUCK_MINUTES = {
     "weekly_kline_backfill": 180,
     "db_backup": 15,
 }
+_FINANCIAL_COVERAGE_THRESHOLD = 0.90
+_KLINE_BACKFILL_LOOKBACK_DAYS = 90
+_KLINE_BACKFILL_MIN_COVERED_DAYS = 40
 
 
 _META_TABLE_DDL = """
@@ -172,7 +178,178 @@ def status_label(status: str | None) -> str:
     return "执行"
 
 
-def _run_with_meta(name: str, fn, *, reserved: bool = False):
+def _market_row_threshold(basic_cnt: int) -> int:
+    return max(100, int(basic_cnt * 0.5)) if basic_cnt else 100
+
+
+def _latest_expected_weekday(day=None) -> date:
+    """Match /health/data's market-close freshness basis without importing it."""
+    now = day or datetime.now(ZoneInfo("Asia/Shanghai"))
+    current = now.date() if isinstance(now, datetime) else now
+    if isinstance(now, datetime) and now.hour < 16:
+        current -= timedelta(days=1)
+    while current.weekday() >= 5:
+        current -= timedelta(days=1)
+    return current
+
+
+def _covered_latest_trade_date(db: Session, basic_cnt: int):
+    min_rows = _market_row_threshold(basic_cnt)
+    cnt = func.count(StockDaily.id)
+    row = (
+        db.query(StockDaily.trade_date, cnt.label("n"))
+        .group_by(StockDaily.trade_date)
+        .having(cnt >= min_rows)
+        .order_by(StockDaily.trade_date.desc())
+        .first()
+    )
+    return row[0] if row else db.query(func.max(StockDaily.trade_date)).scalar()
+
+
+def _latest_expected_financial_report_date(day=None) -> date:
+    """Latest report period that should normally be available for A-shares."""
+    today = day or datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    if isinstance(today, datetime):
+        today = today.date()
+    checkpoints = (
+        (date(today.year, 10, 31), date(today.year, 9, 30)),
+        (date(today.year, 8, 31), date(today.year, 6, 30)),
+        (date(today.year, 4, 30), date(today.year, 3, 31)),
+    )
+    for cutoff, report_date in checkpoints:
+        if today >= cutoff:
+            return report_date
+    return date(today.year - 1, 12, 31)
+
+
+def _daily_market_status(db: Session) -> dict:
+    basic_cnt = db.query(StockBasic).count()
+    if not basic_cnt:
+        return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
+    expected = _latest_expected_weekday()
+    latest = _covered_latest_trade_date(db, basic_cnt)
+    latest_cnt = 0
+    if latest:
+        latest_cnt = db.query(StockDaily).filter(StockDaily.trade_date == latest).count()
+    threshold = _market_row_threshold(basic_cnt)
+    ready = bool(latest and latest >= expected and latest_cnt >= threshold)
+    detail = (
+        f"数据已达标，跳过远程同步：日线覆盖 {latest_cnt}/{basic_cnt}，"
+        f"latest={latest}，expected={expected}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else f"日线覆盖未达标：{latest_cnt}/{basic_cnt}，latest={latest}，expected={expected}",
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "latest_trade_date": str(latest) if latest else None,
+        "expected_trade_date": str(expected),
+        "covered_rows": latest_cnt,
+        "basic_rows": basic_cnt,
+        "coverage_threshold": threshold,
+    }
+
+
+def _weekly_fundamentals_status(db: Session) -> dict:
+    basic_cnt = db.query(StockBasic).count()
+    if not basic_cnt:
+        return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
+    expected_report = _latest_expected_financial_report_date()
+    fresh_fin_cnt = (
+        db.query(StockFinancial.code)
+        .filter(StockFinancial.report_date >= expected_report)
+        .distinct()
+        .count()
+    )
+    latest_report = db.query(func.max(StockFinancial.report_date)).scalar()
+    required = max(1, int(basic_cnt * _FINANCIAL_COVERAGE_THRESHOLD))
+    ready = bool(latest_report and latest_report >= expected_report and fresh_fin_cnt >= required)
+    detail = (
+        f"数据已达标，跳过远程同步：财务覆盖 {fresh_fin_cnt}/{basic_cnt}，"
+        f"最新报告期 {latest_report}，应至 {expected_report}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else f"财务覆盖未达标：{fresh_fin_cnt}/{basic_cnt}，最新报告期 {latest_report}，应至 {expected_report}",
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "latest_report_date": str(latest_report) if latest_report else None,
+        "expected_report_date": str(expected_report),
+        "covered_rows": fresh_fin_cnt,
+        "basic_rows": basic_cnt,
+        "coverage_threshold": required,
+    }
+
+
+def _weekly_kline_backfill_status(db: Session) -> dict:
+    basic_cnt = db.query(StockBasic).count()
+    if not basic_cnt:
+        return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
+    expected = _latest_expected_weekday()
+    latest = _covered_latest_trade_date(db, basic_cnt)
+    threshold = _market_row_threshold(basic_cnt)
+    lookback_start = expected - timedelta(days=_KLINE_BACKFILL_LOOKBACK_DAYS)
+    cnt = func.count(StockDaily.id)
+    covered_days = (
+        db.query(StockDaily.trade_date, cnt.label("n"))
+        .filter(StockDaily.trade_date >= lookback_start)
+        .group_by(StockDaily.trade_date)
+        .having(cnt >= threshold)
+        .count()
+    )
+    ready = bool(latest and latest >= expected and covered_days >= _KLINE_BACKFILL_MIN_COVERED_DAYS)
+    detail = (
+        f"数据已达标，跳过远程同步：近 {_KLINE_BACKFILL_LOOKBACK_DAYS} 天"
+        f"全市场K线覆盖交易日 {covered_days}/{_KLINE_BACKFILL_MIN_COVERED_DAYS}，latest={latest}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else (
+            f"近期K线覆盖未达标：覆盖交易日 {covered_days}/{_KLINE_BACKFILL_MIN_COVERED_DAYS}，latest={latest}"
+        ),
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "latest_trade_date": str(latest) if latest else None,
+        "expected_trade_date": str(expected),
+        "covered_days": covered_days,
+        "required_days": _KLINE_BACKFILL_MIN_COVERED_DAYS,
+        "coverage_threshold": threshold,
+    }
+
+
+_JOB_DATA_STATUS = {
+    "daily_market": _daily_market_status,
+    "weekly_fundamentals": _weekly_fundamentals_status,
+    "weekly_kline_backfill": _weekly_kline_backfill_status,
+}
+
+
+def job_data_status(name: str, db: Session | None = None) -> dict:
+    """Return whether a heavy job can be repaired without remote sync."""
+    checker = _JOB_DATA_STATUS.get(name)
+    if checker is None:
+        return {
+            "ready": False,
+            "reason": "该任务没有可短路的数据达标检查",
+            "data_impact": "unknown",
+        }
+    if db is not None:
+        return checker(db)
+    session = SessionLocal()
+    try:
+        return checker(session)
+    finally:
+        session.close()
+
+
+def _shortcut_detail_if_ready(name: str) -> str | None:
+    status = job_data_status(name)
+    if not status.get("ready"):
+        return None
+    return status.get("detail") or status.get("reason") or "数据已达标，跳过远程同步"
+
+
+def _run_with_meta(name: str, fn, *, reserved: bool = False, allow_shortcut: bool = True):
     _ensure_meta_table()
     if not reserved and not _reserve_job(name):
         logger.info("[SCHED] {} 已在执行中，跳过重复触发", name)
@@ -183,9 +360,14 @@ def _run_with_meta(name: str, fn, *, reserved: bool = False):
     status = "success"
     try:
         _record(name, "running", 0, "任务执行中")
-        rv = fn()
-        if rv is not None:
-            detail = f"affected={rv}"
+        shortcut_detail = _shortcut_detail_if_ready(name) if allow_shortcut else None
+        if shortcut_detail:
+            detail = shortcut_detail
+            logger.info("[SCHED] {} {}", name, shortcut_detail)
+        else:
+            rv = fn()
+            if rv is not None:
+                detail = f"affected={rv}"
     except Exception as e:
         status = "failed"
         detail = str(e)[:240]
@@ -428,43 +610,43 @@ def start():
 
     # 周一-周五 15:30：日K线快照（bs: OHLCV+PE+PB；ak: 新浪 OHLC）
     _scheduler.add_job(
-        lambda: _run_with_meta("daily_market", job_daily_market),
+        lambda: _run_with_meta("daily_market", job_daily_market, allow_shortcut=False),
         CronTrigger(day_of_week="mon-fri", hour=15, minute=30),
         id="daily_market",
     )
     # 周一-周五 16:00：估值/财务面
     _scheduler.add_job(
-        lambda: _run_with_meta("daily_value", job_daily_value),
+        lambda: _run_with_meta("daily_value", job_daily_value, allow_shortcut=False),
         CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
         id="daily_value",
     )
     # 周六 02:00：全量财务指标
     _scheduler.add_job(
-        lambda: _run_with_meta("weekly_fundamentals", job_weekly_fundamentals),
+        lambda: _run_with_meta("weekly_fundamentals", job_weekly_fundamentals, allow_shortcut=False),
         CronTrigger(day_of_week="sat", hour=2, minute=0),
         id="weekly_fundamentals",
     )
     # 周六 03:00：现金分红记录 + 本地 TTM 股息率
     _scheduler.add_job(
-        lambda: _run_with_meta("weekly_dividend", job_weekly_dividend),
+        lambda: _run_with_meta("weekly_dividend", job_weekly_dividend, allow_shortcut=False),
         CronTrigger(day_of_week="sat", hour=3, minute=0),
         id="weekly_dividend",
     )
     # 周日 02:00：代码列表刷新
     _scheduler.add_job(
-        lambda: _run_with_meta("weekly_basic", job_weekly_basic),
+        lambda: _run_with_meta("weekly_basic", job_weekly_basic, allow_shortcut=False),
         CronTrigger(day_of_week="sun", hour=2, minute=0),
         id="weekly_basic",
     )
     # 每 6h 冷备份
     _scheduler.add_job(
-        lambda: _run_with_meta("db_backup", job_db_backup),
+        lambda: _run_with_meta("db_backup", job_db_backup, allow_shortcut=False),
         CronTrigger(hour="*/6", minute=0),
         id="db_backup",
     )
     # 周日 03:00：全市场 60 天 K 线回填
     _scheduler.add_job(
-        lambda: _run_with_meta("weekly_kline_backfill", job_weekly_kline_backfill),
+        lambda: _run_with_meta("weekly_kline_backfill", job_weekly_kline_backfill, allow_shortcut=False),
         CronTrigger(day_of_week="sun", hour=3, minute=0),
         id="weekly_kline_backfill",
     )

@@ -1338,35 +1338,46 @@ def _sync_daily_bs_parallel(
     raw_rows = 0
     failed = 0
     errors: list[str] = []
+    pool = None
+    terminated = False
     try:
-        with Pool(n_workers) as pool:
-            tasks = [(chunk, start_date, end_date) for chunk in chunks]
-            iterator = pool.imap_unordered(_fetch_kline_chunk_worker, tasks)
-            for index in range(1, len(tasks) + 1):
-                try:
-                    result = iterator.next(timeout=BAOSTOCK_BATCH_TIMEOUT)
-                except MpTimeoutError:
-                    logger.warning(
-                        "[BS-DAILY-MP] 等待批次超过 {} 秒，终止剩余 worker；已完成 {}/{} 批",
-                        BAOSTOCK_BATCH_TIMEOUT, index - 1, len(tasks),
-                    )
-                    pool.terminate()
-                    break
-                rows = result.get("rows") or []
-                raw_rows += len(rows)
-                failed += int(result.get("failed") or 0)
-                if result.get("error"):
-                    errors.append(result["error"])
-                chunk_inserted, chunk_updated = _upsert_daily_rows(db, rows)
-                inserted += chunk_inserted
-                updated += chunk_updated
-                if index % 5 == 0 or index == len(chunks):
-                    logger.info(
-                        "[BS-DAILY-MP] 进度 {}/{}: 新增 {} / 更新 {} / 失败股票 {}",
-                        index, len(chunks), inserted, updated, failed,
-                    )
+        pool = Pool(n_workers)
+        tasks = [(chunk, start_date, end_date) for chunk in chunks]
+        iterator = pool.imap_unordered(_fetch_kline_chunk_worker, tasks)
+        for index in range(1, len(tasks) + 1):
+            try:
+                result = iterator.next(timeout=BAOSTOCK_BATCH_TIMEOUT)
+            except MpTimeoutError:
+                logger.warning(
+                    "[BS-DAILY-MP] 等待批次超过 {} 秒，终止剩余 worker；已完成 {}/{} 批",
+                    BAOSTOCK_BATCH_TIMEOUT, index - 1, len(tasks),
+                )
+                pool.terminate()
+                terminated = True
+                break
+            rows = result.get("rows") or []
+            raw_rows += len(rows)
+            failed += int(result.get("failed") or 0)
+            if result.get("error"):
+                errors.append(result["error"])
+            chunk_inserted, chunk_updated = _upsert_daily_rows(db, rows)
+            inserted += chunk_inserted
+            updated += chunk_updated
+            if index % 5 == 0 or index == len(chunks):
+                logger.info(
+                    "[BS-DAILY-MP] 进度 {}/{}: 新增 {} / 更新 {} / 失败股票 {}",
+                    index, len(chunks), inserted, updated, failed,
+                )
+        if pool is not None and not terminated:
+            pool.close()
     except Exception as exc:
+        if pool is not None and not terminated:
+            pool.terminate()
+            terminated = True
         logger.warning("[BS-DAILY-MP] 多进程拉取异常: {}", str(exc)[:160])
+    finally:
+        if pool is not None:
+            pool.join()
 
     if errors:
         for msg in errors[:3]:
@@ -1693,7 +1704,9 @@ def _fetch_dividend_records_parallel(
     records: dict[str, list[dict]] = {}
     failed = 0
     logger.info("[BS-DIVIDEND-MP] {} 只, workers={}, batches={}", len(codes), n_workers, len(chunks))
-    with Pool(n_workers) as pool:
+    pool = Pool(n_workers)
+    terminated = False
+    try:
         iterator = pool.imap_unordered(_fetch_dividend_chunk_worker, [(chunk, years) for chunk in chunks])
         for index in range(1, len(chunks) + 1):
             try:
@@ -1704,6 +1717,7 @@ def _fetch_dividend_records_parallel(
                     BAOSTOCK_BATCH_TIMEOUT, index - 1, len(chunks),
                 )
                 pool.terminate()
+                terminated = True
                 break
             records.update(result.get("records") or {})
             failed += int(result.get("failed") or 0)
@@ -1714,6 +1728,15 @@ def _fetch_dividend_records_parallel(
                     "[BS-DIVIDEND-MP] 进度 {}/{}: 成功股票 {} / 失败股票 {}",
                     index, len(chunks), len(records), failed,
                 )
+        if not terminated:
+            pool.close()
+    except Exception:
+        if not terminated:
+            pool.terminate()
+            terminated = True
+        raise
+    finally:
+        pool.join()
     return records
 
 

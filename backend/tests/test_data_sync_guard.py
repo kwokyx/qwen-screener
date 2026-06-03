@@ -5,6 +5,8 @@
 更新，残留数据就乱了。本测试模拟"DB 已有 5000 条 / 上游只返 100 条"的情况，
 验证 sync_basic 拒绝写入。
 """
+import multiprocessing
+
 import pandas as pd
 import pytest
 from datetime import date
@@ -129,3 +131,49 @@ def test_sync_kline_bs_refreshes_existing_front_adjusted_rows(db, monkeypatch):
     row = db.query(StockDaily).one()
     assert row.close == 140.62
     assert row.amount == 14_185_705_002
+
+
+def test_sync_daily_bs_parallel_terminates_and_joins_pool_on_timeout(db, monkeypatch):
+    class FakeIterator:
+        def next(self, timeout=None):
+            raise multiprocessing.TimeoutError()
+
+    class FakePool:
+        last = None
+
+        def __init__(self, workers):
+            self.workers = workers
+            self.terminated = False
+            self.closed = False
+            self.joined = False
+            FakePool.last = self
+
+        def imap_unordered(self, fn, tasks):
+            self.tasks = list(tasks)
+            return FakeIterator()
+
+        def terminate(self):
+            self.terminated = True
+
+        def close(self):
+            self.closed = True
+
+        def join(self):
+            self.joined = True
+
+    monkeypatch.setattr(multiprocessing, "Pool", FakePool)
+    monkeypatch.setattr(data_sync, "BAOSTOCK_BATCH_TIMEOUT", 0.01)
+
+    rv = data_sync._sync_daily_bs_parallel(
+        db,
+        [f"60{i:04d}.SH" for i in range(100)],
+        "2026-06-01",
+        "2026-06-03",
+        full_market_request=False,
+        workers=1,
+    )
+
+    assert rv == 0
+    assert FakePool.last.terminated is True
+    assert FakePool.last.joined is True
+    assert FakePool.last.closed is False

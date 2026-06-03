@@ -28,9 +28,12 @@ const loading = ref(false)
 const running = ref({})         // {jobName: boolean}
 const canSync = computed(() => Boolean(auth.token))
 const hasSyncIssue = computed(() => warnings.value.length > 0)
+const syncWarningsDataAvailable = computed(() =>
+  hasSyncIssue.value && warnings.value.every((w) => w.can_fast_retry || w.data_impact === 'data_available')
+)
 const hasIssue = computed(() => {
   const code = freshness.value?.reason_code
-  return hasSyncIssue.value || ['empty_basic', 'empty_daily', 'sync_issue', 'stale'].includes(code)
+  return (hasSyncIssue.value && !syncWarningsDataAvailable.value) || ['empty_basic', 'empty_daily', 'sync_issue', 'stale'].includes(code)
 })
 let poller = null
 
@@ -162,6 +165,7 @@ const summary = computed(() => {
 
 const summaryColor = computed(() =>
   hasIssue.value ? A2.up :
+  hasSyncIssue.value ? A2.amber :
   summary.value.tone === 'fresh' ? A2.down :
   summary.value.tone === 'meh' ? A2.amber :
   summary.value.tone === 'stale' ? A2.up :
@@ -198,12 +202,19 @@ const retryableWarnings = computed(() =>
     })
 )
 
-const nextRetryJob = computed(() => retryableWarnings.value[0]?.job || '')
+const nextRetryWarning = computed(() => retryableWarnings.value[0] || null)
+const nextRetryJob = computed(() => nextRetryWarning.value?.job || '')
 const nextRetryJobLabel = computed(() => nextRetryJob.value ? labelOf(nextRetryJob.value) : '')
+const retryButtonLabel = computed(() =>
+  nextRetryWarning.value?.can_fast_retry ? '修复下一个异常状态' : '重试下一个异常'
+)
 
 const retryWarningMessage = computed(() => {
   if (!retryableWarnings.value.length) return ''
   if (activeSyncJobLabels.value) return `已有同步任务执行中：${activeSyncJobLabels.value}。完成后再重试异常任务。`
+  if (nextRetryWarning.value?.can_fast_retry) {
+    return `将修复 ${nextRetryJobLabel.value} 的异常状态；数据已达标时不会重新拉取全市场。`
+  }
   return `将先重试 ${nextRetryJobLabel.value}，其余异常任务请等待当前任务完成后再继续。`
 })
 
@@ -211,6 +222,9 @@ const syncImpactMessage = computed(() => {
   if (!hasSyncIssue.value) return ''
   const warningJobs = new Set(warnings.value.map((w) => w.job))
   if (fresh.value) {
+    if (syncWarningsDataAvailable.value) {
+      return '数据当前可用，行情已达到应有交易日；这些异常来自上次后台任务中断，登录后可按顺序修复状态。'
+    }
     if (warningJobs.has('daily_market') || warningJobs.has('daily_value')) {
       return '行情日期已达到应有交易日，但行情或估值同步任务仍有异常；涉及价格、估值或股息率的筛选建议先重试对应任务。'
     }
@@ -220,10 +234,22 @@ const syncImpactMessage = computed(() => {
 })
 
 const syncNextStepMessage = computed(() => {
-  if (warningJobLabels.value) return `下一步：重试 ${warningJobLabels.value}。`
+  if (warningJobLabels.value) {
+    if (retryableWarnings.value.length && retryableWarnings.value.every((w) => w.can_fast_retry)) return `下一步：修复 ${warningJobLabels.value} 的异常状态。`
+    return `下一步：重试 ${warningJobLabels.value}。`
+  }
   if (recommendedJobLabels.value) return `下一步：运行 ${recommendedJobLabels.value}。`
   return ''
 })
+
+function warningFor(name) {
+  return warnings.value.find((w) => w.job === name)
+}
+
+function actionLabelFor(name) {
+  if (isJobActive(name)) return '后台执行'
+  return warningFor(name)?.can_fast_retry ? '修复状态' : '立即同步'
+}
 
 function close() {
   open.value = false
@@ -324,7 +350,8 @@ onBeforeUnmount(() => {
             {{ syncImpactMessage }}
           </div>
           <div v-for="w in warnings.slice(0, 3)" :key="w.job" :style="{ fontSize: '10.5px', color: A2.textSub, lineHeight: 1.55 }">
-            {{ w.label }}：{{ w.message || '任务异常，请重试' }}
+            {{ w.label }}：{{ w.message || '任务异常，请重试' }}<span v-if="w.can_fast_retry">（数据已达标）</span>
+            <div v-if="w.recommended_action" :style="{ color: A2.textDim }">建议：{{ w.recommended_action }}</div>
           </div>
           <div v-if="syncNextStepMessage" :style="{ fontSize: '10.5px', color: A2.up, lineHeight: 1.55, marginTop: '4px', fontWeight: 600 }">
             {{ syncNextStepMessage }}
@@ -339,7 +366,7 @@ onBeforeUnmount(() => {
                   :style="{ marginTop: '8px', padding: '5px 9px', fontSize: '11px', background: A2.surface, maxWidth: '100%' }"
                   @click="retryNextWarningJob">
             <Icon name="refresh" :size="11" :style="{ animation: activeSyncJobLabels ? 'spin 1s linear infinite' : 'none' }" />
-            重试下一个异常
+            {{ retryButtonLabel }}
           </button>
         </div>
 
@@ -372,7 +399,7 @@ onBeforeUnmount(() => {
                     :title="`预计 ${j.eta}`"
                     class="btn-outline" :style="{ padding: '5px 10px', fontSize: '11px', whiteSpace: 'nowrap', minWidth: '64px' }">
               <Icon name="refresh" :size="11" :style="{ animation: isJobActive(j.name) ? 'spin 1s linear infinite' : 'none' }" />
-              {{ isJobActive(j.name) ? '后台执行' : '立即同步' }}
+              {{ actionLabelFor(j.name) }}
             </button>
           </div>
         </div>

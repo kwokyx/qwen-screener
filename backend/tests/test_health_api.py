@@ -95,6 +95,44 @@ def test_data_health_reports_stuck_sync_job(db):
         conn.execute(text("DELETE FROM sync_meta"))
 
 
+def test_data_health_reports_fresh_data_with_repairable_sync_warning(db, monkeypatch):
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(health, "_latest_expected_weekday", lambda: expected)
+    monkeypatch.setattr(health.scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    for idx in range(120):
+        code = f"60{idx:04d}.SH"
+        db.add(StockBasic(code=code, name=f"股票{idx}"))
+        db.add(StockDaily(code=code, trade_date=expected, close=10, volume=100))
+    db.commit()
+
+    health.scheduler._ensure_meta_table()
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+        conn.execute(text(
+            "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+            "VALUES (:n, :t, :s, :d, :x)"
+        ), {
+            "n": "daily_market",
+            "t": datetime.utcnow(),
+            "s": "failed",
+            "d": 0,
+            "x": "服务重启，上一轮后台任务未完成",
+        })
+
+    result = health.data_health(db)
+
+    assert result["fresh"] is True
+    assert result["sync_has_issue"] is True
+    warning = result["sync_warnings"][0]
+    assert warning["job"] == "daily_market"
+    assert warning["warning_kind"] == "task_failed_data_ready"
+    assert warning["data_impact"] == "data_available"
+    assert warning["can_fast_retry"] is True
+    assert "不会重新拉取全市场" in warning["recommended_action"]
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+
+
 def test_data_health_is_public_but_manual_sync_requires_login(db, monkeypatch):
     monkeypatch.setattr(health.scheduler, "run_async", lambda job: {"status": "queued"})
 

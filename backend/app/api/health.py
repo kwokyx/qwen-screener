@@ -71,7 +71,7 @@ def _freshness_diagnostics(
     latest_daily_cnt: int,
     basic_cnt: int,
     sync_meta: dict[str, dict],
-    sync_warnings: list[dict[str, str]],
+    sync_warnings: list[dict],
 ) -> dict:
     """Explain data freshness without weakening the actual freshness check."""
     threshold = _market_row_threshold(basic_cnt)
@@ -175,13 +175,12 @@ def data_health(db: Session = Depends(get_db)):
         ).count()
 
     sync_meta = scheduler.get_meta()
-    sync_warnings = _sync_warnings(sync_meta)
-
     # 简单"新鲜度"判断：覆盖全市场的最新日期已达到最近工作日。
     expected_trade_date = _latest_expected_weekday()
     fresh = False
     if latest_trade_date:
         fresh = latest_trade_date >= expected_trade_date
+    sync_warnings = _sync_warnings(sync_meta, db=db, fresh=fresh)
     freshness = _freshness_diagnostics(
         latest_trade_date=latest_trade_date,
         newest_trade_date=newest_trade_date,
@@ -223,7 +222,7 @@ def data_health(db: Session = Depends(get_db)):
     }
 
 
-def _sync_warnings(sync_meta: dict[str, dict]) -> list[dict[str, str]]:
+def _sync_warnings(sync_meta: dict[str, dict], *, db: Session | None = None, fresh: bool = False) -> list[dict]:
     labels = {
         "daily_market": "日线行情",
         "daily_value": "估值数据",
@@ -233,16 +232,33 @@ def _sync_warnings(sync_meta: dict[str, dict]) -> list[dict[str, str]]:
         "weekly_kline_backfill": "K线回填",
         "db_backup": "数据备份",
     }
-    warnings: list[dict[str, str]] = []
+    warnings: list[dict] = []
     for name, meta in (sync_meta or {}).items():
         status = meta.get("display_status") or meta.get("status")
         if status not in {"failed", "stuck"}:
             continue
+        readiness = scheduler.job_data_status(name, db=db)
+        data_ready = bool(readiness.get("ready"))
+        data_impact = readiness.get("data_impact") or ("data_available" if data_ready else "needs_sync")
+        if data_ready:
+            warning_kind = "task_failed_data_ready"
+            recommended_action = "修复异常状态；当前数据已达标，不会重新拉取全市场"
+        elif fresh:
+            warning_kind = "task_failed_data_fresh"
+            recommended_action = "按顺序重试异常任务；数据当前仍可用于基础筛选"
+        else:
+            warning_kind = "task_failed_needs_sync"
+            recommended_action = "重新同步该任务，完成后再检查数据新鲜度"
         warnings.append({
             "job": name,
             "label": labels.get(name, name),
             "status": status,
             "message": meta.get("detail") or ("任务异常" if status == "stuck" else "同步失败"),
+            "warning_kind": warning_kind,
+            "data_impact": data_impact,
+            "can_fast_retry": data_ready,
+            "recommended_action": recommended_action,
+            "readiness": readiness,
         })
     return warnings
 
