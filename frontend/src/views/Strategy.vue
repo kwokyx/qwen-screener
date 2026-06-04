@@ -1,5 +1,5 @@
 <script setup>
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
@@ -46,6 +46,8 @@ const structuredLogic = ref('AND')
 const structuredSortBy = ref('market_cap')
 const structuredSortDesc = ref(true)
 const workspaceMode = ref('agent')
+const storageReady = ref(false)
+const STATE_STORAGE_KEY = 'qwen-stock:strategy-page-state:v1'
 
 const activeTemplate = computed(() => templates.value.find((item) => item.id === activeId.value))
 const isAgentDesign = computed(() => agentResult.value?.plan?.tool === 'strategy_design')
@@ -423,8 +425,71 @@ function chooseStrategy(id) {
   errorMsg.value = ''
 }
 
+function readSavedState() {
+  try {
+    const raw = window.sessionStorage.getItem(STATE_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch (err) {
+    return null
+  }
+}
+
+function restoreSavedState() {
+  const saved = readSavedState()
+  if (!saved || saved.version !== 1) return
+
+  if (['agent', 'structured', 'strategy'].includes(saved.workspaceMode)) {
+    workspaceMode.value = saved.workspaceMode
+  }
+  if (typeof saved.agentQuery === 'string') {
+    agentQuery.value = saved.agentQuery
+  }
+  if (saved.activeId && templates.value.some((item) => item.id === saved.activeId)) {
+    activeId.value = saved.activeId
+  }
+  if (Array.isArray(saved.structuredConditions) && saved.structuredConditions.length) {
+    structuredConditions.value = saved.structuredConditions
+    structuredConditionId = Math.max(...saved.structuredConditions.map((item) => Number(item.id) || 0), structuredConditionId)
+  }
+  if (['AND', 'OR'].includes(saved.structuredLogic)) {
+    structuredLogic.value = saved.structuredLogic
+  }
+  if (typeof saved.structuredSortBy === 'string') {
+    structuredSortBy.value = saved.structuredSortBy
+  }
+  if (typeof saved.structuredSortDesc === 'boolean') {
+    structuredSortDesc.value = saved.structuredSortDesc
+  }
+
+  result.value = saved.result || null
+  agentResult.value = saved.agentResult || null
+  structuredResult.value = saved.structuredResult || null
+}
+
+function persistState() {
+  if (!storageReady.value) return
+  try {
+    window.sessionStorage.setItem(STATE_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      workspaceMode: workspaceMode.value,
+      activeId: activeId.value,
+      agentQuery: agentQuery.value,
+      structuredConditions: structuredConditions.value,
+      structuredLogic: structuredLogic.value,
+      structuredSortBy: structuredSortBy.value,
+      structuredSortDesc: structuredSortDesc.value,
+      result: result.value,
+      agentResult: agentResult.value,
+      structuredResult: structuredResult.value,
+    }))
+  } catch (err) {
+    // Session storage can be unavailable in private or embedded browser contexts.
+  }
+}
+
 async function bootstrap() {
   bootstrapLoading.value = true
+  let didLoad = false
   try {
     const [templateData, toolData] = await Promise.all([
       getStrategyTemplates(),
@@ -433,14 +498,33 @@ async function bootstrap() {
     templates.value = templateData
     tools.value = toolData
     activeId.value = templates.value.find((item) => item.id === 'rps_breakout')?.id || templates.value[0]?.id || ''
+    restoreSavedState()
+    didLoad = true
   } catch (err) {
     errorMsg.value = err.response?.data?.detail || err.message || '策略加载失败'
   } finally {
+    if (didLoad) {
+      storageReady.value = true
+      persistState()
+    }
     bootstrapLoading.value = false
   }
 }
 
 onMounted(bootstrap)
+
+watch([
+  workspaceMode,
+  activeId,
+  agentQuery,
+  structuredConditions,
+  structuredLogic,
+  structuredSortBy,
+  structuredSortDesc,
+  result,
+  agentResult,
+  structuredResult,
+], persistState, { deep: true })
 </script>
 
 <template>
