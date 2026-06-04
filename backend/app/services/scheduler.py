@@ -778,6 +778,29 @@ def run_async(job_name: str) -> dict:
     if not _reserve_job(job_name):
         meta = get_meta().get(job_name, {})
         return {"queued": False, "running": True, "job": job_name, "meta": meta}
+
+    shortcut_started = datetime.utcnow()
+    try:
+        shortcut_detail = _shortcut_detail_if_ready(job_name)
+    except Exception as exc:
+        shortcut_detail = None
+        logger.warning("[SCHED] {} 数据达标检查失败，转入后台同步: {}", job_name, str(exc)[:120])
+    if shortcut_detail:
+        dur = int((datetime.utcnow() - shortcut_started).total_seconds() * 1000)
+        try:
+            _record(job_name, "success", dur, shortcut_detail)
+            _clear_runtime_caches_after_data_job(job_name, "success")
+            meta = get_meta().get(job_name, {})
+            return {
+                "queued": False,
+                "running": False,
+                "job": job_name,
+                "shortcut": True,
+                "meta": meta,
+            }
+        finally:
+            _release_job(job_name)
+
     _record(job_name, "queued", 0, "任务已排队，后台执行")
     t = threading.Thread(
         target=_run_with_meta,

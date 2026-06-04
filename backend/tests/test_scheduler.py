@@ -135,6 +135,66 @@ def test_run_now_short_circuits_daily_market_when_data_ready(db, monkeypatch):
     assert "跳过远程同步" in meta["detail"]
 
 
+def test_run_async_short_circuits_ready_data_and_repairs_failed_meta(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(code=code, trade_date=expected, close=10, volume=100))
+    db.commit()
+
+    def should_not_call():
+        raise AssertionError("ready data should not queue remote daily sync")
+
+    monkeypatch.setitem(scheduler.JOBS, "daily_market", should_not_call)
+    scheduler._ensure_meta_table()
+    old = datetime.utcnow() - timedelta(hours=8)
+    with scheduler.engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+            "VALUES (:n, :t, :s, :d, :x)"
+        ), {
+            "n": "daily_market",
+            "t": old,
+            "s": "failed",
+            "d": 0,
+            "x": "服务重启，上一轮后台任务未完成",
+        })
+
+    rv = scheduler.run_async("daily_market")
+
+    assert rv["queued"] is False
+    assert rv["running"] is False
+    assert rv["shortcut"] is True
+    assert rv["meta"]["status"] == "success"
+    assert "数据已达标" in rv["meta"]["detail"]
+    assert "跳过远程同步" in rv["meta"]["detail"]
+    assert rv["meta"]["age_minutes"] == 0
+    assert "daily_market" not in scheduler._running_jobs
+
+
+def test_failed_job_state_does_not_block_retry(db, monkeypatch):
+    scheduler._running_jobs.clear()
+
+    def fail():
+        raise RuntimeError("temporary upstream failure")
+
+    monkeypatch.setitem(scheduler.JOBS, "unit_retry", fail)
+    first = scheduler.run_now("unit_retry")
+
+    assert first["status"] == "failed"
+    assert "temporary upstream failure" in first["detail"]
+    assert "unit_retry" not in scheduler._running_jobs
+
+    monkeypatch.setitem(scheduler.JOBS, "unit_retry", lambda: 5)
+    second = scheduler.run_now("unit_retry")
+
+    assert second["status"] == "success"
+    assert second["detail"] == "affected=5"
+    assert "unit_retry" not in scheduler._running_jobs
+
+
 def test_run_now_repairs_latest_dividend_yield_before_daily_value_shortcut(db, monkeypatch):
     scheduler._running_jobs.clear()
     expected = date(2026, 6, 3)

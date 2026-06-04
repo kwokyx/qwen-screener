@@ -202,6 +202,76 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
         context = _context_from_events(events)
 
 
+def test_nl_stream_no_context_fast_paths_never_screen_or_call_model(db, seed_stocks, monkeypatch):
+    """Obvious local intents must not wait for the model or screen all stocks."""
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    def fail_plan(_query, _context=None):
+        raise AssertionError("local fast-path should not call the model planner")
+
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("no-context local fast-path should not execute screening")
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    client = TestClient(app)
+    for query in ("你好", "可以，做吧", "为什么这些股票排在前面", "查看第一只详情"):
+        events = _stream_events(client, query, context={})
+        event_types = _event_types(events)
+        terminal = next(event for event in reversed(events) if event["type"] == "agent")
+
+        assert event_types[-1] == "done"
+        assert "screening" not in event_types
+        assert "result" not in event_types
+        assert "parsed" not in event_types
+        assert terminal["plan"]["tool"] == "ask_clarification"
+        assert terminal["plan"]["ai_used"] is False
+        assert terminal["model_ms"] == 0
+        assert terminal["fallback_reason"] == "local_fast_path"
+        assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
+
+
+def test_nl_stream_model_planning_failure_falls_back_to_local_screen(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    def fail_plan(_query, _context=None):
+        raise RuntimeError("planner timeout test")
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+
+    client = TestClient(app)
+    events = _stream_events(client, "低估值高分红的银行股", context={})
+    event_types = _event_types(events)
+
+    assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
+    assert event_types[-1] == "done"
+    result = next(event for event in events if event["type"] == "result")
+    assert result["plan"]["tool"] == "stock_screen"
+    assert result["plan"]["ai_used"] is False
+    assert result["ai_status"] == {
+        "configured": True,
+        "used": False,
+        "source": "local_fallback",
+        "label": "本地规则兜底",
+        "fallback": True,
+    }
+    assert "模型规划暂不可用" in result["fallback_reason"]
+    assert result["parsed_conditions"]
+    assert any(
+        call["name"] == "stock_screen" and call["result"]["total"] == result["total"]
+        for call in result["tool_calls"]
+    )
+
+
 def test_nl_stream_design_request_skips_ai_and_screening(db, seed_stocks, monkeypatch):
     def fail_stream_call(_prompt):
         raise AssertionError("strategy design should not stream nl_to_filter")
