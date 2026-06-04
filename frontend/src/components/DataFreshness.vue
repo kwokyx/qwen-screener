@@ -139,13 +139,21 @@ function shortDate(value) {
 
 function fmtRel(iso) {
   if (!iso) return '从未'
-  const t = new Date(iso).getTime()
+  const parsed = parseServerUtcTime(iso)
+  const t = parsed.getTime()
   const diff = (Date.now() - t) / 1000
   if (diff < 60) return '刚刚'
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
   if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`
-  return new Date(iso).toLocaleDateString('zh-CN')
+  return parsed.toLocaleDateString('zh-CN')
+}
+
+function parseServerUtcTime(value) {
+  const text = String(value || '').trim()
+  if (!text) return new Date(Number.NaN)
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) return new Date(text)
+  return new Date(`${text.replace(' ', 'T')}Z`)
 }
 
 function taskMetaLine(name) {
