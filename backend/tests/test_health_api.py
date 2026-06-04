@@ -199,7 +199,7 @@ def test_ai_health_uses_short_runtime_cache(monkeypatch):
         "payload": None,
     })
 
-    def fake_probe():
+    def fake_probe(_timeout=None):
         calls.append("called")
         return {
             "ok": True,

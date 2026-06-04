@@ -30,8 +30,13 @@ if (auth.token) {
     .catch(() => {})
 }
 
-// 启动价格预警轮询
+// 价格预警不抢首屏资源；首轮轮询由引擎延后执行。
 startAlertEngine()
 
-// 启动 AI 上游可用性探测（每 2 分钟一次）
-useAiStatusStore().startAutoProbe()
+// AI 健康探测放到首屏之后，避免启动时的上游网络抖动拖慢行情页。
+const startAiProbe = () => useAiStatusStore().startAutoProbe()
+if ('requestIdleCallback' in window) {
+  window.requestIdleCallback(startAiProbe, { timeout: 8_000 })
+} else {
+  window.setTimeout(startAiProbe, 4_000)
+}

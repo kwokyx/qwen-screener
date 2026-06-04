@@ -12,7 +12,6 @@ import {
   NRadioButton,
   NRadioGroup,
   NSelect,
-  NSkeleton,
   NSpace,
   NTag,
 } from 'naive-ui'
@@ -32,6 +31,7 @@ const agentResult = ref(null)
 const structuredResult = ref(null)
 const agentQuery = ref('低估值高分红的银行股')
 const loading = ref(false)
+const bootstrapLoading = ref(true)
 const agentLoading = ref(false)
 const structuredLoading = ref(false)
 const errorMsg = ref('')
@@ -100,6 +100,7 @@ const operatorLabels = {
 }
 const structuredConditionLabels = computed(() => structuredConditions.value.map(formatStructuredCondition))
 const tableLoading = computed(() => loading.value || agentLoading.value || structuredLoading.value)
+const hasResult = computed(() => Boolean(agentResult.value || structuredResult.value || result.value))
 const agentConditionList = computed(() => {
   if (!agentResult.value) return []
   const labels = agentResult.value.plan?.condition_labels || []
@@ -380,17 +381,19 @@ async function runStructuredScreen() {
 
 function useExample(text) {
   agentQuery.value = text
-  runAgent()
 }
 
 function chooseStrategy(id) {
   workspaceMode.value = 'strategy'
-  runSelection(id)
+  activeId.value = id
+  agentResult.value = null
+  structuredResult.value = null
+  result.value = null
+  errorMsg.value = ''
 }
 
 async function bootstrap() {
-  loading.value = true
-  aiStatus.startAutoProbe()
+  bootstrapLoading.value = true
   try {
     const [templateData, toolData] = await Promise.all([
       getStrategyTemplates(),
@@ -399,11 +402,10 @@ async function bootstrap() {
     templates.value = templateData
     tools.value = toolData
     activeId.value = templates.value.find((item) => item.id === 'rps_breakout')?.id || templates.value[0]?.id || ''
-    await runSelection(activeId.value)
   } catch (err) {
     errorMsg.value = err.response?.data?.detail || err.message || '策略加载失败'
   } finally {
-    loading.value = false
+    bootstrapLoading.value = false
   }
 }
 
@@ -418,7 +420,16 @@ onMounted(bootstrap)
           <h1>智能选股</h1>
           <span>交易日 {{ displayTradeDate }}</span>
         </div>
-        <n-button size="small" secondary @click="runSelection()" :loading="loading">刷新</n-button>
+        <n-button
+          size="small"
+          type="primary"
+          secondary
+          :disabled="workspaceMode !== 'strategy' || !activeId"
+          :loading="loading"
+          @click="runSelection()"
+        >
+          执行策略筛选
+        </n-button>
       </section>
 
       <n-card size="small" :bordered="true" class="workspace-card">
@@ -527,6 +538,15 @@ onMounted(bootstrap)
           </n-alert>
         </div>
 
+        <div v-else-if="bootstrapLoading" class="strategy-picker">
+          <div v-for="n in 4" :key="'strategy-sk-' + n" class="strategy-item skeleton-card" aria-hidden="true">
+            <span>
+              <span class="sk-line title"></span>
+              <span class="sk-line desc"></span>
+            </span>
+            <span class="sk-pill"></span>
+          </div>
+        </div>
         <div v-else class="strategy-picker">
           <button
             v-for="tpl in templates"
@@ -541,6 +561,12 @@ onMounted(bootstrap)
             </span>
             <n-tag size="small" :bordered="false">{{ tpl.tag }}</n-tag>
           </button>
+          <div class="strategy-action">
+            <span>选择策略后不会自动筛选，确认规则后再执行。</span>
+            <n-button type="primary" size="small" strong :disabled="!activeId" :loading="loading" @click="runSelection()">
+              执行筛选
+            </n-button>
+          </div>
         </div>
       </n-card>
 
@@ -576,7 +602,10 @@ onMounted(bootstrap)
             size="small"
             striped
           />
-          <n-empty v-else-if="!tableLoading" :description="isAgentDesign ? '策略设计请求未执行筛选' : '当前条件没有命中股票'" />
+          <n-empty
+            v-else-if="!tableLoading"
+            :description="isAgentDesign ? '策略设计请求未执行筛选' : (hasResult ? '当前条件没有命中股票' : '请选择策略或输入条件，点击筛选后显示结果')"
+          />
           <div v-else class="table-loading">
             <div class="loading-title">正在加载选股结果</div>
             <div v-for="n in 6" :key="n" class="strategy-skeleton-row">
@@ -915,6 +944,53 @@ h1 {
   line-height: 1.45;
 }
 
+.strategy-action {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid #EDEDED;
+  border-radius: 5px;
+  background: #FAFAFA;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.skeleton-card {
+  cursor: default;
+}
+
+.sk-line,
+.sk-pill,
+.sk-cell {
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #EFEFEF 0%, #DDDDDD 46%, #F5F5F5 62%, #EFEFEF 100%);
+  background-size: 220% 100%;
+  animation: sk-shimmer 1.35s ease-in-out infinite;
+}
+
+.sk-line.title {
+  width: 112px;
+  height: 13px;
+  margin-bottom: 8px;
+}
+
+.sk-line.desc {
+  width: min(260px, 86%);
+  height: 10px;
+}
+
+.sk-pill {
+  width: 52px;
+  height: 22px;
+  border-radius: 5px;
+  flex: 0 0 auto;
+}
+
 .rules {
   margin: 0;
   padding-left: 18px;
@@ -1001,12 +1077,7 @@ h1 {
 }
 
 .sk-cell {
-  display: block;
   height: 10px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #EFEFEF 0%, #E0E0E0 48%, #EFEFEF 100%);
-  background-size: 180% 100%;
-  animation: sk-shimmer 1.4s ease-in-out infinite;
 }
 
 .sk-cell.name { width: 70%; }
@@ -1021,6 +1092,11 @@ h1 {
 
 @media (prefers-reduced-motion: reduce) {
   .sk-cell {
+    animation: none;
+  }
+
+  .sk-line,
+  .sk-pill {
     animation: none;
   }
 }

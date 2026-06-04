@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import threading
 from time import perf_counter
 
 from fastapi import FastAPI, Request
@@ -18,6 +19,8 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     migrations.apply_sqlite_migrations(engine)
     scheduler.start()
+    if "pytest_qwen" not in settings.database_url:
+        threading.Thread(target=market.warm_market_cache, name="market-cache-warmup", daemon=True).start()
     yield
     scheduler.stop()
 

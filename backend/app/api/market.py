@@ -5,12 +5,15 @@
 """
 from __future__ import annotations
 
+import copy
+import threading
+import time
 from collections import defaultdict
 from datetime import date as Date
 
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -25,14 +28,17 @@ from app.services import cache as _cache
 
 
 router = APIRouter(prefix="/market", tags=["market"])
+_LOCAL_MARKET_CACHE_TTL = 120.0
+_local_market_cache_lock = threading.Lock()
+_local_market_cache: dict[tuple, tuple[float, object]] = {}
 
 
 # 4 大指数：内部 code → akshare symbol
 INDEX_DEFS = [
-    {"name": "上证指数", "code": "SH000001", "ak": "sh000001", "constituents_match": lambda c: c.startswith("60") or c.startswith("68")},
-    {"name": "深证成指", "code": "SZ399001", "ak": "sz399001", "constituents_match": lambda c: c.startswith("00") or c.startswith("30")},
-    {"name": "创业板指", "code": "SZ399006", "ak": "sz399006", "constituents_match": lambda c: c.startswith("30")},
-    {"name": "科创50",   "code": "SH000688", "ak": "sh000688", "constituents_match": lambda c: c.startswith("688")},
+    {"name": "上证指数", "code": "SH000001", "ak": "sh000001", "prefixes": ("60", "68"), "constituents_match": lambda c: c.startswith("60") or c.startswith("68")},
+    {"name": "深证成指", "code": "SZ399001", "ak": "sz399001", "prefixes": ("00", "30"), "constituents_match": lambda c: c.startswith("00") or c.startswith("30")},
+    {"name": "创业板指", "code": "SZ399006", "ak": "sz399006", "prefixes": ("30",), "constituents_match": lambda c: c.startswith("30")},
+    {"name": "科创50",   "code": "SH000688", "ak": "sh000688", "prefixes": ("688",), "constituents_match": lambda c: c.startswith("688")},
 ]
 
 
@@ -48,6 +54,11 @@ def _min_market_rows(db: Session) -> int:
 
 
 def _covered_trade_dates(db: Session, limit: int = 2) -> list[Date]:
+    cache_key = ("covered_trade_dates", limit)
+    cached = _local_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     cnt = func.count(StockDaily.id)
     rows = (
         db.query(StockDaily.trade_date, cnt.label("n"))
@@ -58,8 +69,10 @@ def _covered_trade_dates(db: Session, limit: int = 2) -> list[Date]:
         .all()
     )
     if rows:
-        return [r[0] for r in rows]
-    return [
+        dates = [r[0] for r in rows]
+        _local_cache_set(cache_key, dates)
+        return dates
+    dates = [
         r[0] for r in (
             db.query(StockDaily.trade_date)
             .distinct()
@@ -68,11 +81,30 @@ def _covered_trade_dates(db: Session, limit: int = 2) -> list[Date]:
             .all()
         )
     ]
+    _local_cache_set(cache_key, dates)
+    return dates
 
 
 def _latest_trade_date(db: Session) -> Date | None:
     dates = _covered_trade_dates(db, limit=1)
     return dates[0] if dates else None
+
+
+def _local_cache_get(key: tuple):
+    with _local_market_cache_lock:
+        item = _local_market_cache.get(key)
+        if not item:
+            return None
+        expires_at, payload = item
+        if time.monotonic() >= expires_at:
+            _local_market_cache.pop(key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+def _local_cache_set(key: tuple, payload, ttl: float = _LOCAL_MARKET_CACHE_TTL):
+    with _local_market_cache_lock:
+        _local_market_cache[key] = (time.monotonic() + ttl, copy.deepcopy(payload))
 
 
 def _change_pct(open_p: float | None, close_p: float | None, prev_close: float | None = None) -> float | None:
@@ -129,18 +161,6 @@ def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
     if not dates:
         return []
 
-    rows = (
-        db.query(StockDaily.code, StockDaily.trade_date, StockDaily.open, StockDaily.close)
-        .filter(StockDaily.trade_date.in_(dates), StockDaily.close.isnot(None))
-        .all()
-    )
-    if not rows:
-        return []
-
-    by_date: dict[Date, list] = defaultdict(list)
-    for row in rows:
-        by_date[row.trade_date].append(row)
-
     out: list[IndexQuote] = []
     asc_dates = sorted(dates)
     latest = max(dates)
@@ -148,30 +168,52 @@ def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
     prev = prev_dates[-1] if prev_dates else None
 
     for d in INDEX_DEFS:
+        prefix_filters = [StockDaily.code.like(f"{prefix}%") for prefix in d["prefixes"]]
+        stats = {
+            trade_date: {
+                "avg_close": avg_close,
+                "avg_open": avg_open,
+                "count": count,
+            }
+            for trade_date, avg_close, avg_open, count in (
+                db.query(
+                    StockDaily.trade_date,
+                    func.avg(StockDaily.close),
+                    func.avg(StockDaily.open),
+                    func.count(StockDaily.id),
+                )
+                .filter(StockDaily.trade_date.in_(dates), StockDaily.close.isnot(None), or_(*prefix_filters))
+                .group_by(StockDaily.trade_date)
+                .all()
+            )
+        }
         spark: list[float] = []
         latest_value = None
         prev_value = None
         constituents = 0
 
         for td in asc_dates:
-            matched = [r for r in by_date.get(td, []) if d["constituents_match"](r.code.split(".")[0])]
-            if not matched:
+            stat = stats.get(td)
+            if not stat or not stat["avg_close"] or stat["count"] <= 0:
                 continue
-            avg_close = sum(float(r.close) for r in matched if r.close is not None) / len(matched)
+            avg_close = float(stat["avg_close"])
             value = round(avg_close * 100, 2)
             spark.append(value)
             if td == latest:
                 latest_value = value
-                constituents = len(matched)
+                constituents = int(stat["count"])
             if prev is not None and td == prev:
                 prev_value = value
 
         if latest_value is None:
             continue
         if prev_value is None:
-            latest_rows = [r for r in by_date.get(latest, []) if d["constituents_match"](r.code.split(".")[0])]
-            opens = [float(r.open) for r in latest_rows if r.open is not None and r.open > 0]
-            prev_value = round((sum(opens) / len(opens)) * 100, 2) if opens else latest_value
+            stat = stats.get(latest)
+            prev_value = (
+                round(float(stat["avg_open"]) * 100, 2)
+                if stat and stat["avg_open"]
+                else latest_value
+            )
 
         change = round(latest_value - prev_value, 2)
         change_pct = round((latest_value - prev_value) / prev_value * 100, 2) if prev_value else 0.0
@@ -199,19 +241,29 @@ def get_indices(db: Session = Depends(get_db)):
     real = _real_indices()
     if not real:
         latest = _latest_trade_date(db)
+        local_key = ("indices", str(latest))
+        local_cached = _local_cache_get(local_key)
+        if local_cached is not None:
+            return [IndexQuote(**item) for item in local_cached]
         cache_key = _cache.make_key("indices_local_v2", str(latest))
         cached = _cache.get_json(cache_key)
         if cached:
+            _local_cache_set(local_key, cached)
             return [IndexQuote(**item) for item in cached]
         local = _local_indices(db)
         if local:
-            _cache.set_json(cache_key, [item.model_dump() for item in local], ttl=600)
+            payload = [item.model_dump() for item in local]
+            _local_cache_set(local_key, payload)
+            _cache.set_json(cache_key, payload, ttl=600)
         return local
 
     # constituents 数（基于内部 DB，按代码前缀粗略统计）
-    rows = db.query(StockDaily.code).filter(
-        StockDaily.trade_date == _latest_trade_date(db)
-    ).all() if real else []
+    latest = _latest_trade_date(db)
+    real_key = ("indices_real", str(latest))
+    real_cached = _local_cache_get(real_key)
+    if real_cached is not None:
+        return [IndexQuote(**item) for item in real_cached]
+    rows = db.query(StockDaily.code).filter(StockDaily.trade_date == latest).all() if real else []
     codes = [r[0] for r in rows]
 
     out: list[IndexQuote] = []
@@ -226,6 +278,7 @@ def get_indices(db: Session = Depends(get_db)):
             constituents=constituents,
             spark=snap["spark"],
         ))
+    _local_cache_set(real_key, [item.model_dump() for item in out])
     return out
 
 
@@ -244,6 +297,10 @@ def get_sectors(limit: int = Query(default=8, ge=1, le=30), db: Session = Depend
         return []
     td = last_dates[0][0]
     prev_td = last_dates[1][0] if len(last_dates) > 1 else None
+    cache_key = ("sectors", str(td), str(prev_td), limit)
+    cached = _local_cache_get(cache_key)
+    if cached is not None:
+        return [SectorQuote(**item) for item in cached]
 
     # 拉这两天的所有数据（带 open/close 兜底 + market_cap 加权）
     rows = (
@@ -304,7 +361,9 @@ def get_sectors(limit: int = Query(default=8, ge=1, le=30), db: Session = Depend
         ))
 
     out.sort(key=lambda s: -abs(s.change_pct))
-    return out[:limit]
+    payload = [item.model_dump() for item in out[:limit]]
+    _local_cache_set(cache_key, payload)
+    return [SectorQuote(**item) for item in payload]
 
 
 # ---------------------- /market/movers ----------------------
@@ -340,6 +399,10 @@ def get_movers(limit: int = Query(default=8, ge=1, le=50), db: Session = Depends
     if td is None:
         return MoversResponse(gainers=[], losers=[], by_amount=[], by_turnover=[])
     prev_td = dates[1] if len(dates) > 1 else None
+    cache_key = ("movers", str(td), str(prev_td), limit)
+    cached = _local_cache_get(cache_key)
+    if cached is not None:
+        return MoversResponse(**cached)
     prev_close_by_code = {}
     if prev_td is not None:
         prev_close_by_code = {
@@ -371,10 +434,12 @@ def get_movers(limit: int = Query(default=8, ge=1, le=50), db: Session = Depends
     by_turn_rows = base.order_by(desc(StockDaily.turnover)).limit(limit).all()
     by_turnover = _rows_to_movers(by_turn_rows, prev_close_by_code)
 
-    return MoversResponse(
+    response = MoversResponse(
         gainers=gainers, losers=losers,
         by_amount=by_amount, by_turnover=by_turnover,
     )
+    _local_cache_set(cache_key, response.model_dump())
+    return response
 
 
 # ---------------------- /market/ticker ----------------------
@@ -382,10 +447,14 @@ def get_movers(limit: int = Query(default=8, ge=1, le=50), db: Session = Depends
 @router.get("/ticker")
 def get_ticker(db: Session = Depends(get_db)):
     """Ticker 条用的简化数据：4 大指数 + 几个聚合数字。"""
-    indices = get_indices(db)
     dates = _covered_trade_dates(db, limit=2)
     td = dates[0] if dates else None
     prev_td = dates[1] if len(dates) > 1 else None
+    cache_key = ("ticker", str(td), str(prev_td))
+    cached = _local_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    indices = get_indices(db)
     prev_close_by_code = {}
     if prev_td is not None:
         prev_close_by_code = {
@@ -413,10 +482,33 @@ def get_ticker(db: Session = Depends(get_db)):
         elif cp < 0:
             n_dn += 1
 
-    return {
+    payload = {
         "indices": [i.model_dump() for i in indices],
         "total_amount_yi": round(total_amount / 1e8, 0),  # 全市场成交额（亿）
         "advancers": n_up,
         "decliners": n_dn,
         "trade_date": str(td) if td else None,
     }
+    _local_cache_set(cache_key, payload)
+    return payload
+
+
+def warm_market_cache() -> None:
+    """Precompute dashboard market aggregates after backend startup.
+
+    The first dashboard request should not pay the cold local-aggregation cost.
+    This is best-effort and intentionally keeps failures out of the user path.
+    """
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        get_indices(db)
+        get_sectors(20, db)
+        get_movers(10, db)
+        get_ticker(db)
+        logger.info("[MARKET] 本地行情概览缓存预热完成")
+    except Exception as exc:
+        logger.warning("[MARKET] 本地行情概览缓存预热失败: {}", str(exc)[:160])
+    finally:
+        db.close()

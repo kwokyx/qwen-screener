@@ -9,8 +9,6 @@ import {
   NEmpty,
   NGi,
   NGrid,
-  NSkeleton,
-  NSpace,
   NTabPane,
   NTag,
   NTabs,
@@ -243,9 +241,11 @@ onMounted(loadAll)
       <div class="market-overview-grid">
         <template v-if="loadingIndices && !indices.length">
           <NCard v-for="(_, n) in 4" :key="'idx-sk-' + n" class="terminal-card index-card" :bordered="false">
-            <NSkeleton text :width="90" />
-            <NSkeleton text :width="132" style="margin-top: 12px;" />
-            <NSkeleton text :width="76" />
+            <div class="index-skeleton">
+              <span class="sk-line short"></span>
+              <span class="sk-line value"></span>
+              <span class="sk-line mini"></span>
+            </div>
           </NCard>
         </template>
         <template v-else>
@@ -274,10 +274,11 @@ onMounted(loadAll)
             <span>市场概况</span>
             <NTag size="tiny" :bordered="false">{{ marketStats?.tradeDate || '—' }}</NTag>
           </div>
-          <NSpace v-if="!marketStats" vertical size="small">
-            <NSkeleton text :width="150" />
-            <NSkeleton text :width="120" />
-          </NSpace>
+          <div v-if="!marketStats" class="market-stats-skeleton">
+            <span class="sk-metric"></span>
+            <span class="sk-metric"></span>
+            <span class="sk-metric wide"></span>
+          </div>
           <div v-else class="market-stats">
             <div class="market-metric">
               <span>上涨</span>
@@ -319,7 +320,17 @@ onMounted(loadAll)
               </NTabs>
             </template>
 
+            <div v-if="loadingMovers && !movers" class="table-skeleton movers-skeleton">
+              <div v-for="n in 10" :key="'mv-sk-' + n" class="dashboard-skeleton-row">
+                <span class="sk-cell code"></span>
+                <span class="sk-cell name"></span>
+                <span class="sk-cell num"></span>
+                <span class="sk-cell chip"></span>
+                <span class="sk-cell num"></span>
+              </div>
+            </div>
             <NDataTable
+              v-else
               :columns="moverColumns"
               :data="moversShown"
               :loading="loadingMovers"
@@ -346,7 +357,15 @@ onMounted(loadAll)
               </div>
             </template>
 
-            <NGrid :cols="2" :x-gap="10">
+            <div v-if="loadingSectors && !sectors.length" class="sector-skeleton-grid">
+              <div v-for="side in 2" :key="'sector-side-' + side" class="table-skeleton">
+                <div v-for="n in 8" :key="'sector-sk-' + side + '-' + n" class="sector-skeleton-row">
+                  <span class="sk-cell name"></span>
+                  <span class="sk-cell chip"></span>
+                </div>
+              </div>
+            </div>
+            <NGrid v-else :cols="2" :x-gap="10">
               <NGi>
                 <NDataTable
                   :columns="sectorColumns('up')"
@@ -390,7 +409,15 @@ onMounted(loadAll)
             <template #header-extra>
               <NTag size="small" :bordered="false">{{ sectors.length }} 个行业</NTag>
             </template>
+            <div v-if="loadingSectors && !sectors.length" class="table-skeleton strength-skeleton-list">
+              <div v-for="n in 10" :key="'strength-sk-' + n" class="strength-skeleton-row">
+                <span class="sk-cell sector"></span>
+                <span class="sk-cell bar"></span>
+                <span class="sk-cell chip"></span>
+              </div>
+            </div>
             <NDataTable
+              v-else
               :columns="sectorStrengthColumns"
               :data="sectors"
               :loading="loadingSectors"
@@ -536,6 +563,110 @@ onMounted(loadAll)
   color: #71717A;
   font-size: 11px;
   font-weight: 600;
+}
+
+.index-skeleton,
+.market-stats-skeleton,
+.table-skeleton {
+  min-width: 0;
+}
+
+.index-skeleton {
+  display: grid;
+  gap: 12px;
+}
+
+.sk-line,
+.sk-metric,
+.sk-cell {
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ECECEC 0%, #DCDCDC 46%, #F3F3F3 62%, #ECECEC 100%);
+  background-size: 220% 100%;
+  animation: dashboard-shimmer 1.35s ease-in-out infinite;
+}
+
+.sk-line.short { width: 86px; height: 12px; }
+.sk-line.value { width: 132px; height: 24px; border-radius: 6px; }
+.sk-line.mini { width: 74px; height: 10px; }
+
+.market-stats-skeleton {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+
+.sk-metric {
+  height: 40px;
+  border-radius: 6px;
+}
+
+.sk-metric.wide {
+  grid-column: 1 / -1;
+}
+
+.table-skeleton {
+  display: grid;
+  gap: 0;
+}
+
+.dashboard-skeleton-row,
+.sector-skeleton-row,
+.strength-skeleton-row {
+  display: grid;
+  align-items: center;
+  min-height: 40px;
+  border-top: 1px solid #ECECEC;
+  column-gap: 12px;
+}
+
+.dashboard-skeleton-row:first-child,
+.sector-skeleton-row:first-child,
+.strength-skeleton-row:first-child {
+  border-top: 0;
+}
+
+.dashboard-skeleton-row {
+  grid-template-columns: 72px minmax(120px, 1fr) 72px 72px 72px;
+}
+
+.sector-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sector-skeleton-row {
+  grid-template-columns: minmax(0, 1fr) 72px;
+}
+
+.strength-skeleton-row {
+  grid-template-columns: 120px minmax(0, 1fr) 72px;
+}
+
+.sk-cell {
+  height: 10px;
+}
+
+.sk-cell.code { width: 54px; }
+.sk-cell.name { width: 76%; }
+.sk-cell.num { width: 58px; justify-self: end; }
+.sk-cell.chip { width: 62px; height: 18px; justify-self: end; border-radius: 5px; }
+.sk-cell.sector { width: 88px; }
+.sk-cell.bar { width: 100%; height: 8px; border-radius: 3px; }
+
+@keyframes dashboard-shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -90% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-line,
+  .sk-metric,
+  .sk-cell {
+    animation: none;
+  }
 }
 
 .dashboard-alert {

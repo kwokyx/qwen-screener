@@ -15,6 +15,7 @@ const POLL_MS = 30_000          // 真实数据 30s 一次（不烧 API）
 const DEMO_TICK_MS = 8_000      // demo 模式 8s 一次
 
 let timer = null
+let firstTimer = null
 let demoMode = false
 
 function gaussian() {
@@ -98,15 +99,21 @@ function alertTag(a) {
 }
 
 export function startAlertEngine() {
-  if (timer) return
-  // 立即跑一次，再设定 interval
-  tick().catch(() => {})
+  if (timer || firstTimer) return
+  firstTimer = setTimeout(() => {
+    firstTimer = null
+    tick().catch(() => {})
+  }, POLL_MS)
   timer = setInterval(() => {
     tick().catch(() => {})
   }, demoMode ? DEMO_TICK_MS : POLL_MS)
 }
 
 export function stopAlertEngine() {
+  if (firstTimer) {
+    clearTimeout(firstTimer)
+    firstTimer = null
+  }
   if (timer) {
     clearInterval(timer)
     timer = null

@@ -27,6 +27,7 @@ _data_health_cache: dict[str, object] = {
     "payload": None,
 }
 _ai_health_cache_lock = threading.Lock()
+_ai_health_probe_lock = threading.Lock()
 _ai_health_cache: dict[str, object] = {
     "backend": None,
     "model": None,
@@ -161,20 +162,22 @@ def _freshness_diagnostics(
 @router.get("/ai")
 def ai_health():
     """前端启动时调用一次：判断 AI 上游是否可用。"""
-    if _health_runtime_cache_enabled():
-        now = time.monotonic()
-        backend = settings.ai_backend
-        model = settings.openai_model if backend == "openai" else settings.qwen_model
-        with _ai_health_cache_lock:
-            if (
-                _ai_health_cache["backend"] == backend
-                and _ai_health_cache["model"] == model
-                and _ai_health_cache["expires_at"] > now
-                and _ai_health_cache["payload"] is not None
-            ):
-                return copy.deepcopy(_ai_health_cache["payload"])
+    cached = _cached_ai_health_payload(require_fresh=True)
+    if cached is not None:
+        return cached
 
-    payload = qwen_client.probe_health()
+    if not _ai_health_probe_lock.acquire(blocking=False):
+        cached = _cached_ai_health_payload(require_fresh=False)
+        if cached is not None:
+            cached["stale"] = True
+            return cached
+        return _pending_ai_health_payload()
+
+    try:
+        payload = qwen_client.probe_health(3.0)
+    finally:
+        _ai_health_probe_lock.release()
+
     if _health_runtime_cache_enabled():
         with _ai_health_cache_lock:
             _ai_health_cache.update({
@@ -184,6 +187,44 @@ def ai_health():
                 "payload": copy.deepcopy(payload),
             })
     return payload
+
+
+def _current_ai_health_identity() -> tuple[str, str]:
+    backend = settings.ai_backend
+    model = settings.openai_model if backend == "openai" else settings.qwen_model
+    return backend, model
+
+
+def _cached_ai_health_payload(*, require_fresh: bool) -> dict | None:
+    if not _health_runtime_cache_enabled():
+        return None
+    now = time.monotonic()
+    backend, model = _current_ai_health_identity()
+    with _ai_health_cache_lock:
+        if (
+            _ai_health_cache["backend"] == backend
+            and _ai_health_cache["model"] == model
+            and _ai_health_cache["payload"] is not None
+            and (not require_fresh or _ai_health_cache["expires_at"] > now)
+        ):
+            return copy.deepcopy(_ai_health_cache["payload"])
+    return None
+
+
+def _pending_ai_health_payload() -> dict:
+    backend, model = _current_ai_health_identity()
+    configured = bool(settings.openai_api_key) if backend == "openai" else bool(settings.dashscope_api_key)
+    return {
+        "ok": True,
+        "latency_ms": None,
+        "reason": "AI 健康检测中",
+        "backend": backend,
+        "model": model,
+        "configured": configured,
+        "fallback": False,
+        "mode": "ai_agent" if configured else "local_rules",
+        "pending": True,
+    }
 
 
 @router.get("/data")
