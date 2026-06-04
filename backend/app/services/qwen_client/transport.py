@@ -156,6 +156,29 @@ def _probe_openai_health(timeout: float) -> dict:
     }
     client_timeout = httpx.Timeout(timeout, connect=min(2.0, timeout))
     t0 = time.time()
+    diagnostics = _probe_openai_model_catalog(base_url, headers, client_timeout)
+    latency_ms = int((time.time() - t0) * 1000)
+    if diagnostics.get("models_status") == 200 and diagnostics.get("model_listed") is True:
+        return {
+            "ok": True,
+            "latency_ms": latency_ms,
+            "reason": None,
+            "backend": "openai",
+            "model": settings.openai_model,
+            "stage": "catalog",
+            **diagnostics,
+        }
+    if diagnostics.get("models_status") in (401, 403):
+        return {
+            "ok": False,
+            "latency_ms": latency_ms,
+            "reason": "鉴权失败",
+            "backend": "openai",
+            "model": settings.openai_model,
+            "stage": "models",
+            **diagnostics,
+        }
+
     responses_result = None
     responses_error = None
     if _responses_api_enabled():
@@ -188,7 +211,6 @@ def _probe_openai_health(timeout: float) -> dict:
             return {"ok": False, "latency_ms": latency_ms, "reason": f"模型或网关不兼容: {settings.openai_model}"}
         response_status = responses_result.status_code if responses_result is not None else 0
         if max(response_status, chat_result.status_code) >= 500:
-            diagnostics = _probe_openai_model_catalog(base_url, headers, client_timeout)
             reason = f"上游网关推理端不可用: HTTP {max(response_status, chat_result.status_code)}"
             if diagnostics.get("models_status") == 200:
                 reason += "（模型列表正常）"

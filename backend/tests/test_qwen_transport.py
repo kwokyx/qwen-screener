@@ -153,27 +153,51 @@ def test_openai_probe_falls_back_to_chat_completions(monkeypatch):
     monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
     monkeypatch.setattr(transport.settings, "openai_model", "test-model")
-    _mock_http(monkeypatch, [_FakeResponse(404), _FakeResponse(200)])
+    _mock_http(monkeypatch, [
+        _FakeResponse(200, '{"data":[{"id":"other-model"}]}'),
+        _FakeResponse(404),
+        _FakeResponse(200),
+    ])
 
     result = transport._probe_openai_health(3)
 
     assert result["ok"] is True
     assert _FakeClient.calls == [
+        "https://example.test/v1/models",
         "https://example.test/v1/responses",
         "https://example.test/v1/chat/completions",
     ]
+
+
+def test_openai_probe_uses_model_catalog_fast_path(monkeypatch):
+    monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
+    monkeypatch.setattr(transport.settings, "openai_model", "test-model")
+    _mock_http(monkeypatch, [_FakeResponse(200, '{"data":[{"id":"test-model"}]}')])
+
+    result = transport._probe_openai_health(3)
+
+    assert result["ok"] is True
+    assert result["stage"] == "catalog"
+    assert result["model_listed"] is True
+    assert _FakeClient.calls == ["https://example.test/v1/models"]
 
 
 def test_openai_probe_falls_back_when_responses_times_out(monkeypatch):
     monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
     monkeypatch.setattr(transport.settings, "openai_model", "test-model")
-    _mock_http(monkeypatch, [httpx.ReadTimeout("responses timed out"), _FakeResponse(200)])
+    _mock_http(monkeypatch, [
+        _FakeResponse(200, '{"data":[{"id":"other-model"}]}'),
+        httpx.ReadTimeout("responses timed out"),
+        _FakeResponse(200),
+    ])
 
     result = transport._probe_openai_health(3)
 
     assert result["ok"] is True
     assert _FakeClient.calls == [
+        "https://example.test/v1/models",
         "https://example.test/v1/responses",
         "https://example.test/v1/chat/completions",
     ]
@@ -185,25 +209,37 @@ def test_openai_probe_skips_responses_during_breaker(monkeypatch):
     monkeypatch.setattr(transport.settings, "openai_model", "test-model")
     monkeypatch.setattr(transport.settings, "openai_responses_enabled", True)
     monkeypatch.setattr(transport, "_responses_unavailable_until", time.monotonic() + 60)
-    _mock_http(monkeypatch, [_FakeResponse(200)], reset_breaker=False)
+    _mock_http(monkeypatch, [
+        _FakeResponse(200, '{"data":[{"id":"other-model"}]}'),
+        _FakeResponse(200),
+    ], reset_breaker=False)
 
     result = transport._probe_openai_health(3)
 
     assert result["ok"] is True
-    assert _FakeClient.calls == ["https://example.test/v1/chat/completions"]
+    assert _FakeClient.calls == [
+        "https://example.test/v1/models",
+        "https://example.test/v1/chat/completions",
+    ]
 
 
 def test_openai_probe_skips_responses_when_disabled(monkeypatch):
     monkeypatch.setattr(transport.settings, "openai_api_key", "test-key")
     monkeypatch.setattr(transport.settings, "openai_base_url", "https://example.test")
     monkeypatch.setattr(transport.settings, "openai_model", "test-model")
-    _mock_http(monkeypatch, [_FakeResponse(200)])
+    _mock_http(monkeypatch, [
+        _FakeResponse(200, '{"data":[{"id":"other-model"}]}'),
+        _FakeResponse(200),
+    ])
     monkeypatch.setattr(transport.settings, "openai_responses_enabled", False)
 
     result = transport._probe_openai_health(3)
 
     assert result["ok"] is True
-    assert _FakeClient.calls == ["https://example.test/v1/chat/completions"]
+    assert _FakeClient.calls == [
+        "https://example.test/v1/models",
+        "https://example.test/v1/chat/completions",
+    ]
 
 
 def test_openai_call_skips_responses_during_breaker(monkeypatch):
@@ -251,6 +287,7 @@ def test_openai_probe_reports_gateway_incompatibility(monkeypatch):
     _mock_http(
         monkeypatch,
         [
+            _FakeResponse(200, '{"data":[{"id":"other-model"}]}'),
             _FakeResponse(502, "upstream failed"),
             _FakeResponse(400, "model is not supported for this account"),
         ],
@@ -269,9 +306,9 @@ def test_openai_probe_reports_inference_unavailable_with_model_catalog(monkeypat
     _mock_http(
         monkeypatch,
         [
+            _FakeResponse(200, '{"data":[{"id":"other-model"}]}'),
             _FakeResponse(503, '{"error":{"message":"Service temporarily unavailable"}}'),
             _FakeResponse(503, '{"error":{"message":"Service temporarily unavailable"}}'),
-            _FakeResponse(200, '{"data":[{"id":"test-model"}]}'),
         ],
     )
 
@@ -285,9 +322,9 @@ def test_openai_probe_reports_inference_unavailable_with_model_catalog(monkeypat
     assert result["responses_status"] == 503
     assert result["chat_status"] == 503
     assert result["models_status"] == 200
-    assert result["model_listed"] is True
+    assert result["model_listed"] is False
     assert _FakeClient.calls == [
+        "https://example.test/v1/models",
         "https://example.test/v1/responses",
         "https://example.test/v1/chat/completions",
-        "https://example.test/v1/models",
     ]
