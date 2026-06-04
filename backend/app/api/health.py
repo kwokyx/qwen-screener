@@ -1,3 +1,6 @@
+import copy
+import threading
+import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -14,6 +17,22 @@ from app.services import cache, db_backup, qwen_client, scheduler
 
 
 router = APIRouter(prefix="/health", tags=["health"])
+_DATA_HEALTH_CACHE_TTL_SECONDS = 5.0
+_AI_HEALTH_CACHE_TTL_SECONDS = 30.0
+_data_health_cache_lock = threading.Lock()
+_data_health_cache: dict[str, object] = {
+    "database_url": None,
+    "revision": None,
+    "expires_at": 0.0,
+    "payload": None,
+}
+_ai_health_cache_lock = threading.Lock()
+_ai_health_cache: dict[str, object] = {
+    "backend": None,
+    "model": None,
+    "expires_at": 0.0,
+    "payload": None,
+}
 
 
 def _market_row_threshold(basic_cnt: int) -> int:
@@ -142,12 +161,70 @@ def _freshness_diagnostics(
 @router.get("/ai")
 def ai_health():
     """前端启动时调用一次：判断 AI 上游是否可用。"""
-    return qwen_client.probe_health()
+    if _health_runtime_cache_enabled():
+        now = time.monotonic()
+        backend = settings.ai_backend
+        model = settings.openai_model if backend == "openai" else settings.qwen_model
+        with _ai_health_cache_lock:
+            if (
+                _ai_health_cache["backend"] == backend
+                and _ai_health_cache["model"] == model
+                and _ai_health_cache["expires_at"] > now
+                and _ai_health_cache["payload"] is not None
+            ):
+                return copy.deepcopy(_ai_health_cache["payload"])
+
+    payload = qwen_client.probe_health()
+    if _health_runtime_cache_enabled():
+        with _ai_health_cache_lock:
+            _ai_health_cache.update({
+                "backend": settings.ai_backend,
+                "model": settings.openai_model if settings.ai_backend == "openai" else settings.qwen_model,
+                "expires_at": time.monotonic() + _AI_HEALTH_CACHE_TTL_SECONDS,
+                "payload": copy.deepcopy(payload),
+            })
+    return payload
 
 
 @router.get("/data")
 def data_health(db: Session = Depends(get_db)):
     """数据健康度：各类数据的覆盖度 + 最后一次定时同步的时间。"""
+    if _data_health_cache_enabled():
+        revision = scheduler.meta_revision()
+        now = time.monotonic()
+        with _data_health_cache_lock:
+            if (
+                _data_health_cache["database_url"] == settings.database_url
+                and _data_health_cache["revision"] == revision
+                and _data_health_cache["expires_at"] > now
+                and _data_health_cache["payload"] is not None
+            ):
+                return copy.deepcopy(_data_health_cache["payload"])
+
+    payload = _data_health_payload(db)
+    if _data_health_cache_enabled():
+        with _data_health_cache_lock:
+            _data_health_cache.update({
+                "database_url": settings.database_url,
+                "revision": scheduler.meta_revision(),
+                "expires_at": time.monotonic() + _DATA_HEALTH_CACHE_TTL_SECONDS,
+                "payload": copy.deepcopy(payload),
+            })
+    return payload
+
+
+def _health_runtime_cache_enabled() -> bool:
+    # Pytest uses a shared temp DB and calls this function directly after data
+    # mutations; disabling the cache there keeps tests deterministic.
+    return "pytest_qwen" not in settings.database_url
+
+
+def _data_health_cache_enabled() -> bool:
+    return _health_runtime_cache_enabled()
+
+
+def _data_health_payload(db: Session):
+    """Build the uncached data-health response."""
     daily_cnt = db.query(StockDaily).count()
     fin_cnt = db.query(StockFinancial).count()
     basic_cnt = db.query(StockBasic).count()

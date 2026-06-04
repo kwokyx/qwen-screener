@@ -20,6 +20,7 @@ os.environ.setdefault("REDIS_URL", "")  # 关闭缓存，避免连真 redis
 
 import pytest
 from datetime import date, timedelta
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import Base, SessionLocal, engine
@@ -31,6 +32,9 @@ from app.models.stock import StockBasic, StockDaily, StockFinancial
 def db():
     """每个测试一个全新的 in-memory DB。"""
     Base.metadata.drop_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS schema_migrations"))
+        conn.execute(text("DROP TABLE IF EXISTS sync_meta"))
     Base.metadata.create_all(bind=engine)
     s = SessionLocal()
     try:

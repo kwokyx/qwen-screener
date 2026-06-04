@@ -105,6 +105,28 @@ def test_migration_normalizes_legacy_baostock_amount_unit(db):
     assert db.query(StockDaily).one().amount == 100_000_000
 
 
+def test_migrations_are_recorded_and_not_reapplied(db):
+    db.add(StockDaily(
+        code="600519.SH",
+        trade_date=date(2026, 5, 29),
+        close=10,
+        volume=10_000_000,
+        amount=10_000,
+    ))
+    db.commit()
+
+    first = migrations.apply_sqlite_migrations(engine)
+    db.expire_all()
+    assert first >= 1
+    assert db.query(StockDaily).one().amount == 100_000_000
+
+    second = migrations.apply_sqlite_migrations(engine)
+    db.expire_all()
+
+    assert second == 0
+    assert db.query(StockDaily).one().amount == 100_000_000
+
+
 def test_sync_kline_bs_refreshes_existing_front_adjusted_rows(db, monkeypatch):
     trade_date = date(2026, 5, 29)
     db.add(StockDaily(

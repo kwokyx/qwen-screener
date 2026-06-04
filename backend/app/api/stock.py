@@ -283,8 +283,14 @@ def kline(
         )
         return [_stock_daily_out(row) for row in rows[-days:]]
 
-    have_dates = db.query(StockDaily.trade_date).filter(StockDaily.code == code).all()
-    have = sum(1 for (trade_date,) in have_dates if trade_date and trade_date.weekday() < 5)
+    recent_date_rows = (
+        db.query(StockDaily.trade_date)
+        .filter(StockDaily.code == code)
+        .order_by(desc(StockDaily.trade_date))
+        .limit(max(days * 3, days + 20))
+        .all()
+    )
+    have = sum(1 for (trade_date,) in recent_date_rows if trade_date and trade_date.weekday() < 5)
     if 0 < have < days:
         # 详情页优先展示已有本地数据，缺失历史在后台补齐。免费数据源
         # 偶发变慢时不应让页面同步等待几十秒。

@@ -47,6 +47,41 @@ def test_stock_not_found(db):
         assert r.status_code == 404
 
 
+def test_quote_falls_back_to_local_daily_when_live_unavailable(db, monkeypatch):
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    db.add(StockBasic(code="123456.SH", name="测试股", industry="测试"))
+    db.add(StockDaily(code="123456.SH", trade_date=yesterday, close=100.0))
+    db.add(StockDaily(
+        code="123456.SH",
+        trade_date=today,
+        open=101.0,
+        high=111.0,
+        low=99.0,
+        close=110.0,
+        volume=12345,
+        turnover=2.3,
+        pe=8.5,
+        pb=0.9,
+        market_cap=300,
+    ))
+    db.commit()
+
+    from app.services.providers import quote_provider
+
+    monkeypatch.setattr(quote_provider, "fetch_realtime_quote", lambda code: None)
+
+    with TestClient(app) as c:
+        r = c.get("/api/v1/stock/123456.SH/quote")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source"] == "local"
+    assert body["close"] == 110.0
+    assert body["prev_close"] == 100.0
+    assert abs(body["change_pct"] - 10.0) < 0.001
+
+
 def test_kline_returns_chronological_daily_rows(db):
     """日 K 接口对外返回旧到新，避免前端小图趋势反向。"""
     db.add(StockBasic(code="123456.SH", name="测试股", industry="测试"))

@@ -2,7 +2,7 @@ import threading
 import time
 from datetime import date, timedelta
 
-from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
 from app.services import scheduler
 
 
@@ -140,6 +140,101 @@ def test_run_now_short_circuits_weekly_fundamentals_when_data_ready(db, monkeypa
     assert meta["status"] == "success"
     assert "财务覆盖 90/100" in meta["detail"]
     assert "跳过远程同步" in meta["detail"]
+
+
+def test_run_now_short_circuits_daily_value_when_valuation_ready(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            volume=100,
+            pe=8.5,
+            pb=0.9,
+            market_cap=300,
+            dividend_yield=3.2,
+        ))
+    db.commit()
+
+    def should_not_call():
+        raise AssertionError("remote valuation sync should be skipped")
+
+    monkeypatch.setitem(scheduler.JOBS, "daily_value", should_not_call)
+
+    meta = scheduler.run_now("daily_value")
+
+    assert meta["status"] == "success"
+    assert "估值覆盖 120/120" in meta["detail"]
+    assert "跳过远程同步" in meta["detail"]
+
+
+def test_run_now_short_circuits_weekly_dividend_when_yield_ready(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            volume=100,
+            dividend_yield=3.2,
+        ))
+    db.add(StockDividend(
+        code="600000.SH",
+        operate_date=expected,
+        cash_per_share=0.3,
+    ))
+    db.commit()
+
+    def should_not_call():
+        raise AssertionError("remote dividend sync should be skipped")
+
+    monkeypatch.setitem(scheduler.JOBS, "weekly_dividend", should_not_call)
+
+    meta = scheduler.run_now("weekly_dividend")
+
+    assert meta["status"] == "success"
+    assert "最新股息率覆盖 120/120" in meta["detail"]
+    assert "跳过远程同步" in meta["detail"]
+
+
+def test_weekly_dividend_status_ignores_newer_unexpected_day(db, monkeypatch):
+    expected = date(2026, 6, 3)
+    newer = date(2026, 6, 4)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            volume=100,
+            dividend_yield=3.2,
+        ))
+        db.add(StockDaily(
+            code=code,
+            trade_date=newer,
+            close=10,
+            volume=100,
+        ))
+    db.add(StockDividend(
+        code="600000.SH",
+        operate_date=expected,
+        cash_per_share=0.3,
+    ))
+    db.commit()
+
+    status = scheduler.job_data_status("weekly_dividend", db=db)
+
+    assert status["ready"] is True
+    assert status["latest_trade_date"] == str(expected)
+    assert "最新股息率覆盖 120/120" in status["detail"]
 
 
 def test_run_now_short_circuits_weekly_kline_backfill_when_recent_kline_ready(db, monkeypatch):

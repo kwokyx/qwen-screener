@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -22,6 +23,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_slow_api_requests(request: Request, call_next):
+    t0 = perf_counter()
+    response = await call_next(request)
+    duration_ms = int((perf_counter() - t0) * 1000)
+    path = request.url.path
+    if path.startswith(settings.api_prefix) and (
+        duration_ms >= 500
+        or path.endswith("/health/data")
+        or path.endswith("/quote")
+        or path.endswith("/kline")
+        or path == f"{settings.api_prefix}/screener"
+    ):
+        logger.info(
+            "[REQ] {} {} status={} duration_ms={}",
+            request.method,
+            path,
+            response.status_code,
+            duration_ms,
+        )
+    return response
 
 app.add_middleware(
     CORSMiddleware,

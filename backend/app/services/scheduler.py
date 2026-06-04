@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
 from app.services import data_sync, db_backup
 
 USE_BAOSTOCK = settings.data_provider == "baostock"
@@ -38,6 +38,8 @@ logger.info("[SCHED] data_provider={}", settings.data_provider)
 _scheduler: BackgroundScheduler | None = None
 _running_jobs: set[str] = set()
 _running_lock = threading.Lock()
+_meta_revision = 0
+_meta_revision_lock = threading.Lock()
 
 
 _DEFAULT_STUCK_MINUTES = 60
@@ -51,6 +53,8 @@ _JOB_STUCK_MINUTES = {
     "db_backup": 15,
 }
 _FINANCIAL_COVERAGE_THRESHOLD = 0.90
+_VALUATION_COVERAGE_THRESHOLD = 0.90
+_DIVIDEND_YIELD_COVERAGE_THRESHOLD = 0.90
 _KLINE_BACKFILL_LOOKBACK_DAYS = 90
 _KLINE_BACKFILL_MIN_COVERED_DAYS = 40
 
@@ -71,6 +75,17 @@ def _ensure_meta_table():
         conn.execute(text(_META_TABLE_DDL))
 
 
+def _bump_meta_revision():
+    global _meta_revision
+    with _meta_revision_lock:
+        _meta_revision += 1
+
+
+def meta_revision() -> int:
+    with _meta_revision_lock:
+        return _meta_revision
+
+
 def _record(name: str, status: str, duration_ms: int, detail: str = ""):
     """upsert 一行 sync_meta。"""
     with engine.begin() as conn:
@@ -86,6 +101,7 @@ def _record(name: str, status: str, duration_ms: int, detail: str = ""):
                 "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
                 "VALUES (:n, :t, :s, :d, :x)"
             ), params)
+    _bump_meta_revision()
 
 
 def _reserve_job(name: str) -> bool:
@@ -113,6 +129,7 @@ def _mark_interrupted_jobs():
             "t": datetime.utcnow(),
             "d": "服务重启，上一轮后台任务未完成",
         })
+    _bump_meta_revision()
 
 
 def get_meta() -> dict[str, dict]:
@@ -193,17 +210,24 @@ def _latest_expected_weekday(day=None) -> date:
     return current
 
 
-def _covered_latest_trade_date(db: Session, basic_cnt: int):
+def _covered_latest_trade_date(db: Session, basic_cnt: int, latest_allowed: date | None = None):
     min_rows = _market_row_threshold(basic_cnt)
     cnt = func.count(StockDaily.id)
+    query = db.query(StockDaily.trade_date, cnt.label("n"))
+    if latest_allowed is not None:
+        query = query.filter(StockDaily.trade_date <= latest_allowed)
     row = (
-        db.query(StockDaily.trade_date, cnt.label("n"))
-        .group_by(StockDaily.trade_date)
+        query.group_by(StockDaily.trade_date)
         .having(cnt >= min_rows)
         .order_by(StockDaily.trade_date.desc())
         .first()
     )
-    return row[0] if row else db.query(func.max(StockDaily.trade_date)).scalar()
+    if row:
+        return row[0]
+    fallback = db.query(func.max(StockDaily.trade_date))
+    if latest_allowed is not None:
+        fallback = fallback.filter(StockDaily.trade_date <= latest_allowed)
+    return fallback.scalar()
 
 
 def _latest_expected_financial_report_date(day=None) -> date:
@@ -227,7 +251,7 @@ def _daily_market_status(db: Session) -> dict:
     if not basic_cnt:
         return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
     expected = _latest_expected_weekday()
-    latest = _covered_latest_trade_date(db, basic_cnt)
+    latest = _covered_latest_trade_date(db, basic_cnt, latest_allowed=expected)
     latest_cnt = 0
     if latest:
         latest_cnt = db.query(StockDaily).filter(StockDaily.trade_date == latest).count()
@@ -281,12 +305,109 @@ def _weekly_fundamentals_status(db: Session) -> dict:
     }
 
 
+def _latest_daily_counts(db: Session) -> tuple[int, date | None, date, int, int]:
+    basic_cnt = db.query(StockBasic).count()
+    expected = _latest_expected_weekday()
+    latest = _covered_latest_trade_date(db, basic_cnt, latest_allowed=expected) if basic_cnt else None
+    latest_cnt = 0
+    if latest:
+        latest_cnt = db.query(StockDaily).filter(StockDaily.trade_date == latest).count()
+    return basic_cnt, latest, expected, latest_cnt, _market_row_threshold(basic_cnt)
+
+
+def _daily_value_status(db: Session) -> dict:
+    basic_cnt, latest, expected, latest_cnt, market_threshold = _latest_daily_counts(db)
+    if not basic_cnt:
+        return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
+    if not latest:
+        return {"ready": False, "reason": "还没有日线行情数据", "data_impact": "needs_sync"}
+
+    valuation_cnt = db.query(StockDaily).filter(
+        StockDaily.trade_date == latest,
+        (
+            StockDaily.pe.isnot(None)
+            | StockDaily.pb.isnot(None)
+            | StockDaily.market_cap.isnot(None)
+        ),
+    ).count()
+    dividend_yield_cnt = db.query(StockDaily).filter(
+        StockDaily.trade_date == latest,
+        StockDaily.dividend_yield.isnot(None),
+    ).count()
+    required = max(1, int(latest_cnt * _VALUATION_COVERAGE_THRESHOLD)) if latest_cnt else market_threshold
+    ready = bool(
+        latest >= expected
+        and latest_cnt >= market_threshold
+        and valuation_cnt >= required
+        and dividend_yield_cnt >= required
+    )
+    detail = (
+        f"数据已达标，跳过远程同步：估值覆盖 {valuation_cnt}/{latest_cnt}，"
+        f"股息率覆盖 {dividend_yield_cnt}/{latest_cnt}，latest={latest}，expected={expected}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else (
+            f"估值覆盖未达标：估值 {valuation_cnt}/{latest_cnt}，"
+            f"股息率 {dividend_yield_cnt}/{latest_cnt}，latest={latest}，expected={expected}"
+        ),
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "latest_trade_date": str(latest),
+        "expected_trade_date": str(expected),
+        "covered_rows": latest_cnt,
+        "valuation_rows": valuation_cnt,
+        "dividend_yield_rows": dividend_yield_cnt,
+        "coverage_threshold": required,
+    }
+
+
+def _weekly_dividend_status(db: Session) -> dict:
+    basic_cnt, latest, expected, latest_cnt, market_threshold = _latest_daily_counts(db)
+    if not basic_cnt:
+        return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
+    if not latest:
+        return {"ready": False, "reason": "还没有日线行情数据", "data_impact": "needs_sync"}
+
+    dividend_records = db.query(StockDividend).count()
+    dividend_yield_cnt = db.query(StockDaily).filter(
+        StockDaily.trade_date == latest,
+        StockDaily.dividend_yield.isnot(None),
+    ).count()
+    required = max(1, int(latest_cnt * _DIVIDEND_YIELD_COVERAGE_THRESHOLD)) if latest_cnt else market_threshold
+    ready = bool(
+        latest >= expected
+        and latest_cnt >= market_threshold
+        and dividend_records > 0
+        and dividend_yield_cnt >= required
+    )
+    detail = (
+        f"数据已达标，跳过远程同步：现金分红记录 {dividend_records} 条，"
+        f"最新股息率覆盖 {dividend_yield_cnt}/{latest_cnt}，latest={latest}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else (
+            f"分红数据未达标：现金分红记录 {dividend_records} 条，"
+            f"最新股息率覆盖 {dividend_yield_cnt}/{latest_cnt}，latest={latest}，expected={expected}"
+        ),
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "latest_trade_date": str(latest),
+        "expected_trade_date": str(expected),
+        "covered_rows": latest_cnt,
+        "dividend_records": dividend_records,
+        "dividend_yield_rows": dividend_yield_cnt,
+        "coverage_threshold": required,
+    }
+
+
 def _weekly_kline_backfill_status(db: Session) -> dict:
     basic_cnt = db.query(StockBasic).count()
     if not basic_cnt:
         return {"ready": False, "reason": "股票基础列表为空", "data_impact": "needs_sync"}
     expected = _latest_expected_weekday()
-    latest = _covered_latest_trade_date(db, basic_cnt)
+    latest = _covered_latest_trade_date(db, basic_cnt, latest_allowed=expected)
     threshold = _market_row_threshold(basic_cnt)
     lookback_start = expected - timedelta(days=_KLINE_BACKFILL_LOOKBACK_DAYS)
     cnt = func.count(StockDaily.id)
@@ -319,7 +440,9 @@ def _weekly_kline_backfill_status(db: Session) -> dict:
 
 _JOB_DATA_STATUS = {
     "daily_market": _daily_market_status,
+    "daily_value": _daily_value_status,
     "weekly_fundamentals": _weekly_fundamentals_status,
+    "weekly_dividend": _weekly_dividend_status,
     "weekly_kline_backfill": _weekly_kline_backfill_status,
 }
 
@@ -653,9 +776,9 @@ def start():
     _scheduler.start()
     logger.info("[SCHED] 已启动 {} 个任务 (provider={})", len(_scheduler.get_jobs()), settings.data_provider)
 
-    # 启动时立刻做一次冷备份
+    # 启动后后台做一次冷备份，避免 90MB+ SQLite 文件复制阻塞首屏请求。
     try:
-        _run_with_meta("db_backup", job_db_backup)
+        run_async("db_backup")
     except Exception:
         logger.exception("[SCHED] 启动备份失败（不影响启动）")
 

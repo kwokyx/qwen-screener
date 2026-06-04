@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 import time
 
 import requests
@@ -7,7 +9,14 @@ from loguru import logger
 
 
 QUOTE_TTL = 8
-_quote_cache: dict[str, tuple[float, dict]] = {}
+QUOTE_FAILURE_TTL = int(os.getenv("QUOTE_FAILURE_TTL", "30"))
+QUOTE_TIMEOUT = float(os.getenv("QUOTE_TIMEOUT", "0.8"))
+QUOTE_CIRCUIT_FAILURES = int(os.getenv("QUOTE_CIRCUIT_FAILURES", "3"))
+QUOTE_CIRCUIT_SECONDS = int(os.getenv("QUOTE_CIRCUIT_SECONDS", "60"))
+_quote_cache: dict[str, tuple[float, dict | None]] = {}
+_quote_lock = threading.Lock()
+_quote_circuit_disabled_until = 0.0
+_quote_recent_failures: list[float] = []
 
 
 def _to_tx_symbol(code: str) -> str | None:
@@ -86,28 +95,75 @@ def _parse_tx_quote(text: str) -> dict | None:
     return None
 
 
+def _cache_get(code: str) -> tuple[bool, dict | None]:
+    with _quote_lock:
+        cached = _quote_cache.get(code)
+        if not cached:
+            return False, None
+        expires_at, payload = cached
+        if time.monotonic() >= expires_at:
+            _quote_cache.pop(code, None)
+            return False, None
+        return True, payload
+
+
+def _cache_set(code: str, payload: dict | None, ttl: int | float):
+    with _quote_lock:
+        _quote_cache[code] = (time.monotonic() + ttl, payload)
+
+
+def _circuit_open() -> bool:
+    with _quote_lock:
+        return time.monotonic() < _quote_circuit_disabled_until
+
+
+def _record_quote_failure():
+    global _quote_circuit_disabled_until
+    now = time.monotonic()
+    window_start = now - 60
+    with _quote_lock:
+        _quote_recent_failures[:] = [ts for ts in _quote_recent_failures if ts >= window_start]
+        _quote_recent_failures.append(now)
+        if len(_quote_recent_failures) >= QUOTE_CIRCUIT_FAILURES:
+            _quote_circuit_disabled_until = now + QUOTE_CIRCUIT_SECONDS
+
+
+def _record_quote_success():
+    global _quote_circuit_disabled_until
+    with _quote_lock:
+        _quote_recent_failures.clear()
+        _quote_circuit_disabled_until = 0.0
+
+
 def fetch_realtime_quote(code: str, use_cache: bool = True) -> dict | None:
     if use_cache:
-        cached = _quote_cache.get(code)
-        if cached and time.monotonic() < cached[0]:
-            return cached[1]
+        cache_hit, cached = _cache_get(code)
+        if cache_hit:
+            return cached
 
     symbol = _to_tx_symbol(code)
     if not symbol:
+        return None
+    if _circuit_open():
         return None
 
     try:
         resp = requests.get(
             "https://qt.gtimg.cn/q=" + symbol,
             headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.qq.com/"},
-            timeout=4,
+            timeout=QUOTE_TIMEOUT,
         )
         resp.raise_for_status()
         quote = _parse_tx_quote(resp.text)
     except Exception as exc:
         logger.warning("[QUOTE] {} 腾讯实时行情失败: {}", code, str(exc)[:120])
+        _cache_set(code, None, QUOTE_FAILURE_TTL)
+        _record_quote_failure()
         return None
 
     if quote:
-        _quote_cache[code] = (time.monotonic() + QUOTE_TTL, quote)
+        _cache_set(code, quote, QUOTE_TTL)
+        _record_quote_success()
+    else:
+        _cache_set(code, None, QUOTE_FAILURE_TTL)
     return quote

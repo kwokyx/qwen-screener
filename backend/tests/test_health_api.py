@@ -185,3 +185,37 @@ def test_ai_health_reports_runtime_status_without_secret(monkeypatch):
     assert body["fallback"] is True
     assert "secret-key" not in r.text
     assert "api_key" not in r.text.lower()
+
+
+def test_ai_health_uses_short_runtime_cache(monkeypatch):
+    calls = []
+    monkeypatch.setattr(health.settings, "database_url", "sqlite:////tmp/runtime_qwen.db")
+    monkeypatch.setattr(health.settings, "ai_backend", "openai")
+    monkeypatch.setattr(health.settings, "openai_model", "model-test")
+    health._ai_health_cache.update({
+        "backend": None,
+        "model": None,
+        "expires_at": 0.0,
+        "payload": None,
+    })
+
+    def fake_probe():
+        calls.append("called")
+        return {
+            "ok": True,
+            "latency_ms": 123,
+            "reason": None,
+            "backend": "openai",
+            "model": "model-test",
+            "configured": True,
+            "fallback": False,
+            "mode": "ai_agent",
+        }
+
+    monkeypatch.setattr(health.qwen_client, "probe_health", fake_probe)
+
+    first = health.ai_health()
+    second = health.ai_health()
+
+    assert first == second
+    assert calls == ["called"]
