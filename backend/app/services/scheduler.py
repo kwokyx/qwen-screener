@@ -112,7 +112,7 @@ def _record(name: str, status: str, duration_ms: int, detail: str = ""):
     _bump_meta_revision()
 
 
-def _clear_strategy_cache_after_data_job(name: str, status: str):
+def _clear_runtime_caches_after_data_job(name: str, status: str):
     if status != "success" or name not in _STRATEGY_CACHE_INVALIDATING_JOBS:
         return
     try:
@@ -121,6 +121,12 @@ def _clear_strategy_cache_after_data_job(name: str, status: str):
         strategy_selector.clear_strategy_cache()
     except Exception as exc:
         logger.warning("[SCHED] 策略缓存清理失败: {}", str(exc)[:120])
+    try:
+        from app.api import market
+
+        market.clear_market_cache()
+    except Exception as exc:
+        logger.warning("[SCHED] 行情概览缓存清理失败: {}", str(exc)[:120])
 
 
 def _reserve_job(name: str) -> bool:
@@ -559,7 +565,7 @@ def _run_with_meta(name: str, fn, *, reserved: bool = False, allow_shortcut: boo
         dur = int((datetime.utcnow() - t0).total_seconds() * 1000)
         try:
             _record(name, status, dur, detail)
-            _clear_strategy_cache_after_data_job(name, status)
+            _clear_runtime_caches_after_data_job(name, status)
         except Exception:
             logger.exception("[SCHED] 写入 sync_meta 失败")
         _release_job(name)

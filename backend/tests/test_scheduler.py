@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import text
 
 from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
+from app.api import market as market_api
 from app.services import scheduler, strategy_selector
 
 
@@ -93,15 +94,18 @@ def test_run_async_marks_queued_and_blocks_duplicate(db, monkeypatch):
     assert "unit_slow" not in scheduler._running_jobs
 
 
-def test_successful_data_job_clears_strategy_cache(db, monkeypatch):
+def test_successful_data_job_clears_runtime_caches(db, monkeypatch):
     scheduler._running_jobs.clear()
-    cleared = []
-    monkeypatch.setattr(strategy_selector, "clear_strategy_cache", lambda: cleared.append(True))
+    cleared_strategy = []
+    cleared_market = []
+    monkeypatch.setattr(strategy_selector, "clear_strategy_cache", lambda: cleared_strategy.append(True))
+    monkeypatch.setattr(market_api, "clear_market_cache", lambda: cleared_market.append(True))
 
     meta = scheduler._run_with_meta("daily_market", lambda: 3, allow_shortcut=False)
 
     assert meta["status"] == "success"
-    assert cleared == [True]
+    assert cleared_strategy == [True]
+    assert cleared_market == [True]
 
 
 def _seed_basic(db, n=120):

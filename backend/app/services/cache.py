@@ -79,6 +79,21 @@ def set_json(key: str, value: Any, ttl: int = 3600) -> bool:
         return False
 
 
+def delete_prefix(prefix: str) -> int:
+    """Best-effort delete for namespace-style cache keys."""
+    c = _get_client()
+    if c is None:
+        return 0
+    deleted = 0
+    try:
+        for key in c.scan_iter(match=f"{prefix}*", count=100):
+            deleted += int(c.delete(key) or 0)
+        return deleted
+    except Exception as e:
+        logger.warning("[CACHE] delete_prefix 失败：{}", str(e)[:80])
+        return deleted
+
+
 def get_text(key: str) -> str | None:
     c = _get_client()
     if c is None:

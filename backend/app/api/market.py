@@ -13,7 +13,7 @@ from datetime import date as Date
 
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
-from sqlalchemy import desc, func, or_
+from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -107,6 +107,13 @@ def _local_cache_set(key: tuple, payload, ttl: float = _LOCAL_MARKET_CACHE_TTL):
         _local_market_cache[key] = (time.monotonic() + ttl, copy.deepcopy(payload))
 
 
+def clear_market_cache() -> None:
+    """Invalidate dashboard market aggregate caches after local market data changes."""
+    with _local_market_cache_lock:
+        _local_market_cache.clear()
+    _cache.delete_prefix("qwen:indices_local_v2:")
+
+
 def _change_pct(open_p: float | None, close_p: float | None, prev_close: float | None = None) -> float | None:
     base = prev_close if prev_close and prev_close > 0 else open_p
     if base is None or close_p is None or base <= 0:
@@ -168,25 +175,7 @@ def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
     prev = prev_dates[-1] if prev_dates else None
 
     for d in INDEX_DEFS:
-        prefix_filters = [StockDaily.code.like(f"{prefix}%") for prefix in d["prefixes"]]
-        stats = {
-            trade_date: {
-                "avg_close": avg_close,
-                "avg_open": avg_open,
-                "count": count,
-            }
-            for trade_date, avg_close, avg_open, count in (
-                db.query(
-                    StockDaily.trade_date,
-                    func.avg(StockDaily.close),
-                    func.avg(StockDaily.open),
-                    func.count(StockDaily.id),
-                )
-                .filter(StockDaily.trade_date.in_(dates), StockDaily.close.isnot(None), or_(*prefix_filters))
-                .group_by(StockDaily.trade_date)
-                .all()
-            )
-        }
+        stats = _index_prefix_stats(db, dates, d["prefixes"])
         spark: list[float] = []
         latest_value = None
         prev_value = None
@@ -228,6 +217,64 @@ def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
         ))
 
     return out
+
+
+def _index_prefix_stats(db: Session, dates: list[Date], prefixes: tuple[str, ...]) -> dict[Date, dict]:
+    """Aggregate index-like local snapshots with code-range scans.
+
+    SQLite does not consistently use the existing ``(code, trade_date)`` index
+    for ``LIKE '60%'`` queries, which made cold dashboard index calculation
+    scan the recent daily rows once per index. Range predicates keep the query
+    on the code index and then combine multi-prefix indices with weighted
+    averages.
+    """
+    stats: dict[Date, dict] = {}
+    for prefix in prefixes:
+        for trade_date, avg_close, avg_open, count in (
+            db.query(
+                StockDaily.trade_date,
+                func.avg(StockDaily.close),
+                func.avg(StockDaily.open),
+                func.count(StockDaily.id),
+            )
+            .filter(
+                StockDaily.trade_date.in_(dates),
+                StockDaily.close.isnot(None),
+                _code_prefix_range_filter(prefix),
+            )
+            .group_by(StockDaily.trade_date)
+            .all()
+        ):
+            if not count:
+                continue
+            rec = stats.setdefault(trade_date, {
+                "close_sum": 0.0,
+                "open_sum": 0.0,
+                "count": 0,
+            })
+            rec["close_sum"] += float(avg_close or 0) * int(count)
+            rec["open_sum"] += float(avg_open or 0) * int(count)
+            rec["count"] += int(count)
+
+    return {
+        trade_date: {
+            "avg_close": rec["close_sum"] / rec["count"],
+            "avg_open": rec["open_sum"] / rec["count"],
+            "count": rec["count"],
+        }
+        for trade_date, rec in stats.items()
+        if rec["count"] > 0
+    }
+
+
+def _code_prefix_range_filter(prefix: str):
+    return and_(StockDaily.code >= prefix, StockDaily.code < _prefix_upper_bound(prefix))
+
+
+def _prefix_upper_bound(prefix: str) -> str:
+    if not prefix or not prefix.isdigit():
+        return f"{prefix}\uffff"
+    return str(int(prefix) + 1).zfill(len(prefix))
 
 
 # ---------------------- /market/indices ----------------------

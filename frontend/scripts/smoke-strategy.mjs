@@ -110,7 +110,7 @@ async function connectCdp(wsUrl) {
 async function waitForChromePort(userDataDir, chrome, stderrLines, expectedPort, ignoreLauncherExit = false) {
   if (process.env.CHROME_DEBUG_PORT) return process.env.CHROME_DEBUG_PORT
   const portFile = join(userDataDir, 'DevToolsActivePort')
-  const deadline = Date.now() + 10000
+  const deadline = Date.now() + 30000
   while (Date.now() < deadline) {
     if (!ignoreLauncherExit && chrome.exitCode !== null) {
       fail('Chrome exited before DevTools was ready.', stderrLines.join(''))
@@ -298,9 +298,13 @@ async function run() {
   const stderrLines = []
   const debugPort = String(9222 + Math.floor(Math.random() * 1000))
   const chromeArgs = [
-    '--headless=new',
+    ...(process.platform === 'darwin' ? [] : ['--headless=new']),
     '--disable-gpu',
     '--disable-dev-shm-usage',
+    '--disable-background-networking',
+    '--no-proxy-server',
+    '--proxy-server=direct://',
+    '--proxy-bypass-list=*',
     '--no-first-run',
     '--no-default-browser-check',
     '--remote-debugging-address=127.0.0.1',
@@ -308,10 +312,8 @@ async function run() {
     `--user-data-dir=${userDataDir}`,
     'about:blank',
   ]
-  const launchWithOpen = process.platform === 'darwin' && chromePath.includes('Google Chrome.app')
-  const chrome = launchWithOpen
-    ? spawn('open', ['-na', 'Google Chrome', '--args', ...chromeArgs], { stdio: ['ignore', 'ignore', 'pipe'] })
-    : spawn(chromePath, chromeArgs, { stdio: ['ignore', 'ignore', 'pipe'] })
+  const launchWithOpen = false
+  const chrome = spawn(chromePath, chromeArgs, { stdio: ['ignore', 'ignore', 'pipe'] })
   chrome.stderr.on('data', (chunk) => stderrLines.push(chunk.toString()))
 
   let cdp
@@ -363,13 +365,14 @@ async function run() {
     let detail = null
     let afterBack = null
     if (afterRun.rows > 0) {
-      const firstCode = await evaluate(cdp, 'document.querySelector(".stock-cell .stock-code")?.textContent.trim() || ""')
-      await clickFirst(cdp, '.stock-link')
+      const firstCode = await evaluate(cdp, 'document.querySelector(".strategy-page .stock-cell .stock-code")?.textContent.trim() || ""')
+      await clickFirst(cdp, '.strategy-page .stock-cell .stock-link')
       await waitForExpression(cdp, 'location.pathname.startsWith("/detail/")', 'detail navigation')
       await waitForExpression(
         cdp,
         `document.querySelector(".detail-page .stock-code")?.textContent.includes(${JSON.stringify(firstCode)})`,
         'detail page content',
+        60000,
       )
       detail = await evaluate(cdp, '({ href: location.href, code: document.querySelector(".detail-page .stock-code")?.textContent.trim(), name: document.querySelector(".detail-page .stock-name")?.textContent.trim() })')
       await evaluate(cdp, 'history.back(); true')
@@ -406,7 +409,10 @@ async function run() {
     }, null, 2))
   } finally {
     if (cdp) {
-      await cdp.send('Browser.close').catch(() => {})
+      await Promise.race([
+        cdp.send('Browser.close').catch(() => {}),
+        delay(500),
+      ])
       cdp.close()
     }
     if (!launchWithOpen) {

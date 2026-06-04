@@ -35,6 +35,11 @@ const moverTab = ref('gainers')
 const loadingIndices = ref(true)
 const loadingSectors = ref(true)
 const loadingMovers = ref(true)
+const loadingTicker = ref(true)
+const indicesError = ref('')
+const sectorsError = ref('')
+const moversError = ref('')
+const tickerError = ref('')
 const errorMsg = ref('')
 
 const moversShown = computed(() => (movers.value ? movers.value[moverTab.value] || [] : []))
@@ -56,17 +61,46 @@ const marketStats = computed(() => {
 
 async function loadAll() {
   errorMsg.value = ''
+  indicesError.value = ''
+  sectorsError.value = ''
+  moversError.value = ''
+  tickerError.value = ''
   loadingIndices.value = true
   loadingSectors.value = true
   loadingMovers.value = true
+  loadingTicker.value = true
 
   Promise.allSettled([
-    marketApi.indices().then((d) => { indices.value = d }).finally(() => { loadingIndices.value = false }),
-    marketApi.sectors(20).then((d) => { sectors.value = d }).finally(() => { loadingSectors.value = false }),
+    marketApi.indices()
+      .then((d) => { indices.value = d })
+      .catch((e) => {
+        indices.value = []
+        indicesError.value = friendlyError(e)
+        throw e
+      })
+      .finally(() => { loadingIndices.value = false }),
+    marketApi.sectors(20)
+      .then((d) => { sectors.value = d })
+      .catch((e) => {
+        sectors.value = []
+        sectorsError.value = friendlyError(e)
+        throw e
+      })
+      .finally(() => { loadingSectors.value = false }),
     marketApi.movers(10).then((d) => {
       movers.value = d
+    }).catch((e) => {
+      movers.value = null
+      moversError.value = friendlyError(e)
+      throw e
     }).finally(() => { loadingMovers.value = false }),
-    marketApi.ticker().then((d) => { tickerInfo.value = d }).catch(() => {}),
+    marketApi.ticker().then((d) => {
+      tickerInfo.value = d
+    }).catch((e) => {
+      tickerInfo.value = null
+      tickerError.value = friendlyError(e)
+      throw e
+    }).finally(() => { loadingTicker.value = false }),
   ]).then((rs) => {
     const failed = rs.filter((r) => r.status === 'rejected')
     if (failed.length === rs.length) errorMsg.value = friendlyError(failed[0].reason)
@@ -248,6 +282,11 @@ onMounted(loadAll)
             </div>
           </NCard>
         </template>
+        <NCard v-else-if="indicesError" class="terminal-card index-card status-card" :bordered="false">
+          <div class="status-title">指数加载失败</div>
+          <div class="status-desc">{{ indicesError }}</div>
+          <NButton size="tiny" secondary @click="loadAll">重试</NButton>
+        </NCard>
         <template v-else>
           <NCard v-for="(idx, i) in indices" :key="idx.code" class="terminal-card index-card" :bordered="false">
             <div class="index-head">
@@ -274,12 +313,17 @@ onMounted(loadAll)
             <span>市场概况</span>
             <NTag size="tiny" :bordered="false">{{ marketStats?.tradeDate || '—' }}</NTag>
           </div>
-          <div v-if="!marketStats" class="market-stats-skeleton">
+          <div v-if="loadingTicker && !marketStats" class="market-stats-skeleton">
             <span class="sk-metric"></span>
             <span class="sk-metric"></span>
             <span class="sk-metric wide"></span>
           </div>
-          <div v-else class="market-stats">
+          <div v-else-if="tickerError" class="status-block">
+            <div class="status-title">概况加载失败</div>
+            <div class="status-desc">{{ tickerError }}</div>
+            <NButton size="tiny" secondary @click="loadAll">重试</NButton>
+          </div>
+          <div v-else-if="marketStats" class="market-stats">
             <div class="market-metric">
               <span>上涨</span>
               <strong>{{ formatInt(marketStats.advancers) }}</strong>
@@ -293,6 +337,7 @@ onMounted(loadAll)
               <strong>{{ formatInt(marketStats.amount) }}<small>亿</small></strong>
             </div>
           </div>
+          <NEmpty v-else size="small" description="暂无市场概况" />
         </NCard>
       </div>
 
@@ -329,6 +374,12 @@ onMounted(loadAll)
                 <span class="sk-cell num"></span>
               </div>
             </div>
+            <NAlert v-else-if="moversError" type="warning" :bordered="false" class="section-alert">
+              <div class="alert-content">
+                <span>市场异动加载失败：{{ moversError }}</span>
+                <NButton size="tiny" secondary @click="loadAll">重试</NButton>
+              </div>
+            </NAlert>
             <NDataTable
               v-else
               :columns="moverColumns"
@@ -337,6 +388,7 @@ onMounted(loadAll)
               :pagination="false"
               :bordered="false"
               :single-line="false"
+              :scroll-x="850"
               :row-key="(row) => row.code"
               :row-props="moverRowProps"
               size="small"
@@ -365,6 +417,12 @@ onMounted(loadAll)
                 </div>
               </div>
             </div>
+            <NAlert v-else-if="sectorsError" type="warning" :bordered="false" class="section-alert">
+              <div class="alert-content">
+                <span>板块涨跌加载失败：{{ sectorsError }}</span>
+                <NButton size="tiny" secondary @click="loadAll">重试</NButton>
+              </div>
+            </NAlert>
             <NGrid v-else :cols="2" :x-gap="10">
               <NGi>
                 <NDataTable
@@ -423,6 +481,7 @@ onMounted(loadAll)
               :loading="loadingSectors"
               :pagination="false"
               :bordered="false"
+              :scroll-x="520"
               size="small"
             >
               <template #empty>
@@ -519,6 +578,30 @@ onMounted(loadAll)
 
 .market-card {
   min-height: 118px;
+}
+
+.status-card,
+.status-block {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+}
+
+.status-title {
+  color: #3F3F46;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.status-desc {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #71717A;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .card-title-row {
@@ -671,6 +754,10 @@ onMounted(loadAll)
 
 .dashboard-alert {
   border-radius: 8px;
+}
+
+.section-alert {
+  border-radius: 6px;
 }
 
 .main-grid {

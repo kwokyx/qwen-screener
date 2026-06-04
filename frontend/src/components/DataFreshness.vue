@@ -143,6 +143,7 @@ function shortDate(value) {
 function fmtRel(iso) {
   if (!iso) return '从未'
   const parsed = parseServerUtcTime(iso)
+  if (Number.isNaN(parsed.getTime())) return '时间未知'
   const t = parsed.getTime()
   const diff = (Date.now() - t) / 1000
   if (diff < 60) return '刚刚'
@@ -150,6 +151,19 @@ function fmtRel(iso) {
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
   if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`
   return parsed.toLocaleDateString('zh-CN')
+}
+
+function fmtAbs(iso) {
+  if (!iso) return ''
+  const parsed = parseServerUtcTime(iso)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 }
 
 function parseServerUtcTime(value) {
@@ -161,11 +175,14 @@ function parseServerUtcTime(value) {
 
 function taskMetaLine(name) {
   const lastRun = fmtRel(meta.value[name]?.last_run_at)
+  const absolute = fmtAbs(meta.value[name]?.last_run_at)
+  const timeHint = absolute ? `（${absolute}）` : ''
   const duration = meta.value[name]?.duration_ms
     ? ` · 耗时 ${(meta.value[name].duration_ms / 1000).toFixed(0)}s`
     : ''
   const covered = latestDate.value && fresh.value ? `数据覆盖至 ${latestDate.value} · ` : ''
-  return `${covered}任务更新 ${lastRun}${duration}`
+  const label = isJobActive(name) ? '任务提交' : '任务更新'
+  return `${covered}${label} ${lastRun}${timeHint}${duration}`
 }
 
 const summary = computed(() => {
