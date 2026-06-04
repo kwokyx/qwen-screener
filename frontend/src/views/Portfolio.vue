@@ -11,7 +11,6 @@ import {
   NGrid,
   NProgress,
   NSpace,
-  NStatistic,
   NTag,
 } from 'naive-ui'
 import Shell from '../components/Shell.vue'
@@ -258,8 +257,9 @@ const rowProps = (row) => ({
       <NGrid :cols="4" :x-gap="12" :y-gap="12" responsive="screen" item-responsive class="section-gap">
         <NGi span="4 s:2 m:1">
           <NCard :bordered="false" class="metric-card">
-            <NStatistic label="自选数" :value="summary.total" />
-            <template #footer>告警规则 {{ summary.alertsCount }} 条</template>
+            <div class="metric-label">自选数</div>
+            <div class="metric-number mono">{{ summary.total }}</div>
+            <div class="metric-foot">告警规则 {{ summary.alertsCount }} 条</div>
           </NCard>
         </NGi>
         <NGi span="4 s:2 m:1">
@@ -395,15 +395,15 @@ const rowProps = (row) => ({
   border-radius: 8px;
   background: #f7f7f7;
 }
+.metric-card {
+  height: 100%;
+}
 .metric-card :deep(.n-card__content) {
-  min-height: 104px;
+  min-height: 136px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
 }
-.metric-card :deep(.n-statistic-value) {
-  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 26px;
-  font-weight: 800;
-}
-.metric-card :deep(.n-statistic__label),
 .metric-label,
 .metric-foot,
 .muted {
@@ -413,9 +413,17 @@ const rowProps = (row) => ({
   font-size: 12px;
   font-weight: 650;
 }
+.metric-number {
+  margin-top: 20px;
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 800;
+  color: #3f3f46;
+}
 .metric-foot,
 .metric-card :deep(.n-card__footer) {
-  margin-top: 6px;
+  margin-top: auto;
+  padding-top: 14px;
   font-size: 12px;
 }
 .metric-main {
