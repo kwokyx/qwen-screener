@@ -148,6 +148,15 @@ function fmtRel(iso) {
   return new Date(iso).toLocaleDateString('zh-CN')
 }
 
+function taskMetaLine(name) {
+  const lastRun = fmtRel(meta.value[name]?.last_run_at)
+  const duration = meta.value[name]?.duration_ms
+    ? ` · 耗时 ${(meta.value[name].duration_ms / 1000).toFixed(0)}s`
+    : ''
+  const covered = latestDate.value && fresh.value ? `数据覆盖至 ${latestDate.value} · ` : ''
+  return `${covered}任务更新 ${lastRun}${duration}`
+}
+
 const summary = computed(() => {
   if (freshness.value?.reason_code === 'fresh') return { label: '已最新', tone: 'fresh' }
   if (freshness.value?.reason_code === 'partial_newer_data') return { label: `至 ${shortDate(latestDate.value)}`, tone: 'meh' }
@@ -388,8 +397,8 @@ onBeforeUnmount(() => {
                 <span :style="{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', fontWeight: 700, ...statusStyle(statusOf(j.name)) }">{{ statusLabel(statusOf(j.name)) }}</span>
               </div>
               <div :style="{ fontSize: '10.5px', color: A2.textMuted, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ j.desc }}</div>
-              <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace' }">
-                上次：{{ fmtRel(meta[j.name]?.last_run_at) }}<span v-if="meta[j.name]?.duration_ms"> · {{ (meta[j.name].duration_ms / 1000).toFixed(0) }}s</span>
+              <div :style="{ fontSize: '10px', color: A2.textDim, marginTop: '2px', fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.35 }">
+                {{ taskMetaLine(j.name) }}
               </div>
               <div v-if="['failed', 'stuck'].includes(statusOf(j.name)) && meta[j.name]?.detail" :style="{ fontSize: '10px', color: A2.up, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">
                 {{ meta[j.name].detail }}
@@ -405,7 +414,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div :style="{ padding: '8px 14px', fontSize: '10.5px', color: A2.textDim, lineHeight: 1.5, background: '#FBFBF9', borderTop: `1px solid ${A2.borderHair}` }">
-          自动同步按交易日和周末任务执行；长任务会在后台运行，状态会自动刷新。
+          自动同步按交易日和周末任务执行；任务更新时间不是行情日期，以上方“最新”交易日和覆盖率为准。
         </div>
       </div>
     </Transition>
