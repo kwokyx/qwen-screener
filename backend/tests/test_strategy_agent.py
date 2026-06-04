@@ -141,6 +141,29 @@ def test_chat_agent_design_with_deferred_execution_does_not_screen(db, seed_stoc
     assert "先不执行筛选" in res.answer
 
 
+def test_strategy_design_fast_path_skips_model_when_ai_available(db, seed_stocks, monkeypatch):
+    def fail_plan(*_args, **_kwargs):
+        raise AssertionError("explicit strategy design should not call model planner")
+
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("strategy design should not execute screen")
+
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.run_agent_selection(db, "帮我设计一个稳健的选股策略，先别执行", limit=10)
+
+    assert res.plan.tool == "strategy_design"
+    assert res.screen_result is None
+    assert res.plan.ai_configured is True
+    assert res.plan.ai_used is False
+
+
 def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

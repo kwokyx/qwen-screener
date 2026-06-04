@@ -1,6 +1,8 @@
 import threading
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+
+from sqlalchemy import text
 
 from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
 from app.services import scheduler
@@ -37,6 +39,31 @@ def test_startup_marks_stale_active_jobs_failed(db):
     meta = scheduler.get_meta()["unit_stale"]
     assert meta["status"] == "failed"
     assert "服务重启" in meta["detail"]
+
+
+def test_get_meta_returns_timezone_qualified_utc_timestamp(db):
+    scheduler._ensure_meta_table()
+    ts = datetime(2026, 6, 4, 7, 42, 46, 871898)
+    with scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+        conn.execute(
+            text(
+                "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+                "VALUES (:n, :t, :s, :d, :x)"
+            ),
+            {
+                "n": "unit_time",
+                "t": ts,
+                "s": "success",
+                "d": 0,
+                "x": "",
+            },
+        )
+
+    meta = scheduler.get_meta()["unit_time"]
+
+    assert meta["last_run_at"] == "2026-06-04T07:42:46.871898Z"
+    assert meta["age_minutes"] >= 0
 
 
 def test_run_async_marks_queued_and_blocks_duplicate(db, monkeypatch):

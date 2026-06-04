@@ -161,7 +161,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
         ("按股息率排序", "stock_screen", True, "result", False, 1),
         ("换一批", "stock_screen", True, "result", False, 1),
         ("查看第一只详情", "stock_detail", False, "agent", False, 0),
-        ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", True, 0),
+        ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
         ("现在执行", "stock_screen", True, "result", False, 0),
         ("你好", "ask_clarification", False, "agent", False, 0),
         ("可以，做吧", "ask_clarification", False, "agent", False, 0),

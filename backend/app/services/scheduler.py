@@ -17,7 +17,7 @@
 供前端 /health/data 显示"最后更新于..."。
 """
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -142,12 +142,7 @@ def get_meta() -> dict[str, dict]:
     out = {}
     for r in rows:
         ts = r.last_run_at
-        if ts is None:
-            ts_str = None
-        elif isinstance(ts, str):
-            ts_str = ts
-        else:
-            ts_str = ts.isoformat()
+        ts_str = _format_meta_datetime_utc(ts)
         age_minutes = _age_minutes(now, ts)
         stale_after = _JOB_STUCK_MINUTES.get(r.name, _DEFAULT_STUCK_MINUTES)
         stuck = r.status in ("queued", "running") and age_minutes is not None and age_minutes > stale_after
@@ -174,14 +169,29 @@ def _age_minutes(now: datetime, ts) -> int | None:
     return max(0, int((now - dt).total_seconds() // 60))
 
 
+def _format_meta_datetime_utc(ts) -> str | None:
+    dt = _parse_meta_datetime(ts)
+    if dt is None:
+        return None
+    return f"{dt.isoformat(timespec='microseconds')}Z"
+
+
 def _parse_meta_datetime(ts) -> datetime | None:
     if ts is None:
         return None
     if isinstance(ts, datetime):
+        if ts.tzinfo is not None:
+            return ts.astimezone(timezone.utc).replace(tzinfo=None)
         return ts.replace(tzinfo=None)
     if isinstance(ts, str):
         try:
-            return datetime.fromisoformat(ts).replace(tzinfo=None)
+            text = ts.strip().replace(" ", "T", 1)
+            if text.endswith(("Z", "z")):
+                text = f"{text[:-1]}+00:00"
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt.replace(tzinfo=None)
         except ValueError:
             return None
     return None

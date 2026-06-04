@@ -423,7 +423,12 @@ def plan_agent_selection(
     warnings: list[str] = []
     tool_trace: list[str] = []
 
-    # Fast local checks for design / clarification when AI is not available
+    # Explicit non-execution strategy design is deterministic and should not
+    # wait for, or be overridden by, model tool routing.
+    if is_explicit_non_execution_design_query(query):
+        return build_strategy_design_response(query, ai_configured=ai_configured)
+
+    # Fast local clarification when AI is not available.
     if not ai_available:
         if is_strategy_design_query(query):
             return build_strategy_design_response(query, ai_configured=ai_configured)
@@ -789,11 +794,7 @@ def is_stock_detail_query(query: str) -> bool:
 def is_strategy_design_query(query: str) -> bool:
     """Return True when the user asks for a strategy plan rather than execution."""
     q = query.strip().lower()
-    explicit_design_only = (
-        "只列", "只设计", "不要筛", "不筛选", "不用筛",
-        "不执行", "不要执行", "别执行", "先别执行", "暂不执行", "先别跑",
-    )
-    if any(k in q for k in explicit_design_only):
+    if is_explicit_non_execution_design_query(query):
         return True
 
     design_terms = ("设计", "制定", "列出", "量化条件", "策略框架", "选股策略", "策略思路", "怎么选", "如何选")
@@ -803,6 +804,16 @@ def is_strategy_design_query(query: str) -> bool:
     has_strategy_topic = any(k in q for k in strategy_terms)
     has_execution_intent = any(k in q for k in execution_terms)
     return has_design_intent and has_strategy_topic and not has_execution_intent
+
+
+def is_explicit_non_execution_design_query(query: str) -> bool:
+    q = query.strip().lower()
+    explicit_design_only = (
+        "只列", "只设计", "不要筛", "不筛选", "不用筛",
+        "不执行", "不要执行", "别执行", "先别执行", "暂不执行", "先别跑",
+    )
+    design_terms = ("设计", "制定", "列出", "量化条件", "策略框架", "选股策略", "策略思路", "策略")
+    return any(k in q for k in explicit_design_only) and any(k in q for k in design_terms)
 
 
 def build_strategy_design_response(query: str, ai_configured: bool = False) -> StrategyAgentResponse:
@@ -820,14 +831,17 @@ def build_strategy_design_response(query: str, ai_configured: bool = False) -> S
         ai_used=False,
     )
     answer = _summarize_strategy_design(query, plan)
+    tool_trace = [
+        "tool_router -> strategy_design",
+        "跳过 screener_engine.screen：当前请求是策略设计，不是执行选股",
+    ]
+    if is_explicit_non_execution_design_query(query):
+        tool_trace.insert(0, "本地快速路径命中：明确要求只设计策略，不执行筛选")
     return StrategyAgentResponse(
         query=query,
         plan=plan,
         answer=answer,
-        tool_trace=[
-            "tool_router -> strategy_design",
-            "跳过 screener_engine.screen：当前请求是策略设计，不是执行选股",
-        ],
+        tool_trace=tool_trace,
         tool_calls=_planned_tool_calls(plan),
     )
 
@@ -1782,29 +1796,41 @@ def _load_histories(db: Session, days: int, max_codes: int = 1200) -> dict[str, 
         return {}
 
     rows = (
-        db.query(StockBasic, StockDaily)
+        db.query(
+            StockBasic.code,
+            StockBasic.name,
+            StockBasic.industry,
+            StockBasic.market,
+            StockDaily.trade_date,
+            StockDaily.open,
+            StockDaily.high,
+            StockDaily.low,
+            StockDaily.close,
+            StockDaily.volume,
+            StockDaily.amount,
+        )
         .join(StockDaily, StockDaily.code == StockBasic.code)
         .filter(StockDaily.code.in_(codes), StockDaily.trade_date.in_(dates))
         .order_by(StockDaily.code.asc(), StockDaily.trade_date.asc())
         .all()
     )
     histories: dict[str, list[DailyPoint]] = defaultdict(list)
-    for basic, daily in rows:
-        if daily.close is None or daily.high is None or daily.low is None:
+    for row in rows:
+        if row.close is None or row.high is None or row.low is None:
             continue
-        histories[basic.code].append(
+        histories[row.code].append(
             DailyPoint(
-                code=basic.code,
-                name=basic.name,
-                industry=basic.industry,
-                market=basic.market,
-                trade_date=daily.trade_date,
-                open=daily.open,
-                high=daily.high,
-                low=daily.low,
-                close=daily.close,
-                volume=daily.volume,
-                amount=daily.amount,
+                code=row.code,
+                name=row.name,
+                industry=row.industry,
+                market=row.market,
+                trade_date=row.trade_date,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+                amount=row.amount,
             )
         )
     expected_dates = set(dates)
