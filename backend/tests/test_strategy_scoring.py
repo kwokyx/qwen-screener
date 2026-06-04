@@ -1,3 +1,4 @@
+import threading
 from datetime import date, timedelta
 
 import pytest
@@ -28,6 +29,31 @@ def _point(
         close=close,
         volume=volume,
         amount=amount,
+    )
+
+
+def _seed_latest_daily(db, trade_date=date(2026, 6, 4)):
+    db.add(StockBasic(code="000001.SZ", name="测试股票", industry="银行"))
+    db.add(StockDaily(
+        code="000001.SZ",
+        trade_date=trade_date,
+        close=10,
+        high=10,
+        low=9,
+        amount=2e8,
+    ))
+    db.commit()
+
+
+def _pick(code: str, score: float = 80):
+    return strategy_selector.StrategyPickItem(
+        code=code,
+        name=f"测试{code[-2:]}",
+        trade_date=date(2026, 6, 4),
+        close=10,
+        score=score,
+        signals=["测试信号"],
+        metrics={},
     )
 
 
@@ -127,6 +153,102 @@ def test_strategy_templates_include_six_daily_strategies():
         "limit_up_shakeout",
         "uptrend_limit_down",
     } <= ids
+
+
+def test_strategy_cache_reuses_full_result_across_limits(db, monkeypatch):
+    strategy_selector.clear_strategy_cache()
+    _seed_latest_daily(db)
+    load_calls = 0
+
+    def fake_load(_db, days, max_codes):
+        nonlocal load_calls
+        load_calls += 1
+        assert days == 35
+        assert max_codes == strategy_selector._STRATEGY_CANDIDATE_LIMIT
+        return {}
+
+    monkeypatch.setattr(strategy_selector, "_load_histories", fake_load)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_eval_turtle_breakout",
+        lambda _histories: [_pick("000001.SZ", 90), _pick("000002.SZ", 80), _pick("000003.SZ", 70)],
+    )
+
+    first = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=1)
+    second = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=3)
+
+    assert load_calls == 1
+    assert first.total == 3
+    assert [item.code for item in first.items] == ["000001.SZ"]
+    assert [item.code for item in second.items] == ["000001.SZ", "000002.SZ", "000003.SZ"]
+
+
+def test_strategy_singleflight_coalesces_same_cache_key(db, monkeypatch):
+    strategy_selector.clear_strategy_cache()
+    started = threading.Event()
+    release = threading.Event()
+    load_calls = 0
+    results = []
+    errors = []
+
+    monkeypatch.setattr(strategy_selector, "_latest_strategy_trade_date", lambda _db: date(2026, 6, 4))
+
+    def fake_load(_db, days, max_codes):
+        nonlocal load_calls
+        load_calls += 1
+        started.set()
+        assert release.wait(timeout=2)
+        return {}
+
+    monkeypatch.setattr(strategy_selector, "_load_histories", fake_load)
+    monkeypatch.setattr(strategy_selector, "_eval_turtle_breakout", lambda _histories: [_pick("000001.SZ", 90)])
+
+    def run(limit):
+        try:
+            results.append(strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=limit))
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=run, args=(1,))
+    second = threading.Thread(target=run, args=(2,))
+    first.start()
+    assert started.wait(timeout=1)
+    second.start()
+    release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert load_calls == 1
+    assert [res.total for res in results] == [1, 1]
+
+
+def test_strategy_singleflight_failure_releases_inflight_and_allows_retry(db, monkeypatch):
+    strategy_selector.clear_strategy_cache()
+    _seed_latest_daily(db)
+    calls = 0
+
+    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: {})
+
+    def flaky_eval(_histories):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("boom")
+        return [_pick("000001.SZ", 90)]
+
+    monkeypatch.setattr(strategy_selector, "_eval_turtle_breakout", flaky_eval)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=1)
+
+    retry = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=1)
+
+    assert retry.total == 1
+    assert calls == 2
+    assert strategy_selector._RESULT_INFLIGHT == {}
 
 
 def test_base_item_clamps_score_to_display_range():

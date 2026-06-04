@@ -66,6 +66,9 @@ const displayTradeDate = computed(() => agentResult.value?.screen_result?.items?
   || result.value?.trade_date
   || '-')
 const displayTitle = computed(() => {
+  if (loading.value && workspaceMode.value === 'strategy') {
+    return activeTemplate.value ? `正在计算：${activeTemplate.value.name}` : '正在计算策略'
+  }
   if (!hasResult.value) {
     if (workspaceMode.value === 'strategy' && activeTemplate.value) return `待筛选：${activeTemplate.value.name}`
     return '待筛选'
@@ -106,12 +109,14 @@ const structuredConditionLabels = computed(() => structuredConditions.value.map(
 const tableLoading = computed(() => loading.value || agentLoading.value || structuredLoading.value)
 const hasResult = computed(() => Boolean(agentResult.value || structuredResult.value || result.value))
 const resultSourceLabel = computed(() => {
+  if (loading.value && workspaceMode.value === 'strategy') return '计算中'
   if (agentResult.value) return agentResult.value.plan.ai_used ? 'AI 规划' : '本地规划'
   if (structuredResult.value) return '条件筛选'
   if (result.value) return '内置策略'
   return '待筛选'
 })
 const resultSourceType = computed(() => {
+  if (loading.value && workspaceMode.value === 'strategy') return 'info'
   if (!hasResult.value) return 'default'
   if (agentResult.value && !agentResult.value.plan.ai_used) return 'warning'
   return 'success'
@@ -158,6 +163,12 @@ const aiStatusType = computed(() => {
   return aiStatus.isUp ? 'success' : 'warning'
 })
 const agentSummary = computed(() => agentResult.value?.answer || '')
+const tableLoadingText = computed(() => {
+  if (loading.value && workspaceMode.value === 'strategy') return '正在计算策略'
+  if (agentLoading.value) return '正在执行智能选股'
+  if (structuredLoading.value) return '正在执行条件筛选'
+  return '正在加载选股结果'
+})
 
 const agentExamples = [
   '低估值高分红的银行股',
@@ -340,11 +351,12 @@ function formatMetric(key, value) {
 }
 
 async function runSelection(id = activeId.value) {
-  if (!id) return
+  if (!id || loading.value) return
   loading.value = true
   errorMsg.value = ''
   agentResult.value = null
   structuredResult.value = null
+  result.value = null
   try {
     activeId.value = id
     result.value = await selectStrategy(id, { limit: 80 })
@@ -357,7 +369,7 @@ async function runSelection(id = activeId.value) {
 
 async function runAgent() {
   const query = agentQuery.value.trim()
-  if (!query) return
+  if (!query || agentLoading.value) return
   agentLoading.value = true
   agentError.value = ''
   errorMsg.value = ''
@@ -375,6 +387,7 @@ async function runAgent() {
 }
 
 async function runStructuredScreen() {
+  if (structuredLoading.value) return
   structuredLoading.value = true
   structuredError.value = ''
   errorMsg.value = ''
@@ -401,6 +414,7 @@ function useExample(text) {
 }
 
 function chooseStrategy(id) {
+  if (loading.value) return
   workspaceMode.value = 'strategy'
   activeId.value = id
   agentResult.value = null
@@ -441,7 +455,7 @@ onMounted(bootstrap)
           size="small"
           type="primary"
           secondary
-          :disabled="workspaceMode !== 'strategy' || !activeId"
+          :disabled="workspaceMode !== 'strategy' || !activeId || loading"
           :loading="loading"
           @click="runSelection()"
         >
@@ -570,6 +584,7 @@ onMounted(bootstrap)
             :key="tpl.id"
             class="strategy-item"
             :data-active="tpl.id === activeId"
+            :disabled="loading"
             @click="chooseStrategy(tpl.id)"
           >
             <span>
@@ -580,7 +595,7 @@ onMounted(bootstrap)
           </button>
           <div class="strategy-action">
             <span>选择策略后不会自动筛选，确认规则后再执行。</span>
-            <n-button type="primary" size="small" strong :disabled="!activeId" :loading="loading" @click="runSelection()">
+            <n-button type="primary" size="small" strong :disabled="!activeId || loading" :loading="loading" @click="runSelection()">
               执行筛选
             </n-button>
           </div>
@@ -599,6 +614,7 @@ onMounted(bootstrap)
                 <strong>{{ displayTitle }}</strong>
                 <span v-if="isAgentDesign">未执行筛选 · 显示策略条件</span>
                 <span v-else-if="hasResult">{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
+                <span v-else-if="tableLoading">请稍候，正在计算</span>
                 <span v-else>点击筛选后显示结果</span>
               </div>
               <n-tag :bordered="false" size="small" :type="resultSourceType">
@@ -625,7 +641,7 @@ onMounted(bootstrap)
             :description="isAgentDesign ? '策略设计请求未执行筛选' : (hasResult ? '当前条件没有命中股票' : '请选择策略或输入条件，点击筛选后显示结果')"
           />
           <div v-else class="table-loading">
-            <div class="loading-title">正在加载选股结果</div>
+            <div class="loading-title">{{ tableLoadingText }}</div>
             <div v-for="n in 6" :key="n" class="strategy-skeleton-row">
               <span class="sk-cell name"></span>
               <span class="sk-cell industry"></span>
@@ -948,6 +964,11 @@ h1 {
 .strategy-item[data-active="true"] {
   border-color: #111111;
   background: #FAFAFA;
+}
+
+.strategy-item:disabled {
+  cursor: wait;
+  opacity: 0.68;
 }
 
 .strategy-item strong {

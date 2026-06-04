@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import re
 from statistics import mean
+import threading
 import time
 from typing import Any
 
@@ -73,8 +74,13 @@ TEMPLATES = [
 ]
 
 TEMPLATE_MAP = {tpl.id: tpl for tpl in TEMPLATES}
-_RESULT_CACHE: dict[tuple[str, int], tuple[float, StrategySelectResponse]] = {}
+_StrategyCacheKey = tuple[str, object | None, int, int | None]
+_RESULT_CACHE: dict[_StrategyCacheKey, tuple[float, StrategySelectResponse]] = {}
 _RESULT_CACHE_TTL = 300
+_RESULT_CACHE_LOCK = threading.Lock()
+_RESULT_INFLIGHT: dict[_StrategyCacheKey, "_StrategyInflight"] = {}
+_RESULT_CACHE_GENERATION = 0
+_SINGLEFLIGHT_WAIT_SECONDS = 120.0
 _AI_STATUS_CACHE: tuple[float, dict] | None = None
 _AI_STATUS_TTL = 120
 _STRATEGY_CANDIDATE_LIMIT = 500
@@ -102,6 +108,13 @@ class DailyPoint:
     close: float | None
     volume: float | None
     amount: float | None
+
+
+@dataclass
+class _StrategyInflight:
+    event: threading.Event
+    response: StrategySelectResponse | None = None
+    error: BaseException | None = None
 
 
 def list_templates() -> list[StrategyTemplate]:
@@ -215,12 +228,81 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
     if strategy_id not in TEMPLATE_MAP:
         raise ValueError(f"未知策略: {strategy_id}")
 
-    cache_key = (strategy_id, limit)
-    cached = _RESULT_CACHE.get(cache_key)
-    if cached and time.monotonic() < cached[0]:
-        return cached[1]
-
     history_days, max_codes = _STRATEGY_HISTORY_OPTIONS[strategy_id]
+    latest_trade_date = _latest_strategy_trade_date(db)
+    cache_key: _StrategyCacheKey = (strategy_id, latest_trade_date, history_days, max_codes)
+
+    while True:
+        with _RESULT_CACHE_LOCK:
+            cached = _RESULT_CACHE.get(cache_key)
+            if cached and time.monotonic() < cached[0]:
+                return _slice_strategy_response(cached[1], limit)
+            inflight = _RESULT_INFLIGHT.get(cache_key)
+            if inflight is None:
+                inflight = _StrategyInflight(event=threading.Event())
+                _RESULT_INFLIGHT[cache_key] = inflight
+                generation = _RESULT_CACHE_GENERATION
+                break
+
+        if not inflight.event.wait(_SINGLEFLIGHT_WAIT_SECONDS):
+            with _RESULT_CACHE_LOCK:
+                if _RESULT_INFLIGHT.get(cache_key) is inflight:
+                    _RESULT_INFLIGHT.pop(cache_key, None)
+            raise TimeoutError(f"策略计算等待超时: {strategy_id}")
+        if inflight.error is not None:
+            raise inflight.error
+        if inflight.response is not None:
+            return _slice_strategy_response(inflight.response, limit)
+
+    try:
+        response = _compute_strategy_selection(
+            db,
+            strategy_id=strategy_id,
+            history_days=history_days,
+            max_codes=max_codes,
+        )
+    except BaseException as exc:
+        with _RESULT_CACHE_LOCK:
+            inflight.error = exc
+            if _RESULT_INFLIGHT.get(cache_key) is inflight:
+                _RESULT_INFLIGHT.pop(cache_key, None)
+            inflight.event.set()
+        raise
+
+    with _RESULT_CACHE_LOCK:
+        inflight.response = response
+        if generation == _RESULT_CACHE_GENERATION:
+            _RESULT_CACHE[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, response)
+        if _RESULT_INFLIGHT.get(cache_key) is inflight:
+            _RESULT_INFLIGHT.pop(cache_key, None)
+        inflight.event.set()
+    return _slice_strategy_response(response, limit)
+
+
+def clear_strategy_cache() -> None:
+    """Invalidate in-process strategy result cache after local market data changes."""
+    global _RESULT_CACHE_GENERATION
+    with _RESULT_CACHE_LOCK:
+        _RESULT_CACHE.clear()
+        _RESULT_INFLIGHT.clear()
+        _RESULT_CACHE_GENERATION += 1
+
+
+def _latest_strategy_trade_date(db: Session):
+    return db.query(StockDaily.trade_date).order_by(desc(StockDaily.trade_date)).limit(1).scalar()
+
+
+def _slice_strategy_response(response: StrategySelectResponse, limit: int) -> StrategySelectResponse:
+    return response.model_copy(update={"items": response.items[:limit]})
+
+
+def _compute_strategy_selection(
+    db: Session,
+    *,
+    strategy_id: str,
+    history_days: int,
+    max_codes: int | None,
+) -> StrategySelectResponse:
     histories = _load_histories(db, days=history_days, max_codes=max_codes)
     evaluator = {
         "turtle_breakout": _eval_turtle_breakout,
@@ -243,14 +325,13 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         strategy=TEMPLATE_MAP[strategy_id],
         trade_date=latest_date,
         total=len(items),
-        items=items[:limit],
+        items=items,
         notes=[
             "策略选股只基于本地日线与估值数据做条件筛选，结果表示当前条件命中。",
             scope_note,
             "策略计算以接口实时执行为主，便于前端查看当前命中股票。",
         ],
     )
-    _RESULT_CACHE[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, response)
     return response
 
 

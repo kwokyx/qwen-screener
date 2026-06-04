@@ -57,6 +57,14 @@ _VALUATION_COVERAGE_THRESHOLD = 0.90
 _DIVIDEND_YIELD_COVERAGE_THRESHOLD = 0.90
 _KLINE_BACKFILL_LOOKBACK_DAYS = 90
 _KLINE_BACKFILL_MIN_COVERED_DAYS = 40
+_STRATEGY_CACHE_INVALIDATING_JOBS = {
+    "daily_market",
+    "daily_value",
+    "weekly_fundamentals",
+    "weekly_dividend",
+    "weekly_basic",
+    "weekly_kline_backfill",
+}
 
 
 _META_TABLE_DDL = """
@@ -102,6 +110,17 @@ def _record(name: str, status: str, duration_ms: int, detail: str = ""):
                 "VALUES (:n, :t, :s, :d, :x)"
             ), params)
     _bump_meta_revision()
+
+
+def _clear_strategy_cache_after_data_job(name: str, status: str):
+    if status != "success" or name not in _STRATEGY_CACHE_INVALIDATING_JOBS:
+        return
+    try:
+        from app.services import strategy_selector
+
+        strategy_selector.clear_strategy_cache()
+    except Exception as exc:
+        logger.warning("[SCHED] 策略缓存清理失败: {}", str(exc)[:120])
 
 
 def _reserve_job(name: str) -> bool:
@@ -540,6 +559,7 @@ def _run_with_meta(name: str, fn, *, reserved: bool = False, allow_shortcut: boo
         dur = int((datetime.utcnow() - t0).total_seconds() * 1000)
         try:
             _record(name, status, dur, detail)
+            _clear_strategy_cache_after_data_job(name, status)
         except Exception:
             logger.exception("[SCHED] 写入 sync_meta 失败")
         _release_job(name)
