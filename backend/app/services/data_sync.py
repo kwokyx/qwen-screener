@@ -1219,10 +1219,10 @@ def sync_basic_bs(db: Session) -> int:
 def _fetch_kline_chunk_worker(args: tuple[list[str], str | None, str | None]) -> dict:
     """Worker used by baostock full-market sync.
 
-    This mirrors Sequoia-X's data engine: split the code list, let each process
-    keep one baostock login for its chunk, then return plain rows to the parent
-    process. The parent is the only process that writes SQLite, so we avoid
-    cross-process SQLAlchemy sessions and SQLite write locks.
+    Split the code list, let each process keep one baostock login for its
+    chunk, then return plain rows to the parent process. The parent is the only
+    process that writes SQLite, so we avoid cross-process SQLAlchemy sessions
+    and SQLite write locks.
     """
     codes, start_date, end_date = args
     try:
@@ -1314,7 +1314,7 @@ def _sync_daily_bs_parallel(
     full_market_request: bool,
     workers: int = BAOSTOCK_SYNC_WORKERS,
 ) -> int:
-    """Sequoia-X-style multi-process baostock sync for large code lists.
+    """Multi-process baostock sync for large code lists.
 
     Use small chunks and commit each completed chunk immediately. A slow
     upstream request must not hold all successfully fetched rows in memory

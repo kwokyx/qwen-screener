@@ -32,28 +32,28 @@ TEMPLATES = [
         id="turtle_breakout",
         name="海龟突破",
         tag="突破",
-        description="参考 Sequoia-X TurtleTrade：突破 20 日高点，成交额过亿，且当日阳线真涨。",
+        description="经典突破策略：突破 20 日高点，成交额过亿，且当日阳线真涨。",
         rules=["收盘价突破前 20 日最高价", "成交额大于 1 亿元", "收盘价高于开盘价和昨日收盘价"],
     ),
     StrategyTemplate(
         id="ma_volume",
         name="均线放量",
         tag="趋势",
-        description="参考 Sequoia-X MaVolume：5 日均线上穿 20 日均线，并有成交量放大确认。",
+        description="趋势确认策略：5 日均线上穿 20 日均线，并有成交量放大确认。",
         rules=["5 日均线上穿 20 日均线", "成交量大于 20 日均量 1.5 倍", "按放量强度和涨幅排序"],
     ),
     StrategyTemplate(
         id="rps_breakout",
         name="RPS 强势突破",
         tag="强势",
-        description="参考 Sequoia-X RpsBreakout：120 日涨幅横向排名靠前，且价格接近阶段高点。",
+        description="相对强度策略：120 日涨幅横向排名靠前，且价格接近阶段高点。",
         rules=["120 日涨幅排名进入前 10%", "收盘价接近 120 日最高价", "优先选择相对强度更高的股票"],
     ),
     StrategyTemplate(
         id="high_tight_flag",
         name="高位窄幅整理",
         tag="形态",
-        description="参考 Sequoia-X HighTightFlag：先强势上涨，再高位缩量窄幅整理。",
+        description="强势整理策略：先强势上涨，再高位缩量窄幅整理。",
         rules=["40 日内最高/最低涨幅大于 60%", "近 10 日振幅小于 15%", "近 10 日仍处于 40 日高点附近", "当日成交量缩至 20 日均量 60% 以下"],
     ),
 ]
@@ -144,7 +144,7 @@ def list_agent_tools() -> list[StrategyToolInfo]:
             id="strategy_select",
             label="策略选股",
             category="策略工具",
-            description="执行项目内置选股策略，当前策略参考 Sequoia-X 思路改写为本地日线实时计算。",
+            description="执行项目内置选股策略，当前策略已改写为本地日线实时计算。",
             inputs=["strategy_id", "limit"],
             outputs=["策略得分", "命中信号", "关键指标", "交易日"],
             examples=[tpl.name for tpl in TEMPLATES],
@@ -220,7 +220,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         items=items[:limit],
         notes=[
             "策略选股只基于本地日线与估值数据做条件筛选，结果表示当前条件命中。",
-            "Sequoia-X 原策略以收盘后批处理为主；这里改写为接口实时计算，便于前端查看命中股票。",
+            "策略计算以接口实时执行为主，便于前端查看当前命中股票。",
         ],
     )
     _RESULT_CACHE[cache_key] = (time.monotonic() + _RESULT_CACHE_TTL, response)

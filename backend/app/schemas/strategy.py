@@ -14,7 +14,7 @@ class StrategyTemplate(BaseModel):
     tag: str
     description: str
     rules: list[str]
-    source: str = "Sequoia-X 规则改写"
+    source: str = "项目内置规则"
 
 
 class StrategyToolField(BaseModel):
