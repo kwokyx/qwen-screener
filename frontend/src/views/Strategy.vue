@@ -66,6 +66,10 @@ const displayTradeDate = computed(() => agentResult.value?.screen_result?.items?
   || result.value?.trade_date
   || '-')
 const displayTitle = computed(() => {
+  if (!hasResult.value) {
+    if (workspaceMode.value === 'strategy' && activeTemplate.value) return `待筛选：${activeTemplate.value.name}`
+    return '待筛选'
+  }
   if (agentResult.value) return `Agent：${agentResult.value.plan?.tool_label || '智能选股'}`
   if (structuredResult.value) return '结构化条件筛选'
   return activeTemplate.value?.name || '策略'
@@ -101,6 +105,17 @@ const operatorLabels = {
 const structuredConditionLabels = computed(() => structuredConditions.value.map(formatStructuredCondition))
 const tableLoading = computed(() => loading.value || agentLoading.value || structuredLoading.value)
 const hasResult = computed(() => Boolean(agentResult.value || structuredResult.value || result.value))
+const resultSourceLabel = computed(() => {
+  if (agentResult.value) return agentResult.value.plan.ai_used ? 'AI 规划' : '本地规划'
+  if (structuredResult.value) return '条件筛选'
+  if (result.value) return '内置策略'
+  return '待筛选'
+})
+const resultSourceType = computed(() => {
+  if (!hasResult.value) return 'default'
+  if (agentResult.value && !agentResult.value.plan.ai_used) return 'warning'
+  return 'success'
+})
 const agentConditionList = computed(() => {
   if (!agentResult.value) return []
   const labels = agentResult.value.plan?.condition_labels || []
@@ -581,10 +596,11 @@ onMounted(bootstrap)
               <div>
                 <strong>{{ displayTitle }}</strong>
                 <span v-if="isAgentDesign">未执行筛选 · 显示策略条件</span>
-                <span v-else>{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
+                <span v-else-if="hasResult">{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
+                <span v-else>点击筛选后显示结果</span>
               </div>
-              <n-tag :bordered="false" size="small" :type="agentResult && !agentResult.plan.ai_used ? 'warning' : 'success'">
-                {{ agentResult ? (agentResult.plan.ai_used ? 'AI 规划' : '本地规划') : (structuredResult ? '条件筛选' : '内置策略') }}
+              <n-tag :bordered="false" size="small" :type="resultSourceType">
+                {{ resultSourceLabel }}
               </n-tag>
             </div>
           </template>

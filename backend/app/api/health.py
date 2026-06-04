@@ -89,6 +89,8 @@ def _freshness_diagnostics(
     newest_trade_date: date | None,
     expected_trade_date: date,
     latest_daily_cnt: int,
+    latest_valuation_cnt: int,
+    latest_dividend_yield_cnt: int,
     basic_cnt: int,
     sync_meta: dict[str, dict],
     sync_warnings: list[dict],
@@ -99,6 +101,13 @@ def _freshness_diagnostics(
     lag_days = (expected_trade_date - latest_trade_date).days if latest_trade_date else None
     sparse_newer = bool(newest_trade_date and latest_trade_date and newest_trade_date > latest_trade_date)
     coverage = round(latest_daily_cnt / basic_cnt, 4) if basic_cnt else 0
+    factor_required = max(1, int(latest_daily_cnt * 0.90)) if latest_daily_cnt else threshold
+    factor_gaps = []
+    if latest_trade_date and latest_trade_date >= expected_trade_date and latest_daily_cnt >= threshold:
+        if latest_valuation_cnt < factor_required:
+            factor_gaps.append(f"估值覆盖 {latest_valuation_cnt}/{latest_daily_cnt}")
+        if latest_dividend_yield_cnt < factor_required:
+            factor_gaps.append(f"股息率覆盖 {latest_dividend_yield_cnt}/{latest_daily_cnt}")
 
     if not basic_cnt:
         reason_code = "empty_basic"
@@ -112,6 +121,15 @@ def _freshness_diagnostics(
         severity = "stale"
         message = "还没有日线行情数据，请先同步日线行情。"
         recommended_jobs = ["daily_market"]
+    elif factor_gaps:
+        reason_code = "factor_incomplete"
+        label = "因子待补"
+        severity = "stale"
+        message = (
+            f"全市场日线已覆盖到 {latest_trade_date}，但最新交易日关键因子未达标："
+            f"{'；'.join(factor_gaps)}。高分红、低估值等筛选结果可能失真，请先同步估值或分红数据。"
+        )
+        recommended_jobs = ["daily_value", "weekly_dividend"]
     elif latest_trade_date >= expected_trade_date:
         reason_code = "fresh"
         label = "已最新"
@@ -153,6 +171,9 @@ def _freshness_diagnostics(
         "coverage_threshold": threshold,
         "latest_coverage_rows": latest_daily_cnt,
         "latest_coverage": coverage,
+        "factor_coverage_threshold": factor_required,
+        "latest_valuation_rows": latest_valuation_cnt,
+        "latest_dividend_yield_rows": latest_dividend_yield_cnt,
         "has_sparse_newer_data": sparse_newer,
         "active_jobs": active_jobs,
         "recommended_jobs": recommended_jobs,
@@ -295,15 +316,24 @@ def _data_health_payload(db: Session):
     sync_meta = scheduler.get_meta()
     # 简单"新鲜度"判断：覆盖全市场的最新日期已达到最近工作日。
     expected_trade_date = _latest_expected_weekday()
-    fresh = False
+    market_fresh = False
     if latest_trade_date:
-        fresh = latest_trade_date >= expected_trade_date
+        market_fresh = latest_trade_date >= expected_trade_date
+    factor_required = max(1, int(latest_daily_cnt * 0.90)) if latest_daily_cnt else _market_row_threshold(basic_cnt)
+    factors_fresh = bool(
+        latest_daily_cnt
+        and valuation_cnt >= factor_required
+        and dividend_yield_cnt >= factor_required
+    )
+    fresh = bool(market_fresh and factors_fresh)
     sync_warnings = _sync_warnings(sync_meta, db=db, fresh=fresh)
     freshness = _freshness_diagnostics(
         latest_trade_date=latest_trade_date,
         newest_trade_date=newest_trade_date,
         expected_trade_date=expected_trade_date,
         latest_daily_cnt=latest_daily_cnt,
+        latest_valuation_cnt=valuation_cnt,
+        latest_dividend_yield_cnt=dividend_yield_cnt,
         basic_cnt=basic_cnt,
         sync_meta=sync_meta,
         sync_warnings=sync_warnings,

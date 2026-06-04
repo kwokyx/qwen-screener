@@ -417,16 +417,25 @@ def plan_agent_selection(
     selects the tool and generates structured args.  On any failure the
     local rule Agent takes over as fallback.
     """
+    context = context or {}
+    ai_configured_hint = _ai_configured()
+
+    # Explicit non-execution strategy design is deterministic and should not
+    # wait for AI health probing, or be overridden by model tool routing.
+    if is_explicit_non_execution_design_query(query):
+        return build_strategy_design_response(query, ai_configured=ai_configured_hint)
+
+    if is_remote_free_fast_path_query(query):
+        fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=ai_configured_hint)
+        if fast_path is not None:
+            fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
+            return fast_path
+
     ai_status = _ai_status()
     ai_configured = bool(ai_status.get("configured"))
     ai_available = bool(ai_status.get("ok"))
     warnings: list[str] = []
     tool_trace: list[str] = []
-
-    # Explicit non-execution strategy design is deterministic and should not
-    # wait for, or be overridden by, model tool routing.
-    if is_explicit_non_execution_design_query(query):
-        return build_strategy_design_response(query, ai_configured=ai_configured)
 
     # Fast local clarification when AI is not available.
     if not ai_available:
@@ -789,6 +798,26 @@ def is_stock_detail_query(query: str) -> bool:
     if _extract_stock_code(query):
         return any(term in q for term in ("详情", "详细", "打开", "查看", "看一下", "看下", "进入"))
     return any(term in q for term in ("详情", "详细资料", "详情页", "打开", "进入"))
+
+
+def is_remote_free_fast_path_query(query: str) -> bool:
+    """Return True for deterministic turns that should not probe remote AI."""
+    normalized = "".join(ch for ch in query.strip().lower() if ch not in "，。！？!?、,. ")
+    return normalized in {
+        "你好",
+        "您好",
+        "hello",
+        "hi",
+        "嗨",
+        "可以做吧",
+        "可以执行",
+        "现在执行",
+        "查看第一只详情",
+        "查看第一支详情",
+        "为什么这些股票排在前面",
+        "按股息率排序",
+        "换一批",
+    }
 
 
 def is_strategy_design_query(query: str) -> bool:

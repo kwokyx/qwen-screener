@@ -120,6 +120,36 @@ def test_run_now_short_circuits_daily_market_when_data_ready(db, monkeypatch):
     assert "跳过远程同步" in meta["detail"]
 
 
+def test_run_now_repairs_latest_dividend_yield_before_daily_value_shortcut(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            pe=12,
+            pb=1.2,
+            market_cap=100,
+            volume=100,
+        ))
+        db.add(StockDividend(code=code, operate_date=expected, cash_per_share=0.5))
+    db.commit()
+
+    def should_not_call():
+        raise AssertionError("daily_value remote sync should be skipped after local dividend repair")
+
+    monkeypatch.setitem(scheduler.JOBS, "daily_value", should_not_call)
+
+    meta = scheduler.run_now("daily_value")
+
+    assert meta["status"] == "success"
+    assert "本地股息率重算" in meta["detail"]
+    assert "股息率覆盖 120/120" in meta["detail"]
+
+
 def test_run_with_meta_can_disable_shortcut_for_scheduled_jobs(db, monkeypatch):
     scheduler._running_jobs.clear()
     expected = date(2026, 6, 3)

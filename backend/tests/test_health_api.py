@@ -22,7 +22,15 @@ def test_latest_expected_weekday_uses_previous_close_before_market_sync():
 def test_data_health_treats_friday_close_as_fresh_on_sunday(db, monkeypatch):
     monkeypatch.setattr(health, "_latest_expected_weekday", lambda: date(2026, 5, 29))
     db.add(StockBasic(code="600519.SH", name="贵州茅台"))
-    db.add(StockDaily(code="600519.SH", trade_date=date(2026, 5, 29), close=1326))
+    db.add(StockDaily(
+        code="600519.SH",
+        trade_date=date(2026, 5, 29),
+        close=1326,
+        pe=24,
+        pb=8,
+        market_cap=16000,
+        dividend_yield=1.8,
+    ))
     db.commit()
 
     result = health.data_health(db)
@@ -32,6 +40,33 @@ def test_data_health_treats_friday_close_as_fresh_on_sunday(db, monkeypatch):
     assert result["latest_trade_date"] == "2026-05-29"
     assert result["freshness"]["reason_code"] == "fresh"
     assert result["freshness"]["recommended_jobs"] == []
+
+
+def test_data_health_reports_incomplete_latest_factor_coverage(db, monkeypatch):
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(health, "_latest_expected_weekday", lambda: expected)
+    for idx in range(120):
+        code = f"60{idx:04d}.SH"
+        db.add(StockBasic(code=code, name=f"股票{idx}"))
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            pe=12,
+            pb=1.2,
+            market_cap=100,
+        ))
+    db.commit()
+
+    result = health.data_health(db)
+
+    assert result["fresh"] is False
+    assert result["latest_trade_date"] == "2026-06-03"
+    assert result["counts"]["latest_dividend_yield"] == 0
+    assert result["freshness"]["reason_code"] == "factor_incomplete"
+    assert "股息率覆盖 0/120" in result["freshness"]["message"]
+    assert "daily_value" in result["freshness"]["recommended_jobs"]
+    assert "weekly_dividend" in result["freshness"]["recommended_jobs"]
 
 
 def test_data_health_explains_stale_market_snapshot(db, monkeypatch):
@@ -102,7 +137,16 @@ def test_data_health_reports_fresh_data_with_repairable_sync_warning(db, monkeyp
     for idx in range(120):
         code = f"60{idx:04d}.SH"
         db.add(StockBasic(code=code, name=f"股票{idx}"))
-        db.add(StockDaily(code=code, trade_date=expected, close=10, volume=100))
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            volume=100,
+            pe=12,
+            pb=1.2,
+            market_cap=100,
+            dividend_yield=2.5,
+        ))
     db.commit()
 
     health.scheduler._ensure_meta_table()

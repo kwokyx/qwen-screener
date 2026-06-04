@@ -476,10 +476,41 @@ def job_data_status(name: str, db: Session | None = None) -> dict:
 
 
 def _shortcut_detail_if_ready(name: str) -> str | None:
+    repair_detail = None
+    if name in {"daily_market", "daily_value", "weekly_dividend"}:
+        repair_detail = _refresh_latest_dividend_yield_if_needed()
     status = job_data_status(name)
     if not status.get("ready"):
         return None
-    return status.get("detail") or status.get("reason") or "数据已达标，跳过远程同步"
+    detail = status.get("detail") or status.get("reason") or "数据已达标，跳过远程同步"
+    if repair_detail:
+        detail = f"{detail}；{repair_detail}"
+    return detail
+
+
+def _refresh_latest_dividend_yield_if_needed() -> str | None:
+    db = SessionLocal()
+    try:
+        _basic_cnt, latest, _expected, latest_cnt, market_threshold = _latest_daily_counts(db)
+        if not latest or latest_cnt < market_threshold:
+            return None
+        if db.query(StockDividend.id).first() is None:
+            return None
+        required = max(1, int(latest_cnt * _DIVIDEND_YIELD_COVERAGE_THRESHOLD))
+        before = db.query(StockDaily).filter(
+            StockDaily.trade_date == latest,
+            StockDaily.dividend_yield.isnot(None),
+        ).count()
+        if before >= required:
+            return None
+        updated = data_sync.refresh_dividend_yield_bs(db, as_of=latest)
+        after = db.query(StockDaily).filter(
+            StockDaily.trade_date == latest,
+            StockDaily.dividend_yield.isnot(None),
+        ).count()
+        return f"本地股息率重算 {after}/{latest_cnt}，更新 {updated} 行"
+    finally:
+        db.close()
 
 
 def _run_with_meta(name: str, fn, *, reserved: bool = False, allow_shortcut: bool = True):

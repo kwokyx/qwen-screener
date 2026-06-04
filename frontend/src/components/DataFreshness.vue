@@ -33,7 +33,10 @@ const syncWarningsDataAvailable = computed(() =>
 )
 const hasIssue = computed(() => {
   const code = freshness.value?.reason_code
-  return (hasSyncIssue.value && !syncWarningsDataAvailable.value) || ['empty_basic', 'empty_daily', 'sync_issue', 'stale'].includes(code)
+  return (
+    (hasSyncIssue.value && !syncWarningsDataAvailable.value)
+    || ['empty_basic', 'empty_daily', 'sync_issue', 'stale', 'factor_incomplete'].includes(code)
+  )
 })
 let poller = null
 

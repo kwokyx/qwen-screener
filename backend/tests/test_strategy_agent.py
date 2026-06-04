@@ -164,6 +164,36 @@ def test_strategy_design_fast_path_skips_model_when_ai_available(db, seed_stocks
     assert res.plan.ai_used is False
 
 
+def test_local_fast_paths_skip_ai_health_probe(db, seed_stocks, monkeypatch):
+    def fail_status():
+        raise AssertionError("local fast-path should not probe AI health")
+
+    def fail_plan(*_args, **_kwargs):
+        raise AssertionError("local fast-path should not call model planner")
+
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("non-executing fast-path should not screen")
+
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(strategy_selector, "_ai_status", fail_status)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    cases = {
+        "你好": "ask_clarification",
+        "可以，做吧": "ask_clarification",
+        "为什么这些股票排在前面": "ask_clarification",
+        "查看第一只详情": "ask_clarification",
+        "帮我设计一个稳健的选股策略，先别执行": "strategy_design",
+    }
+    for query, expected_tool in cases.items():
+        res = strategy_selector.run_agent_selection(db, query, limit=10)
+        assert res.plan.tool == expected_tool
+        assert res.screen_result is None
+        assert res.plan.ai_configured is True
+        assert res.plan.ai_used is False
+
+
 def test_chat_agent_executes_previous_design_conditions_after_confirmation(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
