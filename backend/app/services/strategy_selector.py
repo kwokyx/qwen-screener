@@ -56,6 +56,20 @@ TEMPLATES = [
         description="强势整理策略：先强势上涨，再高位缩量窄幅整理。",
         rules=["40 日内最高/最低涨幅大于 60%", "近 10 日振幅小于 15%", "近 10 日仍处于 40 日高点附近", "当日成交量缩至 20 日均量 60% 以下"],
     ),
+    StrategyTemplate(
+        id="limit_up_shakeout",
+        name="涨停后承接",
+        tag="短线",
+        description="涨停次日承接策略：昨日接近涨停，今日放量收阴但低点不破昨日收盘。",
+        rules=["昨日收盘价较前日上涨至少 9.5%", "今日收阴线", "今日成交量大于昨日 2 倍", "今日最低价不低于昨日收盘价"],
+    ),
+    StrategyTemplate(
+        id="uptrend_limit_down",
+        name="趋势急跌修复",
+        tag="反转",
+        description="趋势回撤策略：上升趋势中出现放量急跌，用于观察错杀修复机会。",
+        rules=["昨日 20 日均线高于 60 日均线", "今日收盘价较昨日下跌至少 9.5%", "今日成交量大于 20 日均量 2 倍"],
+    ),
 ]
 
 TEMPLATE_MAP = {tpl.id: tpl for tpl in TEMPLATES}
@@ -63,6 +77,16 @@ _RESULT_CACHE: dict[tuple[str, int], tuple[float, StrategySelectResponse]] = {}
 _RESULT_CACHE_TTL = 300
 _AI_STATUS_CACHE: tuple[float, dict] | None = None
 _AI_STATUS_TTL = 120
+_STRATEGY_CANDIDATE_LIMIT = 500
+_LONG_STRATEGY_CANDIDATE_LIMIT = 300
+_STRATEGY_HISTORY_OPTIONS: dict[str, tuple[int, int | None]] = {
+    "turtle_breakout": (35, _STRATEGY_CANDIDATE_LIMIT),
+    "ma_volume": (35, _STRATEGY_CANDIDATE_LIMIT),
+    "rps_breakout": (130, _LONG_STRATEGY_CANDIDATE_LIMIT),
+    "high_tight_flag": (55, _STRATEGY_CANDIDATE_LIMIT),
+    "limit_up_shakeout": (3, None),
+    "uptrend_limit_down": (65, _LONG_STRATEGY_CANDIDATE_LIMIT),
+}
 
 
 @dataclass
@@ -196,23 +220,25 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
     if cached and time.monotonic() < cached[0]:
         return cached[1]
 
-    history_days = {
-        "turtle_breakout": 35,
-        "ma_volume": 35,
-        "rps_breakout": 130,
-        "high_tight_flag": 55,
-    }[strategy_id]
-    histories = _load_histories(db, days=history_days)
+    history_days, max_codes = _STRATEGY_HISTORY_OPTIONS[strategy_id]
+    histories = _load_histories(db, days=history_days, max_codes=max_codes)
     evaluator = {
         "turtle_breakout": _eval_turtle_breakout,
         "ma_volume": _eval_ma_volume,
         "rps_breakout": _eval_rps_breakout,
         "high_tight_flag": _eval_high_tight_flag,
+        "limit_up_shakeout": _eval_limit_up_shakeout,
+        "uptrend_limit_down": _eval_uptrend_limit_down,
     }[strategy_id]
 
     items = evaluator(histories)
     items.sort(key=lambda item: item.score, reverse=True)
     latest_date = max((item.trade_date for item in items if item.trade_date), default=None)
+    scope_note = (
+        "该策略使用全市场最近日线数据计算，不代表收益回测。"
+        if max_codes is None
+        else f"为控制响应时间，该策略默认在最新成交额前 {max_codes} 只流动性股票池内计算，不代表全市场回测。"
+    )
     response = StrategySelectResponse(
         strategy=TEMPLATE_MAP[strategy_id],
         trade_date=latest_date,
@@ -220,6 +246,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         items=items[:limit],
         notes=[
             "策略选股只基于本地日线与估值数据做条件筛选，结果表示当前条件命中。",
+            scope_note,
             "策略计算以接口实时执行为主，便于前端查看当前命中股票。",
         ],
     )
@@ -1312,6 +1339,22 @@ def _plan_agent_locally(query: str, limit: int, ai_configured: bool) -> Strategy
             strategy_id="ma_volume",
             ai_configured=ai_configured,
         )
+    if any(k in query for k in ("涨停", "洗盘", "承接", "回踩")):
+        return StrategyAgentPlan(
+            tool="strategy_select",
+            tool_label="策略选股",
+            reasoning="用户目标偏向涨停后的承接确认，选择涨停后承接策略。",
+            strategy_id="limit_up_shakeout",
+            ai_configured=ai_configured,
+        )
+    if any(k in query for k in ("跌停", "急跌", "错杀", "反包")):
+        return StrategyAgentPlan(
+            tool="strategy_select",
+            tool_label="策略选股",
+            reasoning="用户目标偏向上升趋势中的急跌修复，选择趋势急跌修复策略。",
+            strategy_id="uptrend_limit_down",
+            ai_configured=ai_configured,
+        )
     if any(k in query for k in ("rps", "强势", "相对强度")):
         return StrategyAgentPlan(
             tool="strategy_select",
@@ -1797,21 +1840,27 @@ def _format_condition_value(value) -> str:
     return str(value)
 
 
-def _load_histories(db: Session, days: int, max_codes: int = 1200) -> dict[str, list[DailyPoint]]:
+def _load_histories(
+    db: Session,
+    days: int,
+    max_codes: int | None = _STRATEGY_CANDIDATE_LIMIT,
+) -> dict[str, list[DailyPoint]]:
     latest_date = db.query(StockDaily.trade_date).order_by(desc(StockDaily.trade_date)).limit(1).scalar()
     if latest_date is None:
         return {}
 
-    latest_rows = (
-        db.query(StockDaily.code)
-        .filter(StockDaily.trade_date == latest_date)
-        .order_by(desc(StockDaily.amount))
-        .limit(max_codes)
-        .all()
-    )
-    codes = [row[0] for row in latest_rows]
-    if not codes:
-        return {}
+    codes: list[str] | None = None
+    if max_codes is not None:
+        latest_rows = (
+            db.query(StockDaily.code)
+            .filter(StockDaily.trade_date == latest_date)
+            .order_by(desc(StockDaily.amount))
+            .limit(max_codes)
+            .all()
+        )
+        codes = [row[0] for row in latest_rows]
+        if not codes:
+            return {}
 
     date_rows = (
         db.query(StockDaily.trade_date)
@@ -1823,6 +1872,15 @@ def _load_histories(db: Session, days: int, max_codes: int = 1200) -> dict[str, 
     dates = [r[0] for r in date_rows]
     if not dates:
         return {}
+    start_date = min(dates)
+    end_date = max(dates)
+
+    filters = [
+        StockDaily.trade_date >= start_date,
+        StockDaily.trade_date <= end_date,
+    ]
+    if codes is not None:
+        filters.append(StockDaily.code.in_(codes))
 
     rows = (
         db.query(
@@ -1839,7 +1897,7 @@ def _load_histories(db: Session, days: int, max_codes: int = 1200) -> dict[str, 
             StockDaily.amount,
         )
         .join(StockDaily, StockDaily.code == StockBasic.code)
-        .filter(StockDaily.code.in_(codes), StockDaily.trade_date.in_(dates))
+        .filter(*filters)
         .order_by(StockDaily.code.asc(), StockDaily.trade_date.asc())
         .all()
     )
@@ -1884,7 +1942,19 @@ def _amount_yi(point: DailyPoint) -> float | None:
 
 def _avg(values: list[float | None]) -> float | None:
     nums = [v for v in values if v is not None]
-    return mean(nums) if nums else None
+    return mean(nums) if nums and len(nums) == len(values) else None
+
+
+def _pct_rank(values: list[float], value: float) -> float:
+    """Return pandas rank(pct=True) compatible average rank for one value."""
+    if not values:
+        return 0
+    lower = sum(1 for item in values if item < value)
+    equal = sum(1 for item in values if item == value)
+    if equal == 0:
+        return 0
+    average_rank = lower + (equal + 1) / 2
+    return average_rank / len(values) * 100
 
 
 def _base_item(points: list[DailyPoint], score: float, signals: list[str], metrics: dict) -> StrategyPickItem:
@@ -1914,7 +1984,7 @@ def _eval_turtle_breakout(histories: dict[str, list[DailyPoint]]) -> list[Strate
             continue
         high20 = max(p.high for p in points[-21:-1] if p.high is not None)
         amount_yi = _amount_yi(last) or 0
-        if last.close > high20 and amount_yi >= 1 and last.close > last.open and last.close > prev.close:
+        if last.close > high20 and amount_yi > 1 and last.close > last.open and last.close > prev.close:
             breakout_pct = (last.close / high20 - 1) * 100
             score = 20 + min(50, breakout_pct * 10) + min(30, amount_yi / 3)
             items.append(_base_item(points, score, ["20日新高突破", "成交额过亿", "阳线真涨"], {
@@ -1936,13 +2006,13 @@ def _eval_ma_volume(histories: dict[str, list[DailyPoint]]) -> list[StrategyPick
         ma20_prev = _avg(closes[-21:-1])
         ma5 = _avg(closes[-5:])
         ma20 = _avg(closes[-20:])
-        vol20 = _avg(volumes[-21:-1])
+        vol20 = _avg(volumes[-20:])
         last_vol = points[-1].volume
         if None in (ma5_prev, ma20_prev, ma5, ma20, vol20, last_vol):
             continue
-        golden_cross = ma5_prev <= ma20_prev and ma5 > ma20
+        golden_cross = ma5_prev < ma20_prev and ma5 > ma20
         volume_ratio = last_vol / vol20 if vol20 else 0
-        if golden_cross and volume_ratio >= 1.5:
+        if golden_cross and volume_ratio > 1.5:
             score = (ma5 / ma20 - 1) * 100 + volume_ratio * 10
             items.append(_base_item(points, score, ["5日均线上穿20日均线", "成交量放大"], {
                 "MA5": ma5,
@@ -1968,16 +2038,80 @@ def _eval_rps_breakout(histories: dict[str, list[DailyPoint]]) -> list[StrategyP
 
     if not candidates:
         return []
-    sorted_pct = sorted(v[2] for v in candidates)
+    pct_values = [v[2] for v in candidates]
     items: list[StrategyPickItem] = []
     for _code, points, pct120, high120, near_high in candidates:
-        rank = sum(1 for v in sorted_pct if v <= pct120) / len(sorted_pct) * 100
+        rank = _pct_rank(pct_values, pct120)
         if rank >= 90 and near_high:
             score = rank * 0.8 + min(100, max(0, pct120)) * 0.2
             items.append(_base_item(points, score, ["120日相对强度前10%", "接近阶段高点"], {
                 "RPS": rank,
                 "120日涨幅%": pct120,
                 "120日高点": high120,
+            }))
+    return items
+
+
+def _eval_limit_up_shakeout(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
+    items: list[StrategyPickItem] = []
+    for points in histories.values():
+        if len(points) < 3:
+            continue
+        prev2, prev1, today = points[-3], points[-2], points[-1]
+        required = (
+            prev2.close, prev1.close, prev1.volume,
+            today.open, today.low, today.close, today.volume,
+        )
+        if any(value is None for value in required):
+            continue
+        limit_up_yesterday = prev1.close >= prev2.close * 1.095
+        bearish_today = today.close < today.open
+        volume_surge = today.volume > prev1.volume * 2.0
+        support_hold = today.low >= prev1.close
+        if limit_up_yesterday and bearish_today and volume_surge and support_hold:
+            limit_up_pct = (prev1.close / prev2.close - 1) * 100
+            volume_ratio = today.volume / prev1.volume if prev1.volume else 0
+            support_gap = (today.low / prev1.close - 1) * 100 if prev1.close else 0
+            score = (
+                35
+                + min(25, max(0, limit_up_pct - 9.5) * 20)
+                + min(30, volume_ratio * 8)
+                + min(10, max(0, support_gap) * 10)
+            )
+            items.append(_base_item(points, score, ["昨日强势涨停", "今日放量收阴", "支撑不破"], {
+                "昨日涨幅%": limit_up_pct,
+                "今日量比昨日": volume_ratio,
+                "支撑距离%": support_gap,
+            }))
+    return items
+
+
+def _eval_uptrend_limit_down(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
+    items: list[StrategyPickItem] = []
+    for points in histories.values():
+        if len(points) < 61:
+            continue
+        closes = [p.close for p in points]
+        volumes = [p.volume for p in points]
+        prev, today = points[-2], points[-1]
+        ma20_prev = _avg(closes[-21:-1])
+        ma60_prev = _avg(closes[-61:-1])
+        vol20_today = _avg(volumes[-20:])
+        if None in (prev.close, today.close, today.volume, ma20_prev, ma60_prev, vol20_today):
+            continue
+        uptrend = ma20_prev > ma60_prev
+        limit_down = today.close <= prev.close * 0.905
+        volume_ratio = today.volume / vol20_today if vol20_today else 0
+        volume_surge = volume_ratio > 2.0
+        if uptrend and limit_down and volume_surge:
+            trend_gap = (ma20_prev / ma60_prev - 1) * 100 if ma60_prev else 0
+            drop_pct = (today.close / prev.close - 1) * 100 if prev.close else 0
+            score = 30 + min(30, max(0, trend_gap) * 8) + min(30, abs(drop_pct) * 2) + min(10, volume_ratio)
+            items.append(_base_item(points, score, ["上升趋势", "放量急跌", "修复观察"], {
+                "MA20": ma20_prev,
+                "MA60": ma60_prev,
+                "今日跌幅%": drop_pct,
+                "量比20日": volume_ratio,
             }))
     return items
 

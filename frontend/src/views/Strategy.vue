@@ -162,6 +162,8 @@ const agentSummary = computed(() => agentResult.value?.answer || '')
 const agentExamples = [
   '低估值高分红的银行股',
   '找最近强势突破的股票',
+  '找涨停后承接的股票',
+  '找上升趋势急跌的股票',
   '半导体行业里的大市值龙头',
   '白马股，ROE 高，估值不要太贵',
 ]

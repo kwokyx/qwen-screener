@@ -115,14 +115,23 @@ TOOLS: list[dict] = [
                 "turtle_breakout（海龟突破：突破20日新高）、"
                 "ma_volume（均线放量：5日线上穿20日线且放量）、"
                 "rps_breakout（RPS强势突破：120日相对强度前10%）、"
-                "high_tight_flag（高位窄幅整理：强势后的缩量旗形整理）。"
+                "high_tight_flag（高位窄幅整理：强势后的缩量旗形整理）、"
+                "limit_up_shakeout（涨停后承接：涨停次日放量收阴且支撑不破）、"
+                "uptrend_limit_down（趋势急跌修复：上升趋势中放量急跌）。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "strategy_id": {
                         "type": "string",
-                        "enum": ["turtle_breakout", "ma_volume", "rps_breakout", "high_tight_flag"],
+                        "enum": [
+                            "turtle_breakout",
+                            "ma_volume",
+                            "rps_breakout",
+                            "high_tight_flag",
+                            "limit_up_shakeout",
+                            "uptrend_limit_down",
+                        ],
                     },
                     "limit": {
                         "type": "integer",
@@ -216,7 +225,12 @@ VALID_SORT_FIELDS: frozenset[str] = ALLOWED_FIELDS | {"score", "change_pct"}
 STRING_FIELDS: frozenset[str] = frozenset({"industry", "market"})
 
 VALID_STRATEGY_IDS: frozenset[str] = frozenset({
-    "turtle_breakout", "ma_volume", "rps_breakout", "high_tight_flag",
+    "turtle_breakout",
+    "ma_volume",
+    "rps_breakout",
+    "high_tight_flag",
+    "limit_up_shakeout",
+    "uptrend_limit_down",
 })
 VALID_MISSING_INFO: frozenset[str] = frozenset({
     "行业", "风格偏好", "估值范围", "持有周期", "风险承受",
@@ -555,7 +569,7 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
         "规则：\n"
         "1. 有具体筛选条件（行业、估值、财务指标等）→ stock_screen\n"
         "2. 明确说「只列/设计/不执行/先别跑」 → strategy_design\n"
-        "3. 提到海龟/突破/均线/放量/RPS/强势/窄幅整理 → strategy_select\n"
+        "3. 提到海龟/突破/均线/放量/RPS/强势/窄幅整理/涨停承接/洗盘/急跌/跌停 → strategy_select\n"
         "4. 追问为什么/怎么看/分析结果（有上下文时）→ explain_result\n"
         "5. 明确要求查看/打开某只股票详情页 → stock_detail\n"
         "6. 模糊无具体条件 → ask_clarification\n"

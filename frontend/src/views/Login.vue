@@ -173,7 +173,7 @@ function continueAsGuest() {
 const features = [
   { icon: 'sparkle', t: '自然语言筛选', s: '"低估值高股息的银行股" 一句话即出结果' },
   { icon: 'chart',   t: '千问深度解读', s: '基于基本面数据的研报，流式生成' },
-  { icon: 'flask',   t: '策略选股引擎', s: '套用突破、均线、RPS 等规则输出股票池' },
+  { icon: 'flask',   t: '策略选股引擎', s: '套用突破、均线、RPS、涨停承接等规则输出股票池' },
   { icon: 'bell',    t: '价格预警',     s: '涨幅 / 跌幅 / 突破 / 日内 五种规则' },
 ]
 export default { setup: () => ({ features }) }

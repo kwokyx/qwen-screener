@@ -680,6 +680,36 @@ def test_agent_routes_breakout_query_to_strategy_tool(db, seed_stocks, monkeypat
     ]
 
 
+def test_agent_routes_limit_up_shakeout_query_to_strategy_tool(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "模型不可用: test-model"},
+    )
+
+    res = strategy_selector.run_agent_selection(db, "找涨停后承接的股票", limit=5)
+
+    assert res.plan.tool == "strategy_select"
+    assert res.plan.strategy_id == "limit_up_shakeout"
+    assert res.strategy_result is not None
+    assert res.strategy_result.strategy.id == "limit_up_shakeout"
+
+
+def test_agent_routes_uptrend_limit_down_query_to_strategy_tool(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "模型不可用: test-model"},
+    )
+
+    res = strategy_selector.run_agent_selection(db, "找上升趋势急跌的股票", limit=5)
+
+    assert res.plan.tool == "strategy_select"
+    assert res.plan.strategy_id == "uptrend_limit_down"
+    assert res.strategy_result is not None
+    assert res.strategy_result.strategy.id == "uptrend_limit_down"
+
+
 def test_list_agent_tools_documents_screen_fields():
     tools = strategy_selector.list_agent_tools()
     by_id = {tool.id: tool for tool in tools}
