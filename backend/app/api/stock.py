@@ -213,9 +213,9 @@ def quote(code: str, db: Session = Depends(get_db)):
     if not basic:
         raise HTTPException(404, "股票不存在")
 
-    from app.services.providers.quote_provider import fetch_realtime_quote
+    from app.services.providers.quote_provider import fetch_realtime_quote_budgeted
 
-    live = fetch_realtime_quote(code)
+    live = fetch_realtime_quote_budgeted(code)
     if live:
         live["name"] = live.get("name") or basic.name
         return live

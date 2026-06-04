@@ -157,11 +157,14 @@ const agentRiskNotes = computed(() => {
 const agentToolTrace = computed(() => agentResult.value?.tool_trace || [])
 const aiStatusText = computed(() => {
   if (!aiStatus.lastChecked) return 'AI 检测中'
+  if (aiStatus.pending) return 'AI 检测中 · 本地规则可用'
+  if (aiStatus.stale) return 'AI 状态刷新中'
   if (aiStatus.isUp) return 'AI 可用'
   return aiStatus.reason ? `AI 降级：${aiStatus.reason}` : 'AI 降级运行'
 })
 const aiStatusType = computed(() => {
   if (!aiStatus.lastChecked) return 'default'
+  if (aiStatus.pending || aiStatus.stale) return 'default'
   return aiStatus.isUp ? 'success' : 'warning'
 })
 const agentSummary = computed(() => agentResult.value?.answer || '')

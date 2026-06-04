@@ -597,6 +597,23 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 }
 ```
 
+缓存未命中且正在后台探测时会快速返回，不阻塞页面：
+```json
+{
+  "ok": true,
+  "latency_ms": null,
+  "reason": "AI 健康检测中，暂不阻塞页面",
+  "backend": "openai",
+  "model": "qwen3.6-plus",
+  "configured": true,
+  "fallback": false,
+  "mode": "ai_agent",
+  "pending": true
+}
+```
+
+若已有过期探测结果，接口会带 `stale=true` 返回旧状态，同时后台刷新真实结果。AI 上游不可达时，Chat / Strategy 仍会走本地规则兜底，UI 应展示 `reason`，不要把失败隐藏成模型可用。
+
 ---
 
 ### GET `/health/data`

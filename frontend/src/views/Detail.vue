@@ -469,6 +469,16 @@ onBeforeUnmount(() => {
 watch(code, load)
 
 const displayQuote = computed(() => quote.value || detail.value?.latest || null)
+const quoteSourceLabel = computed(() => {
+  if (quote.value?.source === 'tencent') return '实时行情'
+  if (quote.value?.source === 'local' || detail.value?.latest) return '本地日线'
+  return ''
+})
+const quoteSourceType = computed(() => quote.value?.source === 'tencent' ? 'success' : 'warning')
+const quoteSourceTitle = computed(() => {
+  if (quote.value?.source === 'tencent') return '来自实时行情 provider'
+  return '实时行情上游不可用或超时，当前使用本地最新日线'
+})
 const detailQuality = computed(() => qualityForRecord(
   detailQualityRecord(detail.value, quote.value),
   detailQualityFields,
@@ -723,6 +733,9 @@ function peerRowProps(row) {
             </span>
             <NTag v-if="changePct" :type="changePct >= 0 ? 'error' : 'success'" size="small" :bordered="false">
               {{ changePct >= 0 ? '+' : '' }}{{ changePct.toFixed(2) }}%
+            </NTag>
+            <NTag v-if="quoteSourceLabel" :type="quoteSourceType" size="small" :bordered="false" :title="quoteSourceTitle">
+              {{ quoteSourceLabel }}
             </NTag>
           </div>
         </div>

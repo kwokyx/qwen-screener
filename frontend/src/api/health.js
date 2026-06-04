@@ -1,12 +1,12 @@
 import client from './client'
 
 export async function aiHealth() {
-  const { data } = await client.get('/health/ai')
+  const { data } = await client.get('/health/ai', { timeout: 5_000 })
   return data
 }
 
 export async function dataHealth() {
-  const { data } = await client.get('/health/data')
+  const { data } = await client.get('/health/data', { timeout: 8_000 })
   return data
 }
 

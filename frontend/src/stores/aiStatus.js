@@ -14,6 +14,8 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
   const model = ref('')
   const mode = ref('')
   const fallback = ref(false)
+  const pending = ref(false)
+  const stale = ref(false)
   const lastChecked = ref(0)
   let timer = null
   let retryTimer = null
@@ -42,6 +44,8 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
       model.value = data.model || ''
       mode.value = data.mode || ''
       fallback.value = !!data.fallback
+      pending.value = !!data.pending
+      stale.value = !!data.stale
     } catch {
       isUp.value = false
       reason.value = '后端无响应'
@@ -51,6 +55,8 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
       model.value = ''
       mode.value = 'local_rules'
       fallback.value = true
+      pending.value = false
+      stale.value = false
     } finally {
       lastChecked.value = Date.now()
       if (isUp.value) clearRetry()
@@ -73,7 +79,7 @@ export const useAiStatusStore = defineStore('aiStatus', () => {
   async function recheck() { await check() }
 
   return {
-    isUp, reason, latencyMs, configured, backend, model, mode, fallback, lastChecked,
+    isUp, reason, latencyMs, configured, backend, model, mode, fallback, pending, stale, lastChecked,
     check, recheck, startAutoProbe, stopAutoProbe,
   }
 })

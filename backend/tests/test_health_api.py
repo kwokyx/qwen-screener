@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -6,6 +8,26 @@ from sqlalchemy import text
 from app.api import health
 from app.main import app
 from app.models.stock import StockBasic, StockDaily
+
+
+def _reset_ai_health_cache():
+    with health._ai_health_cache_lock:
+        health._ai_health_cache.update({
+            "backend": None,
+            "model": None,
+            "expires_at": 0.0,
+            "payload": None,
+        })
+
+
+def _wait_until(predicate, timeout=1.5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.01)
+    return None
 
 
 def test_latest_expected_weekday_rolls_weekend_back_to_friday():
@@ -236,12 +258,7 @@ def test_ai_health_uses_short_runtime_cache(monkeypatch):
     monkeypatch.setattr(health.settings, "database_url", "sqlite:////tmp/runtime_qwen.db")
     monkeypatch.setattr(health.settings, "ai_backend", "openai")
     monkeypatch.setattr(health.settings, "openai_model", "model-test")
-    health._ai_health_cache.update({
-        "backend": None,
-        "model": None,
-        "expires_at": 0.0,
-        "payload": None,
-    })
+    _reset_ai_health_cache()
 
     def fake_probe(_timeout=None):
         calls.append("called")
@@ -259,7 +276,54 @@ def test_ai_health_uses_short_runtime_cache(monkeypatch):
     monkeypatch.setattr(health.qwen_client, "probe_health", fake_probe)
 
     first = health.ai_health()
+    cached = _wait_until(lambda: health._cached_ai_health_payload(require_fresh=True))
     second = health.ai_health()
 
-    assert first == second
+    assert first["pending"] is True
+    assert first["reason"] == "AI 健康检测中，暂不阻塞页面"
+    assert cached["latency_ms"] == 123
+    assert second["latency_ms"] == 123
     assert calls == ["called"]
+
+
+def test_ai_health_runtime_probe_does_not_block_request(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+    monkeypatch.setattr(health.settings, "database_url", "sqlite:////tmp/runtime_qwen.db")
+    monkeypatch.setattr(health.settings, "ai_backend", "openai")
+    monkeypatch.setattr(health.settings, "openai_model", "model-test")
+    _reset_ai_health_cache()
+
+    def slow_probe(timeout=None):
+        calls.append(timeout)
+        started.set()
+        release.wait(1.0)
+        return {
+            "ok": False,
+            "latency_ms": 900,
+            "reason": "上游网络不可达",
+            "backend": "openai",
+            "model": "model-test",
+            "configured": True,
+            "fallback": True,
+            "mode": "local_fallback",
+        }
+
+    monkeypatch.setattr(health.qwen_client, "probe_health", slow_probe)
+
+    t0 = time.monotonic()
+    body = health.ai_health()
+    elapsed_ms = (time.monotonic() - t0) * 1000
+
+    assert elapsed_ms < 120
+    assert body["pending"] is True
+    assert body["reason"] == "AI 健康检测中，暂不阻塞页面"
+    assert started.wait(1.0) is True
+    assert calls == [health._AI_HEALTH_PROBE_TIMEOUT_SECONDS]
+
+    release.set()
+    cached = _wait_until(lambda: health._cached_ai_health_payload(require_fresh=True))
+    assert cached["ok"] is False
+    assert cached["fallback"] is True
+    assert cached["reason"] == "上游网络不可达"

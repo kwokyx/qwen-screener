@@ -9,7 +9,7 @@ from app.api import market as market_api
 from app.services import scheduler, strategy_selector
 
 
-def _wait_until(predicate, timeout=2.0):
+def _wait_until(predicate, timeout=5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if predicate():

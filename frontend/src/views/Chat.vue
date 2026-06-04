@@ -192,6 +192,8 @@ const runtimeRows = computed(() => {
 })
 const aiStatusLine = computed(() => {
   if (!aiStatus.lastChecked) return 'AI 检测中…'
+  if (aiStatus.pending) return 'AI 检测中 · 本地规则可用'
+  if (aiStatus.stale) return 'AI 状态刷新中 · 使用上次结果'
   if (!aiStatus.configured && aiStatus.reason && !aiStatus.reason.includes('未配置')) {
     return 'AI 探测失败 · 本地规则兜底'
   }

@@ -19,6 +19,7 @@ from app.services import cache, db_backup, qwen_client, scheduler
 router = APIRouter(prefix="/health", tags=["health"])
 _DATA_HEALTH_CACHE_TTL_SECONDS = 5.0
 _AI_HEALTH_CACHE_TTL_SECONDS = 30.0
+_AI_HEALTH_PROBE_TIMEOUT_SECONDS = 1.2
 _data_health_cache_lock = threading.Lock()
 _data_health_cache: dict[str, object] = {
     "database_url": None,
@@ -183,31 +184,67 @@ def _freshness_diagnostics(
 @router.get("/ai")
 def ai_health():
     """前端启动时调用一次：判断 AI 上游是否可用。"""
+    if not _health_runtime_cache_enabled():
+        return qwen_client.probe_health(3.0)
+
     cached = _cached_ai_health_payload(require_fresh=True)
     if cached is not None:
         return cached
 
-    if not _ai_health_probe_lock.acquire(blocking=False):
-        cached = _cached_ai_health_payload(require_fresh=False)
-        if cached is not None:
-            cached["stale"] = True
-            return cached
-        return _pending_ai_health_payload()
+    stale = _cached_ai_health_payload(require_fresh=False)
+    probe_started = _start_ai_health_probe()
+    if stale is not None:
+        stale["stale"] = True
+        stale["pending"] = probe_started or _ai_health_probe_lock.locked()
+        return stale
+    return _pending_ai_health_payload()
 
+
+def _start_ai_health_probe() -> bool:
+    if _health_runtime_cache_enabled():
+        if not _ai_health_probe_lock.acquire(blocking=False):
+            return False
+        thread = threading.Thread(
+            target=_refresh_ai_health_cache,
+            name="ai-health-probe",
+            daemon=True,
+        )
+        thread.start()
+        return True
+    return False
+
+
+def _refresh_ai_health_cache():
     try:
-        payload = qwen_client.probe_health(3.0)
+        payload = qwen_client.probe_health(_AI_HEALTH_PROBE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        backend, model = _current_ai_health_identity()
+        payload = {
+            "ok": False,
+            "latency_ms": None,
+            "reason": f"AI 健康探测失败: {str(exc)[:120]}",
+            "backend": backend,
+            "model": model,
+            "configured": bool(settings.openai_api_key) if backend == "openai" else bool(settings.dashscope_api_key),
+            "fallback": True,
+            "mode": "local_fallback",
+        }
+    try:
+        _store_ai_health_payload(payload)
     finally:
         _ai_health_probe_lock.release()
 
-    if _health_runtime_cache_enabled():
-        with _ai_health_cache_lock:
-            _ai_health_cache.update({
-                "backend": settings.ai_backend,
-                "model": settings.openai_model if settings.ai_backend == "openai" else settings.qwen_model,
-                "expires_at": time.monotonic() + _AI_HEALTH_CACHE_TTL_SECONDS,
-                "payload": copy.deepcopy(payload),
-            })
-    return payload
+
+def _store_ai_health_payload(payload: dict):
+    if not _health_runtime_cache_enabled():
+        return
+    with _ai_health_cache_lock:
+        _ai_health_cache.update({
+            "backend": settings.ai_backend,
+            "model": settings.openai_model if settings.ai_backend == "openai" else settings.qwen_model,
+            "expires_at": time.monotonic() + _AI_HEALTH_CACHE_TTL_SECONDS,
+            "payload": copy.deepcopy(payload),
+        })
 
 
 def _current_ai_health_identity() -> tuple[str, str]:
@@ -238,7 +275,7 @@ def _pending_ai_health_payload() -> dict:
     return {
         "ok": True,
         "latency_ms": None,
-        "reason": "AI 健康检测中",
+        "reason": "AI 健康检测中，暂不阻塞页面",
         "backend": backend,
         "model": model,
         "configured": configured,

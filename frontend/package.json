@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke:dashboard": "node scripts/smoke-dashboard.mjs",
-    "smoke:strategy": "node scripts/smoke-strategy.mjs"
+    "smoke:strategy": "node scripts/smoke-strategy.mjs",
+    "smoke:chat": "node scripts/smoke-chat.mjs"
   },
   "dependencies": {
     "axios": "^1.7.9",

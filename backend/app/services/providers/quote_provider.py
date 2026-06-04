@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import requests
 from loguru import logger
@@ -11,12 +12,16 @@ from loguru import logger
 QUOTE_TTL = 8
 QUOTE_FAILURE_TTL = int(os.getenv("QUOTE_FAILURE_TTL", "30"))
 QUOTE_TIMEOUT = float(os.getenv("QUOTE_TIMEOUT", "0.8"))
+QUOTE_REQUEST_BUDGET = float(os.getenv("QUOTE_REQUEST_BUDGET", "0.35"))
+QUOTE_WORKERS = int(os.getenv("QUOTE_WORKERS", "2"))
 QUOTE_CIRCUIT_FAILURES = int(os.getenv("QUOTE_CIRCUIT_FAILURES", "3"))
 QUOTE_CIRCUIT_SECONDS = int(os.getenv("QUOTE_CIRCUIT_SECONDS", "60"))
 _quote_cache: dict[str, tuple[float, dict | None]] = {}
 _quote_lock = threading.Lock()
 _quote_circuit_disabled_until = 0.0
 _quote_recent_failures: list[float] = []
+_quote_inflight: dict[str, Future] = {}
+_quote_executor = ThreadPoolExecutor(max_workers=max(1, QUOTE_WORKERS), thread_name_prefix="quote-provider")
 
 
 def _to_tx_symbol(code: str) -> str | None:
@@ -135,6 +140,23 @@ def _record_quote_success():
         _quote_circuit_disabled_until = 0.0
 
 
+def _forget_inflight(code: str, future: Future):
+    with _quote_lock:
+        if _quote_inflight.get(code) is future:
+            _quote_inflight.pop(code, None)
+
+
+def _submit_quote_fetch(code: str) -> Future:
+    with _quote_lock:
+        existing = _quote_inflight.get(code)
+        if existing is not None and not existing.done():
+            return existing
+        future = _quote_executor.submit(fetch_realtime_quote, code, False)
+        _quote_inflight[code] = future
+        future.add_done_callback(lambda done, item=code: _forget_inflight(item, done))
+        return future
+
+
 def fetch_realtime_quote(code: str, use_cache: bool = True) -> dict | None:
     if use_cache:
         cache_hit, cached = _cache_get(code)
@@ -167,3 +189,28 @@ def fetch_realtime_quote(code: str, use_cache: bool = True) -> dict | None:
     else:
         _cache_set(code, None, QUOTE_FAILURE_TTL)
     return quote
+
+
+def fetch_realtime_quote_budgeted(code: str, budget: float = QUOTE_REQUEST_BUDGET) -> dict | None:
+    """Return realtime quote within a small request budget.
+
+    Tencent quote DNS/connect can occasionally hang beyond the requests timeout.
+    Detail pages should then fall back to local daily data instead of occupying
+    the FastAPI worker while the provider thread finishes in the background.
+    """
+    cache_hit, cached = _cache_get(code)
+    if cache_hit:
+        return cached
+
+    if not _to_tx_symbol(code) or _circuit_open():
+        return None
+
+    future = _submit_quote_fetch(code)
+    try:
+        return future.result(timeout=max(0.01, budget))
+    except FutureTimeoutError:
+        logger.warning("[QUOTE] {} 实时行情超过 {}s，返回本地数据", code, budget)
+        return None
+    except Exception as exc:
+        logger.warning("[QUOTE] {} 实时行情后台任务失败: {}", code, str(exc)[:120])
+        return None

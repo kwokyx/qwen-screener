@@ -69,7 +69,7 @@ def test_quote_falls_back_to_local_daily_when_live_unavailable(db, monkeypatch):
 
     from app.services.providers import quote_provider
 
-    monkeypatch.setattr(quote_provider, "fetch_realtime_quote", lambda code: None)
+    monkeypatch.setattr(quote_provider, "fetch_realtime_quote_budgeted", lambda code: None)
 
     with TestClient(app) as c:
         r = c.get("/api/v1/stock/123456.SH/quote")

@@ -111,6 +111,10 @@ npm run dev                                     # → http://localhost:5173
 | `BAOSTOCK_INTRADAY_BREAKER_SECONDS` | `300` | 分钟 K 拉取失败后的短路秒数，避免页面反复阻塞 |
 | `BAOSTOCK_SYNC_WORKERS` | `4` | 全市场日线回填并发数；过高会增加免费数据源抖动 |
 | `BAOSTOCK_BATCH_TIMEOUT` | `90` | 单批日线回填最长等待秒数，超时后保留已提交批次 |
+| `QUOTE_TIMEOUT` | `0.8` | 详情页实时行情 provider 单次 HTTP 超时 |
+| `QUOTE_REQUEST_BUDGET` | `0.35` | 详情页等待实时行情的页面请求预算；超时后立即使用本地日线回退 |
+| `QUOTE_FAILURE_TTL` | `30` | 实时行情失败缓存秒数，避免重复打慢上游 |
+| `QUOTE_CIRCUIT_FAILURES` / `QUOTE_CIRCUIT_SECONDS` | `3` / `60` | 实时行情连续失败后的短期熔断 |
 | `SECRET_KEY` | dev-secret | JWT 签名密钥，生产必须改 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | JWT 有效期 |
 | **`AI_BACKEND`** | `openai` | `openai` 或 `dashscope` |
@@ -215,6 +219,15 @@ curl -s http://127.0.0.1:8080/api/v1/health/data
 python3 backend/scripts/agent_smoke.py
 ```
 
+普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。完整本地浏览器 smoke：
+
+```bash
+cd frontend
+npm run smoke:dashboard
+npm run smoke:strategy
+npm run smoke:chat
+```
+
 交付前 release smoke：
 
 ```bash
@@ -222,6 +235,10 @@ python3 backend/scripts/release_smoke.py
 ```
 
 `release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_smoke.py` 是手动真实 Agent 回归，会逐轮输出 `tool`、`screened/result/done`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时，便于定位慢在模型规划还是本地工具。
+
+`/health/ai` 在运行时不会为首次上游探测阻塞页面：缓存未命中时先返回 `pending=true`，后台短超时刷新真实状态；已有过期状态时返回 `stale=true` 并继续刷新。AI 上游不可达属于预期降级路径，UI 会提示本地规则兜底，不应解读为本地筛选不可用。
+
+个股详情的实时行情只在短预算内等待外部 provider。超时、DNS 失败或熔断时，`/stock/{code}/quote` 会使用本地最新日线返回 `source=local`；页面仍应展示详情、K 线和本地指标，并明确不是实时行情。
 
 提交前可做一次定向密钥扫描：
 
@@ -382,9 +399,10 @@ docker compose exec -T backend pytest
 |---|---|
 | 免费数据源偶发网络抖动 | Baostock-first；同步批次限时并保留已提交数据；分钟 K 失败后短期熔断 |
 | 详情页首次历史 K 线不足 | 先返回已有日线，后台补充历史；前端自动刷新图表，不阻塞详情页 |
+| 详情页实时行情上游慢或不可达 | 短预算等待 + 失败缓存 + 熔断；超时后返回本地日线 `source=local` |
 | OpenAI 兼容网关不支持 Responses API | 自动回退 Chat Completions，并在短期熔断窗口内跳过不兼容接口 |
 | 千问输出不是合法 JSON | 三层降级：FC → JSON 模式 → 容错 regex 抠 JSON |
-| 上游 AI 瞬时网络错误 | 探活立即复查 + 短缓存 + 最近成功保护；前端降级后自动复测；业务调用指数退避重试 3 次 |
+| 上游 AI 瞬时网络错误 | `/health/ai` pending/stale 快速返回 + 后台短超时刷新；前端降级后自动复测；业务调用指数退避重试 3 次 |
 | 全市场同步上游返回异常少 | `< DB 80%` 直接跳过该次任务（防止部分快照 wipe） |
 | Redis 不可达 | 静默回退到无缓存模式，业务不中断 |
 | 千问 Key 未配置 | 千问相关功能给出明确错误，其他功能正常 |
