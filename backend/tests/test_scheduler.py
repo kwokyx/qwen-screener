@@ -98,14 +98,32 @@ def test_successful_data_job_clears_runtime_caches(db, monkeypatch):
     scheduler._running_jobs.clear()
     cleared_strategy = []
     cleared_market = []
+    rewarmed_market = []
+
+    class ImmediateThread:
+        def __init__(self, target, name=None, daemon=None):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            rewarmed_market.append({"name": self.name, "daemon": self.daemon})
+            self.target()
+
     monkeypatch.setattr(strategy_selector, "clear_strategy_cache", lambda: cleared_strategy.append(True))
     monkeypatch.setattr(market_api, "clear_market_cache", lambda: cleared_market.append(True))
+    monkeypatch.setattr(market_api, "warm_market_cache", lambda: rewarmed_market.append("ran"))
+    monkeypatch.setattr(scheduler.threading, "Thread", ImmediateThread)
 
     meta = scheduler._run_with_meta("daily_market", lambda: 3, allow_shortcut=False)
 
     assert meta["status"] == "success"
     assert cleared_strategy == [True]
     assert cleared_market == [True]
+    assert rewarmed_market == [
+        {"name": "market-cache-rewarm-daily_market", "daemon": True},
+        "ran",
+    ]
 
 
 def _seed_basic(db, n=120):

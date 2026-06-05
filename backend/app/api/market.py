@@ -28,7 +28,10 @@ from app.services import cache as _cache
 
 
 router = APIRouter(prefix="/market", tags=["market"])
-_LOCAL_MARKET_CACHE_TTL = 120.0
+# Dashboard aggregates are based on local EOD snapshots and sync clears this
+# cache after data changes. Keep them warm long enough to avoid repeated SQLite
+# rescans while users move between pages.
+_LOCAL_MARKET_CACHE_TTL = 900.0
 _local_market_cache_lock = threading.Lock()
 _local_market_cache: dict[tuple, tuple[float, object]] = {}
 

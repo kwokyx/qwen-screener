@@ -125,6 +125,11 @@ def _clear_runtime_caches_after_data_job(name: str, status: str):
         from app.api import market
 
         market.clear_market_cache()
+        threading.Thread(
+            target=market.warm_market_cache,
+            name=f"market-cache-rewarm-{name}",
+            daemon=True,
+        ).start()
     except Exception as exc:
         logger.warning("[SCHED] 行情概览缓存清理失败: {}", str(exc)[:120])
 
