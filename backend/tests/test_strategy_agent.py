@@ -593,6 +593,18 @@ def test_agent_local_fast_path_executes_supported_screen_queries(db, seed_stocks
             "PE 低于 15 且 PB 小于 2 的银行股",
             [("pe", "lt", 15), ("pb", "lt", 2), ("industry", "in", ["银行"])],
         ),
+        (
+            "PE 15 以下且 PB 2以下的银行股",
+            [("pe", "lte", 15), ("pb", "lte", 2), ("industry", "in", ["银行"])],
+        ),
+        (
+            "ROE 15%以上、毛利率25%以上、负债率60%以下的主板股票",
+            [("roe", "gte", 15), ("gross_margin", "gte", 25), ("debt_ratio", "lte", 60), ("market", "in", ["主板"])],
+        ),
+        (
+            "营收同比为正且净利润同比为正的主板股票",
+            [("profit_yoy", "gt", 0), ("revenue_yoy", "gt", 0), ("market", "in", ["主板"])],
+        ),
     ]
 
     for query, expected_conditions in cases:

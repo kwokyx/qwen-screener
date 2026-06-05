@@ -1833,18 +1833,30 @@ def _explicit_metric_conditions(query: str) -> list[FilterCondition]:
         ("gt", r"(?:大于|高于|超过|超|>|＞)"),
         ("lt", r"(?:小于|低于|少于|<|＜)"),
     ]
+    suffix_op_patterns = [
+        ("gte", r"(?:以上|及以上|起|不低于|不少于)"),
+        ("lte", r"(?:以下|以内|及以下|不高于|不超过)"),
+    ]
+    value_re = r"([0-9]+(?:\.[0-9]+)?)\s*(?:%|亿|亿元|元)?"
 
     for field, metric_re, metric_flags in metric_patterns:
         for op, op_re in op_patterns:
-            pattern = rf"{metric_re}\s*(?:为|是|在)?\s*{op_re}\s*([0-9]+(?:\.[0-9]+)?)\s*%?"
+            pattern = rf"{metric_re}\s*(?:为|是|在)?\s*{op_re}\s*{value_re}"
             match = re.search(pattern, q, metric_flags)
             if match:
                 add(FilterCondition(field=field, op=op, value=float(match.group(1))))
                 break
+        else:
+            for op, op_re in suffix_op_patterns:
+                pattern = rf"{metric_re}\s*(?:为|是|在)?\s*{value_re}\s*{op_re}"
+                match = re.search(pattern, q, metric_flags)
+                if match:
+                    add(FilterCondition(field=field, op=op, value=float(match.group(1))))
+                    break
 
-    if re.search(r"(?:净利润同比|利润同比|净利同比)[^，。；、,;]*正增长", q):
+    if re.search(r"(?:净利润同比|利润同比|净利同比)[^，。；、,;]*(?:正增长|为正|转正|正值)", q):
         add(FilterCondition(field="profit_yoy", op="gt", value=0))
-    if re.search(r"(?:营收同比|营业收入同比|收入同比)[^，。；、,;]*正增长", q):
+    if re.search(r"(?:营收同比|营业收入同比|收入同比)[^，。；、,;]*(?:正增长|为正|转正|正值)", q):
         add(FilterCondition(field="revenue_yoy", op="gt", value=0))
     if "盈利正增长" in q or "利润正增长" in q:
         add(FilterCondition(field="profit_yoy", op="gt", value=0))
