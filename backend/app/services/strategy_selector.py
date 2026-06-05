@@ -576,6 +576,13 @@ def plan_agent_selection(
         if fast_path is not None:
             fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
             return fast_path
+    local_screen = build_deterministic_stock_screen_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured_hint,
+    )
+    if local_screen is not None:
+        return local_screen
 
     if not allow_model:
         ai_configured = ai_configured_hint
@@ -867,6 +874,13 @@ def preview_chat_plan(
     fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=_ai_configured())
     if fast_path is not None:
         return fast_path.plan
+    local_screen = build_deterministic_stock_screen_response(
+        query,
+        limit=limit,
+        ai_configured=_ai_configured(),
+    )
+    if local_screen is not None:
+        return local_screen.plan
     if is_strategy_design_query(query):
         return build_strategy_design_response(query, ai_configured=_ai_configured()).plan
     return _plan_agent_locally(query, limit, _ai_configured())
@@ -920,6 +934,13 @@ def plan_chat_agent(
     if fast_path is not None:
         fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
         return fast_path
+    local_screen = build_deterministic_stock_screen_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured,
+    )
+    if local_screen is not None:
+        return local_screen
 
     if not allow_model:
         return plan_agent_selection(
@@ -1204,6 +1225,51 @@ def build_unsupported_metric_preflight_response(
         f"当前数据字段不支持：{'、'.join(unsupported_metrics)}。已前置停止筛选，避免等待模型或返回不满足全部条件的股票。",
     ]
     return response
+
+
+def build_deterministic_stock_screen_response(
+    query: str,
+    *,
+    limit: int = 50,
+    ai_configured: bool = False,
+) -> StrategyAgentResponse | None:
+    """Return a local stock_screen plan when supported fields are unambiguous."""
+    if _should_skip_deterministic_stock_screen(query):
+        return None
+
+    plan = _plan_agent_locally(query, limit, ai_configured)
+    if plan.tool != "stock_screen":
+        return None
+    if not plan.conditions:
+        return None
+
+    plan.limit = min(max(limit, 1), 200)
+    plan.condition_labels = _condition_labels(plan.conditions)
+    plan.ai_configured = ai_configured
+    plan.ai_used = False
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer="已用本地确定性规则解析为可执行筛选条件，等待执行。",
+        tool_trace=[
+            "本地快速路径命中，跳过模型规划",
+            "tool_router -> stock_screen",
+            f"本地确定性解析：生成 {len(plan.conditions)} 个支持字段条件",
+        ],
+        tool_calls=_planned_tool_calls(plan),
+    )
+
+
+def _should_skip_deterministic_stock_screen(query: str) -> bool:
+    """Keep non-screening chat intents ahead of local condition parsing."""
+    return (
+        is_confirmation_query(query)
+        or is_result_page_query(query)
+        or is_result_sort_query(query)
+        or is_result_explanation_query(query)
+        or is_stock_detail_query(query)
+        or is_strategy_design_query(query)
+    )
 
 
 def build_context_screen_response(
@@ -1679,6 +1745,10 @@ def _local_conditions(query: str) -> list[FilterCondition]:
     if any(k in query for k in ("白马", "优质")):
         _append_if_missing_field(conditions, FilterCondition(field="roe", op="gt", value=15))
         _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="gt", value=500))
+    if any(k in query for k in ("稳健", "低风险", "风险低")):
+        _append_if_missing_field(conditions, FilterCondition(field="roe", op="gt", value=15))
+        _append_if_missing_field(conditions, FilterCondition(field="debt_ratio", op="lt", value=60))
+        _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="gt", value=500))
     if "小盘" in query:
         _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="lt", value=100))
     if "中盘" in query:
@@ -1693,6 +1763,13 @@ def _local_conditions(query: str) -> list[FilterCondition]:
     matched = [term for term in industry_terms if term in query]
     if matched:
         _append_if_missing_field(conditions, FilterCondition(field="industry", op="in", value=matched))
+
+    market_terms = [
+        "主板", "创业板", "科创板", "北交所",
+    ]
+    matched_markets = [term for term in market_terms if term in query]
+    if matched_markets:
+        _append_if_missing_field(conditions, FilterCondition(field="market", op="in", value=matched_markets))
 
     return conditions
 

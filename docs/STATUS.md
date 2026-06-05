@@ -28,7 +28,7 @@
 | NL 筛选（一次性 + SSE 流式三阶段） | [`api/screener.py`](../backend/app/api/screener.py) | ✅ `test_screener.py`（含端到端） |
 | 千问 AI 客户端（FC + JSON + regex 三层降级 + 双后端切换 + 缓存） | [`services/qwen_client/`](../backend/app/services/qwen_client/) | ✅ `test_qwen_transport.py` + 手动端到端验证 |
 | 个股投资分析（一次 + SSE 流式） | [`api/qwen.py`](../backend/app/api/qwen.py) | ⚠️ 无单测，已手动验证 |
-| Agent 智能选股（bounded ReAct + 结构化筛选工具 + 策略选股工具 + 本地降级规划） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_scoring.py` |
+| Agent 智能选股（本地确定性解析优先 + bounded ReAct + 结构化筛选工具 + 策略选股工具） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_scoring.py` |
 | 对话历史持久化（跨设备同步） | [`api/chat.py`](../backend/app/api/chat.py) | ✅ `test_chat_sessions.py` |
 | 通知中心（CRUD + 已读 / 全部已读） | [`api/notification.py`](../backend/app/api/notification.py) | ✅ `test_notifications.py` |
 | 数据同步（Baostock 优先，AKShare 少量兜底） | [`services/data_sync.py`](../backend/app/services/data_sync.py) | ✅ `test_data_sync_guard.py` + `test_dividend_sync.py` |
@@ -57,7 +57,7 @@
 **位置**：[`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) + [`views/Strategy.vue`](../frontend/src/views/Strategy.vue)
 
 **能跑通的部分** ✅：
-- 自然语言 Agent 使用 bounded ReAct：模型选择工具，后端执行本地工具并生成 observation，再输出最终回答
+- 自然语言 Agent 先用本地确定性解析处理 PE/PB、ROE、股息率、净利润同比、营收同比、行业、市场、市值等高频支持字段；其余请求再进入 bounded ReAct，由模型选择工具，后端执行本地工具并生成 observation，再输出最终回答
 - 结构化条件筛选：13 字段 × 7 操作符 × AND/OR
 - 6 个项目内置日线策略：海龟突破、均线放量、RPS 强势突破、高位窄幅整理、涨停后承接、趋势急跌修复
 - 数据不足的股票跳过或在结果表明确标记缺失字段，不合成行情
@@ -131,7 +131,7 @@ cd frontend && npm run smoke:dashboard && npm run smoke:strategy && npm run smok
 
 `release_smoke.py` 是 P0/P1 交付封版检查：确认 Docker 服务健康、AI/数据健康、SSE fast-path 不走模型、`stock_detail` 不筛选、真实筛选返回结果，并执行定向密钥扫描。脚本末尾会输出 `pass/warn/fail` 汇总；在 backend 容器内运行时没有 docker/rg CLI，会把 Docker 检查降级为 WARN，外层 `docker compose ps` 是单独验证项，容器内脚本改用 HTTP 检查和 Python 密钥扫描。若 `/health/ai` 返回 `ok=false`，脚本会以 `WARN` 明示上游不可达并继续验证本地兜底链路；若 `/health/data` 返回 `fresh=true` 但 `sync_warnings` 非空，或存在正在运行的重同步任务，应按 WARN 的下一步建议处理，不要把它解读成所有同步任务都成功。
 
-普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证模型 action、工具 observation、重复工具拦截、unsupported metric 前置拦截和 SSE 顺序。当前 unsupported metric 包括三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价；命中这些字段时应在 AI health / Qwen / screener 之前停止筛选并解释原因，SSE 应保持 `model_ms=0` 与 `fallback_reason=local_fast_path`。完整字段边界见 [`FIELD_CAPABILITIES.md`](FIELD_CAPABILITIES.md)。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复，并锁定“模型超时，已用本地规则”的降级文案；`smoke:dashboard` 验证 `/health/data` 的最新/应至交易日、覆盖率、同步任务和交易日说明在浏览器可见；`smoke:detail` 验证 `/detail/600036.SH` 本地详情、K 线和移动端溢出；`agent_reliability_smoke.py` 用真实服务输出复杂筛选、解释、排序、分页、详情和 unsupported metric 的工具/条件/耗时，AI 未配置或不健康时只 WARN 并跳过。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
+普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证本地确定性筛选、模型 action、工具 observation、重复工具拦截、unsupported metric 前置拦截和 SSE 顺序。PE/PB、ROE、股息率、净利润同比、营收同比、毛利率、负债率、市值、行业、市场、收盘价、换手率，以及低估值、高分红、成长股、稳健、银行股、消费股等保守规则会先走本地 `stock_screen`，不等待 Qwen，SSE 应保持 `model_ms=0` 与 `fallback_reason=local_fast_path`。当前 unsupported metric 包括三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价；命中这些字段时应在 AI health / Qwen / screener 之前停止筛选并解释原因。完整字段边界见 [`FIELD_CAPABILITIES.md`](FIELD_CAPABILITIES.md)。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复，并锁定“模型超时，已用本地规则”的降级文案；`smoke:dashboard` 验证 `/health/data` 的最新/应至交易日、覆盖率、同步任务和交易日说明在浏览器可见；`smoke:detail` 验证 `/detail/600036.SH` 本地详情、K 线和移动端溢出；`agent_reliability_smoke.py` 用真实服务输出本地确定性筛选、解释、排序、分页、详情和 unsupported metric 的工具/条件/耗时，AI 未配置或不健康时只 WARN 并跳过。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
 
 ### 🔧 4.2 「价值分」不是 AI 评分
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)

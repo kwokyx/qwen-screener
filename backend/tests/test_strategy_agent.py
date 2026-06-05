@@ -503,7 +503,7 @@ def test_agent_uses_model_planner_then_executes_local_screen(db, seed_stocks, mo
         ),
     )
 
-    res = strategy_selector.run_agent_selection(db, "找半导体行业里的大市值龙头", limit=10)
+    res = strategy_selector.run_agent_selection(db, "请模型挑一个观察样本", limit=10)
 
     assert res.plan.tool == "stock_screen"
     assert res.plan.ai_used is True
@@ -515,44 +515,41 @@ def test_agent_uses_model_planner_then_executes_local_screen(db, seed_stocks, mo
     assert "中芯国际" in res.answer
 
 
-def test_agent_keeps_local_plan_when_model_returns_empty_conditions(db, seed_stocks, monkeypatch):
+def test_agent_local_fast_path_skips_model_even_when_available(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
     )
     monkeypatch.setattr(
         strategy_selector.qwen_client,
         "plan_agent_turn",
-        lambda _query, _context=None: AgentPlanResult(
-            tool="stock_screen",
-            tool_label="结构化股票筛选",
-            reasoning="empty test",
-            conditions=[],
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("deterministic screen should not call model")),
     )
 
     res = strategy_selector.run_agent_selection(db, "低估值银行", limit=10)
 
     assert res.plan.tool == "stock_screen"
     assert res.plan.ai_used is False
+    assert res.plan.ai_configured is True
     assert res.plan.condition_labels == ["市盈率低于15", "市净率低于2", "行业包含银行"]
     assert res.screen_result is not None
     assert res.screen_result.total == 1
-    assert "模型未返回有效筛选条件" in res.warnings[0]
+    assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert res.warnings == []
 
 
-def test_agent_fallback_preserves_explicit_roe_and_profit_growth(db, seed_stocks, monkeypatch):
-    monkeypatch.setattr(
-        strategy_selector,
-        "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
-    )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_agent_turn",
-        lambda _query, _context=None: None,
-    )
+def test_agent_local_fast_path_preserves_explicit_roe_and_profit_growth(db, seed_stocks, monkeypatch):
+    def fail_ai_status():
+        raise AssertionError("deterministic screen should not probe AI health")
+
+    def fail_model(*_args, **_kwargs):
+        raise AssertionError("deterministic screen should not call the model")
+
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_model)
 
     res = strategy_selector.plan_agent_selection(
         "ROE 大于 15 且最新季度净利润同比正增长的成长股",
@@ -567,7 +564,45 @@ def test_agent_fallback_preserves_explicit_roe_and_profit_growth(db, seed_stocks
     ]
     assert "营收同比大于20" not in res.plan.condition_labels
     assert "净利润同比大于20" not in res.plan.condition_labels
-    assert "模型未生成有效规划" in res.warnings[0]
+    assert res.plan.ai_configured is True
+    assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert res.warnings == []
+
+
+def test_agent_local_fast_path_executes_supported_screen_queries(db, seed_stocks, monkeypatch):
+    def fail_ai_status():
+        raise AssertionError("deterministic screen should not probe AI health")
+
+    def fail_model(*_args, **_kwargs):
+        raise AssertionError("deterministic screen should not call the model")
+
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_model)
+
+    cases = [
+        (
+            "ROE 大于 15 且最新季度净利润同比正增长的成长股",
+            [("roe", "gt", 15), ("profit_yoy", "gt", 0)],
+        ),
+        (
+            "低估值高分红的银行股",
+            [("pe", "lt", 15), ("pb", "lt", 2), ("dividend_yield", "gt", 3), ("industry", "in", ["银行"])],
+        ),
+        (
+            "PE 低于 15 且 PB 小于 2 的银行股",
+            [("pe", "lt", 15), ("pb", "lt", 2), ("industry", "in", ["银行"])],
+        ),
+    ]
+
+    for query, expected_conditions in cases:
+        res = strategy_selector.run_agent_selection(db, query, limit=10)
+        assert res.plan.tool == "stock_screen"
+        assert res.plan.ai_configured is True
+        assert res.plan.ai_used is False
+        assert res.screen_result is not None
+        assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+        assert [(cond.field, cond.op, cond.value) for cond in res.plan.conditions] == expected_conditions
 
 
 def test_agent_fallback_reports_model_timeout_reason(db, seed_stocks, monkeypatch):
@@ -580,9 +615,9 @@ def test_agent_fallback_reports_model_timeout_reason(db, seed_stocks, monkeypatc
     monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", lambda _query, _context=None: None)
 
-    res = strategy_selector.plan_agent_selection("低估值银行", limit=10)
+    res = strategy_selector.plan_agent_selection("找最近强势突破的股票", limit=10)
 
-    assert res.plan.tool == "stock_screen"
+    assert res.plan.tool == "strategy_select"
     assert res.plan.ai_used is False
     assert "模型规划超过 10 秒，已使用本地规则兜底" in res.warnings[0]
 
@@ -745,7 +780,7 @@ def test_agent_does_not_apply_hidden_default_conditions(db, seed_stocks, monkeyp
     )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
-    result = strategy_selector.run_agent_selection(db, "稳健一点", limit=10)
+    result = strategy_selector.run_agent_selection(db, "随便看看", limit=10)
 
     assert result.plan.tool == "ask_clarification"
     assert result.screen_result is None
@@ -772,17 +807,18 @@ def test_agent_planning_does_not_execute_screen(db, seed_stocks, monkeypatch):
     assert res.strategy_result is None
 
 
-def test_agent_uses_local_screen_when_ai_unavailable(db, seed_stocks, monkeypatch):
+def test_agent_clear_supported_screen_skips_ai_health_when_ai_unavailable(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "模型不可用: test-model"},
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
     )
 
-    def fail_parse(_query):
-        raise AssertionError("AI parser should not be called when health is unavailable")
+    def fail_plan(*_args, **_kwargs):
+        raise AssertionError("deterministic screen should not call the model")
 
-    monkeypatch.setattr(strategy_selector.qwen_client, "parse_nl_query", fail_parse)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
 
     res = strategy_selector.run_agent_selection(db, "半导体行业里的大市值龙头", limit=10)
 
@@ -793,15 +829,16 @@ def test_agent_uses_local_screen_when_ai_unavailable(db, seed_stocks, monkeypatc
     assert res.screen_result is not None
     assert res.screen_result.total == 1
     assert res.screen_result.items[0].code == "688981.SH"
-    assert "模型不可用" in res.warnings[0]
-    assert res.tool_trace == ["调用 screener_engine.screen(conditions=2, limit=10)"]
+    assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert res.warnings == []
 
 
-def test_agent_reports_unconfigured_ai_but_still_runs_tool(db, seed_stocks, monkeypatch):
+def test_agent_clear_supported_screen_runs_without_configured_ai(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: False)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
     )
 
     res = strategy_selector.run_agent_selection(db, "低估值银行", limit=10)
@@ -813,7 +850,8 @@ def test_agent_reports_unconfigured_ai_but_still_runs_tool(db, seed_stocks, monk
     assert res.screen_result is not None
     assert res.screen_result.total == 1
     assert res.screen_result.items[0].code == "600036.SH"
-    assert "AI 服务未配置" in res.warnings[0]
+    assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert res.warnings == []
 
 
 def test_agent_routes_breakout_query_to_strategy_tool(db, seed_stocks, monkeypatch):
@@ -1134,12 +1172,12 @@ class TestModelPlannerIntegration:
             lambda _query, _context=None: None,  # simulate failure
         )
 
-        res = strategy_selector.run_agent_selection(db, "低估值银行", limit=10)
+        res = strategy_selector.run_agent_selection(db, "找最近强势突破的股票", limit=10)
 
-        assert res.plan.tool == "stock_screen"
+        assert res.plan.tool == "strategy_select"
         assert res.plan.ai_used is False
         assert "模型未生成有效规划" in res.warnings[0]
-        assert res.screen_result is not None
+        assert res.strategy_result is not None
 
     def test_model_fallback_when_unavailable(self, db, seed_stocks, monkeypatch):
         monkeypatch.setattr(
@@ -1153,12 +1191,11 @@ class TestModelPlannerIntegration:
 
         monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
 
-        res = strategy_selector.run_agent_selection(db, "半导体行业里的大市值龙头", limit=10)
+        res = strategy_selector.run_agent_selection(db, "找最近强势突破的股票", limit=10)
 
-        assert res.plan.tool == "stock_screen"
+        assert res.plan.tool == "strategy_select"
         assert res.plan.ai_used is False
-        assert res.plan.condition_labels == ["总市值大于500", "行业包含半导体"]
-        assert res.screen_result is not None
+        assert res.strategy_result is not None
         assert "AI 服务已配置但当前不可用" in res.warnings[0]
 
     def test_model_allows_explicit_all_stocks_empty_conditions(self, db, seed_stocks, monkeypatch):

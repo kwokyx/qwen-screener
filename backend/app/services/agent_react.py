@@ -57,6 +57,18 @@ def run_chat_react_agent(
         fast_path.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *fast_path.tool_trace]
         return _execute_prepared_response(db, fast_path, limit, [])
 
+    local_screen = strategy_selector.build_deterministic_stock_screen_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured,
+    )
+    if local_screen is not None:
+        local_screen.tool_trace = [
+            "本地快速路径命中，跳过 ReAct 模型规划",
+            *local_screen.tool_trace[1:],
+        ]
+        return _execute_prepared_response(db, local_screen, limit, [])
+
     if strategy_selector.is_explicit_non_execution_design_query(query):
         response = strategy_selector.plan_chat_agent(
             query,

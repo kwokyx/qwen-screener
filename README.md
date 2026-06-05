@@ -222,7 +222,7 @@ python3 backend/scripts/agent_smoke.py
 docker compose exec -T backend python scripts/agent_reliability_smoke.py
 ```
 
-普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`；若模型规划超过短超时，系统会保留安全本地兜底和 `fallback_reason`，不把部分满足条件的结果伪装成完整命中。完整本地浏览器 smoke：
+普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`；明确支持字段会先走本地确定性解析，复杂或非确定性请求若模型规划超过短超时，系统会保留安全本地兜底和 `fallback_reason`，不把部分满足条件的结果伪装成完整命中。完整本地浏览器 smoke：
 
 ```bash
 cd frontend
@@ -240,9 +240,9 @@ python3 backend/scripts/release_smoke.py
 docker compose exec -T backend python scripts/release_smoke.py
 ```
 
-`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN；外层 `docker compose ps` 是单独验证项，容器内脚本继续使用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖复杂筛选、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
+`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN；外层 `docker compose ps` 是单独验证项，容器内脚本继续使用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖本地确定性筛选、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
 
-Chat Agent 采用 bounded ReAct：模型每步只能选择一个白名单工具或给出最终回答；后端执行工具后把 observation 摘要回传给下一步。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答；这些 ReAct step 事件带有 `timing_phase`，可区分 `model_action`、`model_final`、`model_*_fallback` 和 `tool_execution`。前端只展示公开步骤摘要，不展示模型私有思考链。
+Chat Agent 采用“本地确定性解析优先 + bounded ReAct”：PE/PB、ROE、股息率、净利润同比、营收同比、毛利率、负债率、市值、行业、市场、收盘价、换手率，以及低估值、高分红、成长股、稳健、银行股、消费股等保守规则会先生成本地 `stock_screen` 条件，不等待 Qwen，SSE 中 `model_ms=0` 且 `fallback_reason=local_fast_path`。剩余需要模型判断的请求才进入 bounded ReAct：模型每步只能选择一个白名单工具或给出最终回答；后端执行工具后把 observation 摘要回传给下一步。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答；这些 ReAct step 事件带有 `timing_phase`，可区分 `model_action`、`model_final`、`model_*_fallback` 和 `tool_execution`。前端只展示公开步骤摘要，不展示模型私有思考链。
 
 Unsupported metric 是进入模型前的本地快速路径。命中三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价等字段时，后端直接返回不支持说明，不调用 Qwen，不调用筛选引擎，SSE 不会出现 `screening/result`，`model_ms=0` 且 `fallback_reason=local_fast_path`。
 
@@ -335,7 +335,7 @@ qwen-stock-screener/
 | **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
 | **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
 | **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
-| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | bounded ReAct：模型选工具 → 后端执行 → observation → 最终回答；AI 不可用时高置信度本地降级 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` |
+| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | 本地确定性解析优先；其余请求进入 bounded ReAct：模型选工具 → 后端执行 → observation → 最终回答；AI 慢/不可达时安全降级 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` |
 | **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | Baostock-first；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
 | **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
 | **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |

@@ -97,7 +97,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
             FilterCondition(field="industry", op="in", value=["银行"]),
             FilterCondition(field="pe", op="lt", value=15),
         ]
-        if query == "低估值高分红的银行股":
+        if query == "PE 低于 15 且 PB 小于 2 的银行股":
             return AgentPlanResult(
                 tool="stock_screen",
                 tool_label="结构化股票筛选",
@@ -180,7 +180,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     client = TestClient(app)
     context = {}
     cases = [
-        ("低估值高分红的银行股", "stock_screen", True, "result", True, 1),
+        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", False, 1),
         ("为什么这些股票排在前面", "explain_result", False, "agent", False, 0),
         ("按股息率排序", "sort_results", False, "result", False, 1),
         ("换一批", "paginate_results", False, "result", False, 1),
@@ -266,20 +266,21 @@ def test_nl_stream_no_context_fast_paths_never_screen_or_call_model(db, seed_sto
         assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
 
 
-def test_nl_stream_model_planning_failure_falls_back_to_local_screen(db, seed_stocks, monkeypatch):
+def test_nl_stream_deterministic_screen_skips_model_planning(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
     )
 
-    def fail_plan(_query, _context=None):
-        raise RuntimeError("planner timeout test")
+    def fail_plan(*_args, **_kwargs):
+        raise AssertionError("deterministic screen should not call ReAct planner")
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", fail_plan)
 
     client = TestClient(app)
-    events = _stream_events(client, "低估值高分红的银行股", context={})
+    events = _stream_events(client, "PE 低于 15 且 PB 小于 2 的银行股", context={})
     event_types = _event_types(events)
 
     assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
@@ -294,7 +295,8 @@ def test_nl_stream_model_planning_failure_falls_back_to_local_screen(db, seed_st
         "label": "本地规则兜底",
         "fallback": True,
     }
-    assert "模型 ReAct 异常" in result["fallback_reason"]
+    assert result["model_ms"] == 0
+    assert result["fallback_reason"] == "local_fast_path"
     assert result["parsed_conditions"]
     assert any(
         call["name"] == "stock_screen" and call["result"]["total"] == result["total"]
@@ -316,10 +318,10 @@ def test_nl_stream_model_failure_preserves_attempted_model_ms(db, seed_stocks, m
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", slow_fail_plan)
 
     client = TestClient(app)
-    events = _stream_events(client, "低估值高分红的银行股", context={})
-    result = next(event for event in events if event["type"] == "result")
+    events = _stream_events(client, "找最近强势突破的股票", context={})
+    result = next(event for event in events if event["type"] == "agent")
 
-    assert result["plan"]["tool"] == "stock_screen"
+    assert result["plan"]["tool"] == "strategy_select"
     assert result["plan"]["ai_used"] is False
     assert result["model_ms"] > 0
     assert result["fallback_reason"]
@@ -719,7 +721,7 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
     with client.stream(
         "POST",
         "/api/v1/screener/nl/stream",
-        json={"query": "低估值高分红的银行股"},
+        json={"query": "请根据模型做一次筛选观察"},
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
@@ -797,7 +799,7 @@ def test_nl_stream_react_final_uses_tool_observation(db, seed_stocks, monkeypatc
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
     client = TestClient(app)
-    events = _stream_events(client, "低估值高分红的银行股", context={})
+    events = _stream_events(client, "请根据模型判断做一次筛选观察", context={})
     event_types = _event_types(events)
 
     assert {"react_step", "tool_start", "tool_observation", "tool_done", "final"} <= set(event_types)
@@ -834,7 +836,7 @@ def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypat
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
     client = TestClient(app)
-    events = _stream_events(client, "低估值高分红的银行股", context={})
+    events = _stream_events(client, "请根据模型测试重复动作保护", context={})
     result = next(event for event in events if event["type"] == "result")
 
     assert result["total"] == 1
@@ -999,10 +1001,11 @@ def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
 
 def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypatch):
     """Verify truthful SSE stage text even with local fallback."""
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
     )
     client = TestClient(app)
     with client.stream(
