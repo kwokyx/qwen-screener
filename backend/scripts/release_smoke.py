@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -47,7 +49,33 @@ WARNINGS: list[str] = []
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    current = Path(__file__).resolve()
+    for parent in (current.parent, *current.parents):
+        if (parent / "docker-compose.yml").exists() and (parent / "backend").is_dir():
+            return parent
+    # Backend container images only contain /app/{app,scripts,tests}; there is
+    # no compose file or frontend source inside that runtime.
+    for parent in (current.parent, *current.parents):
+        if (parent / "app").is_dir() and (parent / "scripts").is_dir():
+            return parent
+    return current.parents[2]
+
+
+def _default_base_url(cwd: Path) -> str:
+    if (cwd / "app").is_dir() and (cwd / "scripts").is_dir() and not (cwd / "backend").is_dir():
+        return "http://127.0.0.1:8000/api/v1"
+    return DEFAULT_BASE_URL
+
+
+def _secret_scan_targets(cwd: Path) -> list[str]:
+    if (cwd / "backend").is_dir():
+        return SECRET_SCAN_TARGETS
+    targets = ["app", "tests", "scripts"]
+    if (cwd / "README.md").exists():
+        targets.append("README.md")
+    if (cwd / "docs").is_dir():
+        targets.append("docs")
+    return targets
 
 
 def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -166,6 +194,12 @@ def _print_summary() -> None:
 
 
 def _check_compose(cwd: Path) -> None:
+    if shutil.which("docker") is None:
+        _warn(
+            "docker compose ps",
+            "docker CLI not available in this runtime; rely on outer docker compose ps and HTTP checks",
+        )
+        return
     proc = _run(["docker", "compose", "ps"], cwd=cwd)
     if proc.returncode != 0:
         raise SmokeFailure(f"docker compose ps failed:\n{proc.stdout}")
@@ -273,7 +307,11 @@ def _check_real_screen(base_url: str) -> dict[str, Any]:
 
 
 def _check_secret_scan(cwd: Path) -> None:
-    proc = _run(["rg", "-n", SECRET_PATTERN, *SECRET_SCAN_TARGETS], cwd=cwd)
+    targets = _secret_scan_targets(cwd)
+    if shutil.which("rg") is None:
+        _check_secret_scan_python(cwd, targets)
+        return
+    proc = _run(["rg", "-n", SECRET_PATTERN, *targets], cwd=cwd)
     if proc.returncode == 0:
         raise SmokeFailure(f"targeted secret scan found matches:\n{proc.stdout}")
     if proc.returncode not in (0, 1):
@@ -281,9 +319,38 @@ def _check_secret_scan(cwd: Path) -> None:
     _pass("targeted secret scan", "no matches")
 
 
+def _check_secret_scan_python(cwd: Path, targets: list[str]) -> None:
+    pattern = re.compile(SECRET_PATTERN)
+    skip_suffixes = {".db", ".sqlite", ".pyc", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
+    matches: list[str] = []
+    scanned = 0
+    for target in targets:
+        root = cwd / target
+        if not root.exists():
+            continue
+        paths = [root] if root.is_file() else [path for path in root.rglob("*") if path.is_file()]
+        for path in paths:
+            if path.suffix.lower() in skip_suffixes or "__pycache__" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            scanned += 1
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if pattern.search(line):
+                    matches.append(f"{path.relative_to(cwd)}:{lineno}:{line[:160]}")
+    if matches:
+        raise SmokeFailure("targeted secret scan found matches:\n" + "\n".join(matches[:20]))
+    if scanned == 0:
+        _warn("targeted secret scan", "no readable targets in this runtime")
+        return
+    _pass("targeted secret scan", f"no matches via python fallback ({scanned} files)")
+
+
 def main() -> int:
     cwd = _repo_root()
-    base_url = os.environ.get("RELEASE_SMOKE_BASE_URL", DEFAULT_BASE_URL)
+    base_url = os.environ.get("RELEASE_SMOKE_BASE_URL", _default_base_url(cwd))
     print(f"Release smoke base URL: {base_url}", flush=True)
     checks = [
         lambda: _check_compose(cwd),

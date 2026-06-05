@@ -184,6 +184,8 @@ health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发
 
 操作符：`gt / gte / lt / lte / eq / between / in`
 
+完整字段能力、缺失行为和不支持指标原因见 [`docs/FIELD_CAPABILITIES.md`](docs/FIELD_CAPABILITIES.md)。
+
 ---
 
 ## 定时任务（APScheduler，东八区）
@@ -217,9 +219,10 @@ curl -X POST 'http://localhost:8000/api/v1/health/sync/db_backup?wait=true'
 curl -s http://127.0.0.1:8080/api/v1/health/ai
 curl -s http://127.0.0.1:8080/api/v1/health/data
 python3 backend/scripts/agent_smoke.py
+docker compose exec -T backend python scripts/agent_reliability_smoke.py
 ```
 
-普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py`；若模型规划超过短超时，系统会保留安全本地兜底和 `fallback_reason`，不把部分满足条件的结果伪装成完整命中。完整本地浏览器 smoke：
+普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`；若模型规划超过短超时，系统会保留安全本地兜底和 `fallback_reason`，不把部分满足条件的结果伪装成完整命中。完整本地浏览器 smoke：
 
 ```bash
 cd frontend
@@ -233,9 +236,10 @@ npm run smoke:chat
 
 ```bash
 python3 backend/scripts/release_smoke.py
+docker compose exec -T backend python scripts/release_smoke.py
 ```
 
-`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_smoke.py` 是手动真实 Agent 回归，会逐轮输出 `tool`、`screened/result/done`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时，便于定位慢在模型规划还是本地工具。
+`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN，并改用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖复杂筛选、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
 
 Chat Agent 采用 bounded ReAct：模型每步只能选择一个白名单工具或给出最终回答；后端执行工具后把 observation 摘要回传给下一步。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答。前端只展示公开步骤摘要，不展示模型私有思考链。
 
