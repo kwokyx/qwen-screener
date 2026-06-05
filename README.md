@@ -219,7 +219,7 @@ curl -s http://127.0.0.1:8080/api/v1/health/data
 python3 backend/scripts/agent_smoke.py
 ```
 
-普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。完整本地浏览器 smoke：
+普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py`；若模型规划超过短超时，系统会保留安全本地兜底和 `fallback_reason`，不把部分满足条件的结果伪装成完整命中。完整本地浏览器 smoke：
 
 ```bash
 cd frontend
@@ -416,7 +416,7 @@ docker compose exec -T backend pytest
 ## 已知限制
 
 - 财务字段是「最新一期」快照，适合当前选股，不适合严肃历史回测
-- Agent 只能筛选本地白名单字段：PE、PB、ROE、市值、股息率、营收同比、净利润同比、毛利率、负债率、行业、市场、收盘价、换手率；三年 CAGR、扣非净利润、经营现金流、EPS、PS/市销率、机构持仓、研报评级等会明确说明不支持，不返回部分满足结果
+- Agent 只能筛选本地白名单字段：PE、PB、ROE、市值、股息率、营收同比、净利润同比、毛利率、负债率、行业、市场、收盘价、换手率；三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价等会明确说明不支持，不返回部分满足结果
 - Baostock 分红接口不支持北交所 `.BJ`，这类股票股息率会明确显示缺失，不用假数据补 0
 - 分钟 K 依赖 Baostock 实时查询，失败时返回 503；前端明确提示，不会静默切到日线
 - 日 K 接口按旧到新返回；周 K/月 K 直接请求 Baostock 对应周期，不由前端临时聚合

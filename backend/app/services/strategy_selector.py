@@ -1622,14 +1622,25 @@ def _unsupported_metric_labels(query: str) -> list[str]:
     q = query.strip().lower()
     labels: list[str] = []
     has_cagr = bool(re.search(r"(?:复合增速|复合增长率|复合增长|cagr)", q, re.IGNORECASE))
-    if not has_cagr:
-        return labels
-    if re.search(r"(?:净利润|净利|利润)", q):
-        labels.append("近三年净利润复合增速")
-    if re.search(r"(?:营收|营业收入|收入)", q):
-        labels.append("近三年营收复合增速")
-    if not labels:
-        labels.append("复合增速/CAGR")
+    if has_cagr:
+        if re.search(r"(?:净利润|净利|利润)", q):
+            labels.append("近三年净利润复合增速")
+        if re.search(r"(?:营收|营业收入|收入)", q):
+            labels.append("近三年营收复合增速")
+        if not labels:
+            labels.append("复合增速/CAGR")
+
+    unsupported_patterns = [
+        ("扣非净利润", r"(?:扣非净利润|扣非净利|扣除非经常性损益)"),
+        ("经营现金流", r"(?:经营现金流|经营性现金流|现金流)"),
+        ("EPS/每股收益", r"(?:每股收益|(?<![a-z])eps(?![a-z]))"),
+        ("PS/市销率", r"(?:市销率|(?<![a-z])ps(?![a-z]))"),
+        ("机构持仓", r"(?:机构持仓|基金持仓|北向资金)"),
+        ("研报评级/目标价", r"(?:研报评级|评级|目标价)"),
+    ]
+    for label, pattern in unsupported_patterns:
+        if re.search(pattern, q, re.IGNORECASE) and label not in labels:
+            labels.append(label)
     return labels
 
 

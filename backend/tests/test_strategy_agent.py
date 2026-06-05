@@ -615,6 +615,58 @@ def test_agent_blocks_unsupported_profit_cagr_in_local_fallback(db, seed_stocks,
     assert any("当前数据字段不支持：近三年净利润复合增速" in warning for warning in res.warnings)
 
 
+def test_agent_blocks_unsupported_metric_families_without_partial_screen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("unsupported metric queries must not execute a partial screen")
+
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    cases = [
+        ("找 PE 低于 15、扣非净利润同比增长的消费股", "扣非净利润"),
+        ("找 PE 低于 15、经营现金流为正的消费股", "经营现金流"),
+        ("找 EPS 大于 1 的消费股", "EPS/每股收益"),
+        ("找 PS 低于 2 的消费股", "PS/市销率"),
+        ("找机构持仓增加的消费股", "机构持仓"),
+        ("找基金持仓增加的消费股", "机构持仓"),
+        ("找北向资金持续流入的消费股", "机构持仓"),
+        ("找研报评级买入的消费股", "研报评级/目标价"),
+        ("找目标价高于 50 的消费股", "研报评级/目标价"),
+    ]
+
+    for query, label in cases:
+        res = strategy_selector.run_agent_selection(db, query, limit=10)
+        assert res.plan.tool == "ask_clarification"
+        assert res.plan.conditions == []
+        assert res.screen_result is None
+        assert label in res.answer
+        assert any(f"当前数据字段不支持：{label}" in warning for warning in res.warnings)
+
+
+def test_agent_supported_metrics_still_plan_normal_screen(monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    res = strategy_selector.plan_agent_selection(
+        "ROE 大于 15 且最新季度净利润同比正增长的成长股",
+        limit=10,
+    )
+
+    assert res.plan.tool == "stock_screen"
+    assert [(cond.field, cond.op, cond.value) for cond in res.plan.conditions] == [
+        ("roe", "gt", 15),
+        ("profit_yoy", "gt", 0),
+    ]
+    assert not any("当前数据字段不支持" in warning for warning in res.warnings)
+
+
 def test_agent_local_growth_template_only_applies_without_explicit_metrics(monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

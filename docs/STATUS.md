@@ -131,7 +131,7 @@ cd frontend && npm run smoke:dashboard && npm run smoke:strategy && npm run smok
 
 `release_smoke.py` 是 P0/P1 交付封版检查：确认 Docker 服务健康、AI/数据健康、SSE fast-path 不走模型、`stock_detail` 不筛选、真实筛选返回结果，并执行定向密钥扫描。脚本末尾会输出 `pass/warn/fail` 汇总；若 `/health/ai` 返回 `ok=false`，脚本会以 `WARN` 明示上游不可达并继续验证本地兜底链路；若 `/health/data` 返回 `fresh=true` 但 `sync_warnings` 非空，或存在正在运行的重同步任务，应按 WARN 的下一步建议处理，不要把它解读成所有同步任务都成功。
 
-普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证模型 action、工具 observation、重复工具拦截、unsupported metric 安全拦截和 SSE 顺序。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
+普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证模型 action、工具 observation、重复工具拦截、unsupported metric 安全拦截和 SSE 顺序。当前 unsupported metric 包括三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价；命中这些字段时应停止筛选并解释原因。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
 
 ### 🔧 4.2 「价值分」不是 AI 评分
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)

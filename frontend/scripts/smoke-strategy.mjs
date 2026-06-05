@@ -264,6 +264,27 @@ async function strategySnapshot(cdp) {
   })()`)
 }
 
+async function waitForRestoredStrategyResult(cdp, label, timeoutMs = 60000) {
+  try {
+    await waitForExpression(
+      cdp,
+      `(() => {
+        const onStrategy = location.pathname === '/strategy';
+        const rows = document.querySelectorAll('.n-data-table tbody tr').length;
+        const text = document.body.innerText || '';
+        const empty = text.includes('当前条件没有命中股票');
+        const loading = text.includes('正在计算策略') || document.querySelectorAll('.strategy-skeleton-row').length > 0;
+        return onStrategy && !loading && (rows > 0 || empty);
+      })()`,
+      label,
+      timeoutMs,
+    )
+  } catch (err) {
+    const snapshot = await strategySnapshot(cdp).catch((snapshotErr) => ({ snapshot_error: snapshotErr.message }))
+    fail(`${err.message}\nLast strategy snapshot`, snapshot)
+  }
+}
+
 async function mobileLayoutSnapshot(cdp) {
   return evaluate(cdp, `(() => {
     window.scrollTo(0, window.scrollY);
@@ -377,11 +398,7 @@ async function run() {
       detail = await evaluate(cdp, '({ href: location.href, code: document.querySelector(".detail-page .stock-code")?.textContent.trim(), name: document.querySelector(".detail-page .stock-name")?.textContent.trim() })')
       await evaluate(cdp, 'history.back(); true')
       await waitForExpression(cdp, 'location.pathname === "/strategy"', 'browser back to strategy')
-      await waitForExpression(
-        cdp,
-        'document.querySelector(".n-data-table tbody tr") || document.body.innerText.includes("当前条件没有命中股票")',
-        'restored strategy result after back',
-      )
+      await waitForRestoredStrategyResult(cdp, 'restored strategy result after back')
       afterBack = await strategySnapshot(cdp)
     }
 
