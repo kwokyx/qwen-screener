@@ -197,7 +197,7 @@ def _check_compose(cwd: Path) -> None:
     if shutil.which("docker") is None:
         _warn(
             "docker compose ps",
-            "docker CLI not available in this runtime; rely on outer docker compose ps and HTTP checks",
+            "docker CLI not available inside backend runtime; run outer `docker compose ps` separately and rely on HTTP checks here",
         )
         return
     proc = _run(["docker", "compose", "ps"], cwd=cwd)

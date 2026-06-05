@@ -126,12 +126,12 @@ OPENAI_RESPONSES_ENABLED=false
 curl -s http://127.0.0.1:8080/api/v1/health/ai
 python3 backend/scripts/agent_smoke.py
 python3 backend/scripts/release_smoke.py
-cd frontend && npm run smoke:dashboard && npm run smoke:strategy && npm run smoke:chat
+cd frontend && npm run smoke:dashboard && npm run smoke:strategy && npm run smoke:chat && npm run smoke:detail
 ```
 
-`release_smoke.py` 是 P0/P1 交付封版检查：确认 Docker 服务健康、AI/数据健康、SSE fast-path 不走模型、`stock_detail` 不筛选、真实筛选返回结果，并执行定向密钥扫描。脚本末尾会输出 `pass/warn/fail` 汇总；在 backend 容器内运行时没有 docker/rg CLI，会把 Docker 检查降级为 WARN，并改用 HTTP 检查和 Python 密钥扫描。若 `/health/ai` 返回 `ok=false`，脚本会以 `WARN` 明示上游不可达并继续验证本地兜底链路；若 `/health/data` 返回 `fresh=true` 但 `sync_warnings` 非空，或存在正在运行的重同步任务，应按 WARN 的下一步建议处理，不要把它解读成所有同步任务都成功。
+`release_smoke.py` 是 P0/P1 交付封版检查：确认 Docker 服务健康、AI/数据健康、SSE fast-path 不走模型、`stock_detail` 不筛选、真实筛选返回结果，并执行定向密钥扫描。脚本末尾会输出 `pass/warn/fail` 汇总；在 backend 容器内运行时没有 docker/rg CLI，会把 Docker 检查降级为 WARN，外层 `docker compose ps` 是单独验证项，容器内脚本改用 HTTP 检查和 Python 密钥扫描。若 `/health/ai` 返回 `ok=false`，脚本会以 `WARN` 明示上游不可达并继续验证本地兜底链路；若 `/health/data` 返回 `fresh=true` 但 `sync_warnings` 非空，或存在正在运行的重同步任务，应按 WARN 的下一步建议处理，不要把它解读成所有同步任务都成功。
 
-普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证模型 action、工具 observation、重复工具拦截、unsupported metric 安全拦截和 SSE 顺序。当前 unsupported metric 包括三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价；命中这些字段时应停止筛选并解释原因。完整字段边界见 [`FIELD_CAPABILITIES.md`](FIELD_CAPABILITIES.md)。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复；`agent_reliability_smoke.py` 用真实服务输出复杂筛选、解释、排序、分页、详情和 unsupported metric 的工具/条件/耗时，AI 未配置或不健康时只 WARN 并跳过。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
+普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证模型 action、工具 observation、重复工具拦截、unsupported metric 前置拦截和 SSE 顺序。当前 unsupported metric 包括三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价；命中这些字段时应在 AI health / Qwen / screener 之前停止筛选并解释原因，SSE 应保持 `model_ms=0` 与 `fallback_reason=local_fast_path`。完整字段边界见 [`FIELD_CAPABILITIES.md`](FIELD_CAPABILITIES.md)。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复；`smoke:detail` 验证 `/detail/600036.SH` 本地详情、K 线和移动端溢出；`agent_reliability_smoke.py` 用真实服务输出复杂筛选、解释、排序、分页、详情和 unsupported metric 的工具/条件/耗时，AI 未配置或不健康时只 WARN 并跳过。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
 
 ### 🔧 4.2 「价值分」不是 AI 评分
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)
