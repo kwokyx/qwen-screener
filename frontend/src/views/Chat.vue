@@ -199,7 +199,13 @@ const runtimeRows = computed(() => {
   } else {
     rows.push({ label: '本地工具', value: '未执行筛选', state: 'skip' })
   }
-  if (reason) rows.push({ label: '兜底原因', value: reason, state: 'skip' })
+  if (reason) {
+    rows.push(
+      timings.fallback_reason === 'local_fast_path'
+        ? { label: '执行路径', value: reason, state: 'local' }
+        : { label: '兜底原因', value: reason, state: 'skip' },
+    )
+  }
   return rows
 })
 const aiStatusLine = computed(() => {
