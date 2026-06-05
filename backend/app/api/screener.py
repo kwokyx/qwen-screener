@@ -157,7 +157,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         )
         return {
             "planning_ms": model_ms,
-            "model_ms": model_ms if response.plan.ai_used else 0,
+            "model_ms": model_ms,
             "tool_ms": tool_ms,
             "fallback_reason": fallback_reason,
         }

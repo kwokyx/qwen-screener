@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -293,6 +294,29 @@ def test_nl_stream_model_planning_failure_falls_back_to_local_screen(db, seed_st
         call["name"] == "stock_screen" and call["result"]["total"] == result["total"]
         for call in result["tool_calls"]
     )
+
+
+def test_nl_stream_model_failure_preserves_attempted_model_ms(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    def slow_fail_plan(_query, context=None, observations=None, step_index=1):
+        time.sleep(0.02)
+        raise RuntimeError("planner timeout test")
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", slow_fail_plan)
+
+    client = TestClient(app)
+    events = _stream_events(client, "低估值高分红的银行股", context={})
+    result = next(event for event in events if event["type"] == "result")
+
+    assert result["plan"]["tool"] == "stock_screen"
+    assert result["plan"]["ai_used"] is False
+    assert result["model_ms"] > 0
+    assert result["fallback_reason"]
 
 
 def test_nl_stream_blocks_unsupported_profit_cagr_without_partial_screen(db, seed_stocks, monkeypatch):
