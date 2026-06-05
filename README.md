@@ -223,6 +223,7 @@ python3 backend/scripts/agent_smoke.py
 
 ```bash
 cd frontend
+npm run smoke:auth
 npm run smoke:dashboard
 npm run smoke:strategy
 npm run smoke:chat
@@ -241,6 +242,10 @@ Chat Agent 采用 bounded ReAct：模型每步只能选择一个白名单工具�
 `/health/ai` 在运行时不会为首次上游探测阻塞页面：缓存未命中时先返回 `pending=true`，后台短超时刷新真实状态；已有过期状态时返回 `stale=true` 并继续刷新。AI 上游不可达属于预期降级路径，UI 会提示本地规则兜底，不应解读为本地筛选不可用。
 
 个股详情的实时行情只在短预算内等待外部 provider。超时、DNS 失败或熔断时，`/stock/{code}/quote` 会使用本地最新日线返回 `source=local`；页面仍应展示详情、K 线和本地指标，并明确不是实时行情。
+
+登录和注册都要求一次性图形验证码。验证码由后端生成 SVG data URL，错误或过期会返回明确提示；前端失败后会刷新验证码。浏览器回归用 `npm run smoke:auth` 覆盖验证码加载、刷新、空值/错误提示、注册后切回登录、登录、退出和重登。
+
+Dashboard 市场概览使用本地 EOD 聚合缓存。后端启动后会在后台预热 `indices/sectors/movers/ticker`，数据同步成功后会清理并重新预热缓存；冷启动首个请求可能仍比热缓存慢，但不应长期阻塞页面。需要复测时，重启 backend/frontend 后连续请求 `/api/v1/market/indices`、`/api/v1/market/sectors?limit=20`、`/api/v1/market/movers?limit=10`、`/api/v1/market/ticker`、`/api/v1/health/data`，对比 cold/warm 耗时。
 
 提交前可做一次定向密钥扫描：
 
@@ -408,6 +413,7 @@ docker compose exec -T backend pytest
 | 全市场同步上游返回异常少 | `< DB 80%` 直接跳过该次任务（防止部分快照 wipe） |
 | Redis 不可达 | 静默回退到无缓存模式，业务不中断 |
 | 千问 Key 未配置 | 千问相关功能给出明确错误，其他功能正常 |
+| 登录 / 注册验证码错误或过期 | 本次请求失败并刷新验证码；验证码一次性使用，不降低后端校验 |
 | 用户未登录 | 自选股 / 对话历史走 localStorage 离线兜底 |
 | 任意 Vue 组件抛错 | 全局 ErrorBoundary + Vue errorHandler 兜底，不白屏 |
 

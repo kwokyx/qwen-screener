@@ -170,7 +170,7 @@ onMounted(() => {
           登录后继续访问当前业务页面。
         </div>
 
-        <form @submit.prevent="submit">
+        <form novalidate @submit.prevent="submit">
           <div :style="{ marginBottom: '14px' }">
             <label :style="{ fontSize: '11px', color: A2.textMuted, fontWeight: 600, display: 'block', marginBottom: '6px', letterSpacing: '0.4px' }">用户名</label>
             <input v-model="username" required minlength="3" maxlength="64" autocomplete="username"
