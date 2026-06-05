@@ -8,6 +8,7 @@ from sqlalchemy import text
 from app.api import health
 from app.main import app
 from app.models.stock import StockBasic, StockDaily
+from tests.auth_helpers import login_form, register_json
 
 
 def _reset_ai_health_cache():
@@ -206,9 +207,9 @@ def test_data_health_is_public_but_manual_sync_requires_login(db, monkeypatch):
         assert c.get("/api/v1/health/data").status_code == 200
         assert c.post("/api/v1/health/sync/daily_market").status_code == 401
 
-        r = c.post("/api/v1/auth/register", json={"username": "syncer", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/register", json=register_json(c, "syncer", "abcd1234"))
         assert r.status_code == 201
-        r = c.post("/api/v1/auth/login", data={"username": "syncer", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/login", data=login_form(c, "syncer", "abcd1234"))
         assert r.status_code == 200
         token = r.json()["access_token"]
 

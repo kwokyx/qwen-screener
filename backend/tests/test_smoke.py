@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.database import Base, engine
 from app.main import app
 from app import models  # noqa: F401  触发 ORM 注册
+from tests.auth_helpers import login_form, register_json
 
 
 @pytest.fixture(scope="module")
@@ -28,11 +29,7 @@ def test_openapi_has_screener(client):
 
 
 def test_register_and_login(client):
-    client.post("/api/v1/auth/register", json={
-        "username": "smoke_user", "password": "abc12345"
-    })
-    r = client.post("/api/v1/auth/login", data={
-        "username": "smoke_user", "password": "abc12345"
-    })
+    client.post("/api/v1/auth/register", json=register_json(client, "smoke_user", "abc12345"))
+    r = client.post("/api/v1/auth/login", data=login_form(client, "smoke_user", "abc12345"))
     assert r.status_code == 200
     assert "access_token" in r.json()

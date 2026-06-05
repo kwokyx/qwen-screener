@@ -2,11 +2,12 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from tests.auth_helpers import login_form, register_json
 
 
 def _login(client: TestClient, u: str, p: str = "abcd1234"):
-    client.post("/api/v1/auth/register", json={"username": u, "password": p})
-    r = client.post("/api/v1/auth/login", data={"username": u, "password": p})
+    client.post("/api/v1/auth/register", json=register_json(client, u, p))
+    r = client.post("/api/v1/auth/login", data=login_form(client, u, p))
     return r.json()["access_token"]
 
 

@@ -33,14 +33,14 @@ export const useAuthStore = defineStore('auth', () => {
     try { await useNotificationsStore().syncFromServer() } catch { /* 静默 */ }
   }
 
-  async function login(username, password) {
+  async function login(username, password, captchaPayload) {
     token.value = ''
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     clearLocalPrivateState()
 
-    const data = await authApi.login(username, password)
+    const data = await authApi.login(username, password, captchaPayload)
     token.value = data.access_token
     user.value = data.user
     localStorage.setItem('token', data.access_token)
@@ -49,8 +49,8 @@ export const useAuthStore = defineStore('auth', () => {
     return data
   }
 
-  async function register(username, password, email) {
-    return authApi.register(username, password, email || null)
+  async function register(username, password, email, captchaPayload) {
+    return authApi.register(username, password, email || null, captchaPayload)
   }
 
   async function fetchMe() {

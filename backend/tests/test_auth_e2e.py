@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.stock import StockBasic
+from tests.auth_helpers import captcha_payload, login_form, register_json
 
 
 def test_full_auth_journey(db):
@@ -14,21 +15,21 @@ def test_full_auth_journey(db):
 
     with TestClient(app) as c:
         # 1. 注册
-        r = c.post("/api/v1/auth/register", json={"username": "journey", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/register", json=register_json(c, "journey", "abcd1234"))
         assert r.status_code == 201
 
         # 重复注册 → 400
-        r = c.post("/api/v1/auth/register", json={"username": "journey", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/register", json=register_json(c, "journey", "abcd1234"))
         assert r.status_code == 400
 
         # 2. 登录拿 token
-        r = c.post("/api/v1/auth/login", data={"username": "journey", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/login", data=login_form(c, "journey", "abcd1234"))
         assert r.status_code == 200
         t1 = r.json()["access_token"]
         assert r.json()["user"]["username"] == "journey"
 
         # 密码错误 → 401
-        r = c.post("/api/v1/auth/login", data={"username": "journey", "password": "wrong"})
+        r = c.post("/api/v1/auth/login", data=login_form(c, "journey", "wrong"))
         assert r.status_code == 401
 
         # 3. 拉自选（空）
@@ -50,7 +51,7 @@ def test_full_auth_journey(db):
         assert r.status_code == 200 and r.json()["username"] == "journey"
 
         # 4. "退出"：前端清 token；这里模拟为重新登录拿新 token
-        r = c.post("/api/v1/auth/login", data={"username": "journey", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/login", data=login_form(c, "journey", "abcd1234"))
         assert r.status_code == 200
         t2 = r.json()["access_token"]
         h2 = {"Authorization": f"Bearer {t2}"}
@@ -70,12 +71,46 @@ def test_full_auth_journey(db):
 def test_register_validates_password_length(db):
     """密码 < 6 位应被 schema 拒绝（不依赖前端验证）。"""
     with TestClient(app) as c:
-        r = c.post("/api/v1/auth/register", json={"username": "shortpw", "password": "abc"})
+        r = c.post("/api/v1/auth/register", json=register_json(c, "shortpw", "abc"))
         assert r.status_code == 422
 
 
 def test_register_validates_username_length(db):
     """用户名 < 3 位应被 schema 拒绝。"""
     with TestClient(app) as c:
-        r = c.post("/api/v1/auth/register", json={"username": "x", "password": "abcd1234"})
+        r = c.post("/api/v1/auth/register", json=register_json(c, "x", "abcd1234"))
         assert r.status_code == 422
+
+
+def test_captcha_required_and_one_time(db):
+    with TestClient(app) as c:
+        r = c.get("/api/v1/auth/captcha")
+        assert r.status_code == 200
+        assert r.json()["image"].startswith("data:image/svg+xml;base64,")
+
+        r = c.post("/api/v1/auth/register", json={"username": "no_cap", "password": "abcd1234"})
+        assert r.status_code == 422
+
+        cap = captcha_payload(c)
+        r = c.post(
+            "/api/v1/auth/register",
+            json={"username": "bad_cap", "password": "abcd1234", "captcha_id": cap["captcha_id"], "captcha_code": "WRONG"},
+        )
+        assert r.status_code == 400
+
+        r = c.post("/api/v1/auth/register", json={"username": "cap_once", "password": "abcd1234", **cap})
+        assert r.status_code == 400
+
+        good_payload = register_json(c, "cap_ok", "abcd1234")
+        r = c.post("/api/v1/auth/register", json=good_payload)
+        assert r.status_code == 201
+
+        r = c.post("/api/v1/auth/login", data={"username": "cap_ok", "password": "abcd1234"})
+        assert r.status_code == 422
+
+        cap = login_form(c, "cap_ok", "abcd1234")
+        r = c.post("/api/v1/auth/login", data={**cap, "captcha_code": "WRONG"})
+        assert r.status_code == 400
+
+        r = c.post("/api/v1/auth/login", data=login_form(c, "cap_ok", "abcd1234"))
+        assert r.status_code == 200

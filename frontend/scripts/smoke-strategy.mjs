@@ -42,18 +42,27 @@ async function fetchJson(url, options) {
   return response.json()
 }
 
+async function createCaptchaPayload() {
+  const body = await fetchJson(`${BASE_URL}/api/v1/auth/captcha`)
+  const encoded = body.image.split(',')[1] || ''
+  const svg = Buffer.from(encoded, 'base64').toString('utf8')
+  const code = [...svg.matchAll(/<text[^>]*>([^<]+)<\/text>/g)].map((item) => item[1]).join('')
+  if (!body.id || code.length < 4) fail('Failed to parse captcha for smoke login')
+  return { captcha_id: body.id, captcha_code: code }
+}
+
 async function createSmokeLogin() {
   const username = process.env.SMOKE_USERNAME || 'strategy_smoke'
   const password = process.env.SMOKE_PASSWORD || 'strategy_smoke_123456'
   const registerResponse = await fetch(`${BASE_URL}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, ...(await createCaptchaPayload()) }),
   })
   if (!registerResponse.ok && registerResponse.status !== 400) {
     throw new Error(`HTTP ${registerResponse.status} for smoke user registration: ${await registerResponse.text()}`)
   }
-  const form = new URLSearchParams({ username, password })
+  const form = new URLSearchParams({ username, password, ...(await createCaptchaPayload()) })
   return fetchJson(`${BASE_URL}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
