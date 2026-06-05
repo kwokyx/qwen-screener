@@ -10,7 +10,8 @@
     "smoke:dashboard": "node scripts/smoke-dashboard.mjs",
     "smoke:strategy": "node scripts/smoke-strategy.mjs",
     "smoke:chat": "node scripts/smoke-chat.mjs",
-    "smoke:auth": "node scripts/smoke-auth.mjs"
+    "smoke:auth": "node scripts/smoke-auth.mjs",
+    "smoke:detail": "node scripts/smoke-detail.mjs"
   },
   "dependencies": {
     "axios": "^1.7.9",
