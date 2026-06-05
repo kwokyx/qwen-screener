@@ -98,6 +98,7 @@ const structuredSortOptions = computed(() => [
     .filter((field) => field.data_type === 'number')
     .map((field) => ({ label: field.label, value: field.key })),
 ])
+const isBusy = computed(() => loading.value || agentLoading.value || structuredLoading.value)
 const operatorLabels = {
   gt: '大于',
   gte: '大于等于',
@@ -287,7 +288,7 @@ const columns = [
       return h('div', { class: 'stock-cell' }, [
         h('button', {
           class: 'stock-link',
-          onClick: () => router.push(`/detail/${row.code}`),
+          onClick: () => gotoDetail(row.code),
         }, row.name || row.code),
         h('span', { class: 'stock-code' }, row.code),
       ])
@@ -342,6 +343,11 @@ const columns = [
     },
   },
 ]
+
+function gotoDetail(code) {
+  persistState()
+  router.push(`/detail/${code}`)
+}
 const displayColumns = computed(() => {
   const isConditionScreen = !!(agentResult.value?.screen_result || structuredResult.value)
   return isConditionScreen ? columns.filter((column) => column.key !== 'score') : columns
@@ -356,7 +362,7 @@ function formatMetric(key, value) {
 }
 
 async function runSelection(id = activeId.value) {
-  if (!id || loading.value) return
+  if (!id || isBusy.value) return
   loading.value = true
   errorMsg.value = ''
   agentResult.value = null
@@ -365,6 +371,7 @@ async function runSelection(id = activeId.value) {
   try {
     activeId.value = id
     result.value = await selectStrategy(id, { limit: 80 })
+    persistState()
   } catch (err) {
     errorMsg.value = err.response?.data?.detail || err.message || '策略选股失败'
   } finally {
@@ -374,16 +381,19 @@ async function runSelection(id = activeId.value) {
 
 async function runAgent() {
   const query = agentQuery.value.trim()
-  if (!query || agentLoading.value) return
+  if (!query || isBusy.value) return
   agentLoading.value = true
   agentError.value = ''
   errorMsg.value = ''
+  agentResult.value = null
   structuredResult.value = null
+  result.value = null
   try {
     const data = await runStrategyAgent(query, { limit: 80 })
     agentResult.value = data
     if (data.plan?.strategy_id) activeId.value = data.plan.strategy_id
     if (data.strategy_result) result.value = data.strategy_result
+    persistState()
   } catch (err) {
     agentError.value = err.response?.data?.detail || err.message || 'Agent 选股失败'
   } finally {
@@ -392,10 +402,13 @@ async function runAgent() {
 }
 
 async function runStructuredScreen() {
-  if (structuredLoading.value) return
+  if (isBusy.value) return
   structuredLoading.value = true
   structuredError.value = ''
   errorMsg.value = ''
+  structuredResult.value = null
+  agentResult.value = null
+  result.value = null
   try {
     const conditions = structuredConditions.value.map(normalizeStructuredCondition)
     const data = await screenStocks(conditions, {
@@ -407,6 +420,7 @@ async function runStructuredScreen() {
     structuredResult.value = data
     agentResult.value = null
     result.value = null
+    persistState()
   } catch (err) {
     structuredError.value = err.response?.data?.detail || err.message || '结构化筛选失败'
   } finally {
@@ -419,7 +433,7 @@ function useExample(text) {
 }
 
 function chooseStrategy(id) {
-  if (loading.value) return
+  if (isBusy.value) return
   workspaceMode.value = 'strategy'
   activeId.value = id
   agentResult.value = null
@@ -542,7 +556,7 @@ watch([
           size="small"
           type="primary"
           secondary
-          :disabled="workspaceMode !== 'strategy' || !activeId || loading"
+          :disabled="workspaceMode !== 'strategy' || !activeId || isBusy"
           :loading="loading"
           @click="runSelection()"
         >
@@ -552,7 +566,7 @@ watch([
 
       <n-card size="small" :bordered="true" class="workspace-card">
         <div class="workspace-bar">
-          <n-radio-group v-model:value="workspaceMode" size="small">
+          <n-radio-group v-model:value="workspaceMode" size="small" :disabled="isBusy">
             <n-radio-button value="agent">智能选股</n-radio-button>
             <n-radio-button value="structured">条件筛选</n-radio-button>
             <n-radio-button value="strategy">策略库</n-radio-button>
@@ -567,13 +581,14 @@ watch([
             <n-input
               v-model:value="agentQuery"
               clearable
+              :disabled="isBusy"
               placeholder="例如：低估值高分红的银行股"
               @keydown.enter.exact.prevent="runAgent"
             />
-            <n-button type="primary" strong :loading="agentLoading" @click="runAgent">筛选</n-button>
+            <n-button type="primary" strong :disabled="!agentQuery.trim() || isBusy" :loading="agentLoading" @click="runAgent">筛选</n-button>
           </div>
           <div class="quick-examples">
-            <button v-for="item in agentExamples" :key="item" type="button" @click="useExample(item)">
+            <button v-for="item in agentExamples" :key="item" type="button" :disabled="isBusy" @click="useExample(item)">
               {{ item }}
             </button>
           </div>
@@ -601,7 +616,7 @@ watch([
                 {{ structuredSortDesc ? '降序' : '升序' }}
               </n-button>
             </div>
-            <n-button size="small" secondary @click="addStructuredCondition">添加条件</n-button>
+            <n-button size="small" secondary :disabled="isBusy" @click="addStructuredCondition">添加条件</n-button>
           </div>
 
           <div class="condition-builder">
@@ -611,21 +626,24 @@ watch([
                 :value="condition.field"
                 :options="structuredFieldOptions"
                 size="small"
+                :disabled="isBusy"
                 @update:value="updateStructuredField(condition, $event)"
               />
-              <n-select v-model:value="condition.op" :options="getStructuredOperatorOptions(condition)" size="small" />
+              <n-select v-model:value="condition.op" :options="getStructuredOperatorOptions(condition)" size="small" :disabled="isBusy" />
               <n-input
                 v-if="getStructuredField(condition.field)?.data_type === 'text'"
                 v-model:value="condition.value"
                 size="small"
+                :disabled="isBusy"
                 placeholder="输入值"
               />
               <template v-else>
-                <n-input-number v-model:value="condition.value" size="small" placeholder="数值" />
+                <n-input-number v-model:value="condition.value" size="small" :disabled="isBusy" placeholder="数值" />
                 <n-input-number
                   v-if="condition.op === 'between'"
                   v-model:value="condition.value2"
                   size="small"
+                  :disabled="isBusy"
                   placeholder="上限"
                 />
               </template>
@@ -633,7 +651,7 @@ watch([
                 size="small"
                 text
                 type="error"
-                :disabled="structuredConditions.length <= 1"
+                :disabled="structuredConditions.length <= 1 || isBusy"
                 @click="removeStructuredCondition(condition.id)"
               >
                 删除
@@ -647,7 +665,7 @@ watch([
                 {{ label }}
               </n-tag>
             </div>
-            <n-button type="primary" size="small" strong :loading="structuredLoading" @click="runStructuredScreen">
+            <n-button type="primary" size="small" strong :disabled="isBusy" :loading="structuredLoading" @click="runStructuredScreen">
               执行筛选
             </n-button>
           </div>
@@ -671,7 +689,7 @@ watch([
             :key="tpl.id"
             class="strategy-item"
             :data-active="tpl.id === activeId"
-            :disabled="loading"
+            :disabled="isBusy"
             @click="chooseStrategy(tpl.id)"
           >
             <span>
@@ -682,8 +700,8 @@ watch([
           </button>
           <div class="strategy-action">
             <span>选择策略后不会自动筛选，确认规则后再执行。</span>
-            <n-button type="primary" size="small" strong :disabled="!activeId || loading" :loading="loading" @click="runSelection()">
-              执行筛选
+            <n-button type="primary" size="small" strong :disabled="!activeId || isBusy" :loading="loading" @click="runSelection()">
+              执行策略筛选
             </n-button>
           </div>
         </div>
@@ -842,6 +860,11 @@ watch([
 .quick-examples button:hover {
   border-color: #A1A1AA;
   color: #111111;
+}
+
+.quick-examples button:disabled {
+  cursor: wait;
+  opacity: 0.56;
 }
 
 .strategy-picker {
@@ -1151,6 +1174,16 @@ h1 {
   font-weight: 700;
   text-align: left;
   cursor: pointer;
+}
+
+.stock-link:hover {
+  color: #0F766E;
+}
+
+.stock-link:focus-visible {
+  outline: 2px solid #99F6E4;
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 .stock-code,
