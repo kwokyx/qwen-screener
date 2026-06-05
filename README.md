@@ -224,6 +224,12 @@ docker compose exec -T backend python scripts/agent_reliability_smoke.py
 
 普通自动化测试不依赖真实 AI；后端用 fake model / 本地规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`；明确支持字段会先走本地确定性解析，复杂或非确定性请求若模型规划超过短超时，系统会保留安全本地兜底和 `fallback_reason`，不把部分满足条件的结果伪装成完整命中。完整本地浏览器 smoke：
 
+Agent query regression 是 RC 门禁的一部分，使用普通 pytest 固化真实中文语料，不依赖真实 AI：
+
+```bash
+docker compose exec -T backend pytest tests/test_agent_query_regression.py
+```
+
 ```bash
 cd frontend
 npm run smoke:auth
@@ -294,7 +300,7 @@ qwen-stock-screener/
 │   │   │   └── migrations.py
 │   │   └── prompts/            # 千问 prompt 模板
 │   ├── scripts/sync_data.py    # CLI 同步入口
-│   └── tests/                  # 9 个 pytest 文件
+│   └── tests/                  # pytest 回归测试
 │
 ├── frontend/
 │   ├── Dockerfile              # builder(node) + runtime(nginx)
