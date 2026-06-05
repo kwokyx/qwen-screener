@@ -180,6 +180,38 @@ async function dashboardSnapshot(cdp) {
   })()`)
 }
 
+async function openDataFreshness(cdp) {
+  const opened = await evaluate(cdp, `(() => {
+    const button = [...document.querySelectorAll('button')]
+      .find((el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().startsWith('数据 '));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`)
+  if (!opened) fail('Could not open data freshness panel.')
+  await waitForExpression(
+    cdp,
+    `document.body.innerText.includes('数据状态') && document.body.innerText.includes('日线覆盖')`,
+    'data freshness panel details',
+  )
+}
+
+async function dataFreshnessSnapshot(cdp) {
+  return evaluate(cdp, `(() => {
+    const text = document.body.innerText;
+    return {
+      hasStatusTitle: text.includes('数据状态'),
+      hasLatestDate: text.includes('最新'),
+      hasExpectedDate: text.includes('应至') || text.includes('未同步'),
+      hasCoverage: ['日线覆盖', '估值覆盖', '财务覆盖', '股息覆盖'].every((item) => text.includes(item)),
+      hasSyncJobs: ['日线行情', '估值数据', '财务指标', 'K线回填'].every((item) => text.includes(item)),
+      hasNextStepCopy: text.includes('下一步') || text.includes('立即同步') || text.includes('登录后同步'),
+      hasTradeDateHint: text.includes('任务更新时间不是行情日期') && text.includes('最新') && text.includes('覆盖率'),
+      sample: text.replace(/\\s+/g, ' ').slice(0, 800),
+    };
+  })()`)
+}
+
 async function mobileSnapshot(cdp) {
   return evaluate(cdp, `(() => {
     window.scrollTo(0, window.scrollY);
@@ -270,6 +302,14 @@ async function run() {
     if (!desktop.hasMarketStats && !desktop.alerts.length) fail('Market overview neither rendered nor failed clearly.', desktop)
     if (!desktop.hasMovers && !desktop.alerts.length) fail('Market movers neither rendered nor failed clearly.', desktop)
     if (!desktop.hasSectors && !desktop.alerts.length) fail('Sectors neither rendered nor failed clearly.', desktop)
+    await openDataFreshness(cdp)
+    const freshness = await dataFreshnessSnapshot(cdp)
+    if (!freshness.hasStatusTitle || !freshness.hasLatestDate || !freshness.hasExpectedDate) {
+      fail('Data freshness panel did not explain latest/expected trade dates.', freshness)
+    }
+    if (!freshness.hasCoverage || !freshness.hasSyncJobs || !freshness.hasTradeDateHint) {
+      fail('Data freshness panel did not expose coverage, sync jobs, and trade-date hint.', freshness)
+    }
 
     await setViewport(cdp, 390, 844, true)
     await navigate(cdp, `${BASE_URL}/dashboard`)
@@ -290,6 +330,7 @@ async function run() {
         cards: desktop.cards,
         rows: desktop.rows,
         alerts: desktop.alerts,
+        freshness,
         apiProbeTimings,
         apiTimings: desktop.apiTimings,
       },

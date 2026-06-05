@@ -172,12 +172,15 @@ const runtimeRows = computed(() => {
   const usedModel = meta.ai_status?.used === true || meta.ai_status?.source === 'ai_agent'
   const reason = fallbackReasonText(timings.fallback_reason)
   const modelAttempted = !usedModel && modelMs > 0
+  const fallbackByTimeout = modelAttempted && Boolean(timings.fallback_reason)
   const rows = [
     {
       label: '工具选择',
       value: usedModel
         ? `ReAct 模型 ${fmtRuntimeMs(modelMs)}`
-        : (modelAttempted ? `模型未完成 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`),
+        : (fallbackByTimeout
+            ? `模型超时，已用本地规则 ${fmtRuntimeMs(modelMs)}`
+            : (modelAttempted ? `模型未完成 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`)),
       state: usedModel ? 'model' : (modelAttempted ? 'skip' : 'local'),
     },
   ]

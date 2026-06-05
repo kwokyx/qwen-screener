@@ -284,6 +284,7 @@ function warningFor(name) {
 }
 
 function actionLabelFor(name) {
+  if (!canSync.value) return '登录后同步'
   if (isJobActive(name)) return '后台执行'
   return warningFor(name)?.can_fast_retry ? '修复状态' : '立即同步'
 }
@@ -417,7 +418,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 任务列表 -->
-        <div v-else :style="{ padding: '6px 0', maxHeight: '380px', overflowY: 'auto' }">
+        <div :style="{ padding: '6px 0', maxHeight: '380px', overflowY: 'auto' }">
           <div v-for="j in JOBS" :key="j.name" :style="{ padding: '10px 14px', borderTop: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', gap: '10px' }">
             <div :style="{ flex: 1, minWidth: 0 }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">

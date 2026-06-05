@@ -290,7 +290,7 @@ async function installMockChatSse(cdp) {
       function toolCall(name, label, status = 'done', result = {}, message = '') {
         return { id: name, name, label, status, result, message };
       }
-      function resultEvent(items, offset = 0, conditions = bankConditions, sortBy = 'score', resultTool = null, resultLabel = null) {
+      function resultEvent(items, offset = 0, conditions = bankConditions, sortBy = 'score', resultTool = null, resultLabel = null, timings = null) {
         const tool = resultTool || (sortBy === 'dividend_yield' ? 'result_sort' : 'stock_screen');
         const label = resultLabel || (tool === 'result_sort' ? '结果排序' : '股票筛选');
         return {
@@ -309,7 +309,7 @@ async function installMockChatSse(cdp) {
           ai_status: aiStatus,
           tool_trace: ['tool_router -> ' + tool, '调用 screener_engine.screen'],
           tool_calls: [toolCall(tool, label, 'done', { total: 3 })],
-          timings: { planning_ms: 4, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
+          timings: timings || { planning_ms: 4, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
         };
       }
       function textEvents(query, tool, label, answer, conditions = []) {
@@ -447,7 +447,12 @@ async function installMockChatSse(cdp) {
             tool_call: toolCall('stock_screen', '股票筛选', 'running'),
             timings: { planning_ms: 4, model_ms: 0, tool_ms: 12, fallback_reason: 'local_fast_path' },
           },
-          resultEvent(stocks, 0, bankConditions),
+          resultEvent(stocks, 0, bankConditions, 'score', null, null, {
+            planning_ms: 4,
+            model_ms: 8018,
+            tool_ms: 18,
+            fallback_reason: '模型 ReAct 步骤超过 8 秒，已使用本地规则兜底。',
+          }),
           { type: 'done' },
         ];
       }
@@ -616,6 +621,7 @@ async function run() {
     calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false))
     calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', 'ask_clarification', false))
     calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true))
+    await waitForExpression(cdp, 'document.body.innerText.includes("模型超时，已用本地规则")', 'slow model fallback runtime row')
     calls.push(await sendChat(cdp, '为什么这些股票排在前面', '招商银行排在前面', 'explain_result', false))
     calls.push(await sendChat(cdp, '按股息率排序', '南京银行', 'result_sort', true))
     calls.push(await sendChat(cdp, '换一批', '兴业银行', 'result_sort', true))

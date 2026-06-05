@@ -255,6 +255,8 @@ Unsupported metric 是进入模型前的本地快速路径。命中三年 CAGR/�
 
 Dashboard 市场概览使用本地 EOD 聚合缓存。后端启动后会在后台预热 `indices/sectors/movers/ticker`，数据同步成功后会清理并重新预热缓存；冷启动首个请求可能仍比热缓存慢，但不应长期阻塞页面。需要复测时，重启 backend/frontend 后连续请求 `/api/v1/market/indices`、`/api/v1/market/sectors?limit=20`、`/api/v1/market/movers?limit=10`、`/api/v1/market/ticker`、`/api/v1/health/data`，对比 cold/warm 耗时。
 
+Dashboard 顶部“数据”面板直接来自 `/health/data`：`latest_trade_date` 是本地最新交易日，`expected_trade_date` 是按交易日历推断应更新到的日期，`fresh=true` 只表示全市场日线覆盖已达标；仍需同时查看 `coverage`、`sync_warnings` 与执行中/异常任务。未登录也可查看任务状态，手动同步或修复异常需要登录后按面板的“下一步”执行。
+
 提交前可做一次定向密钥扫描：
 
 ```bash
