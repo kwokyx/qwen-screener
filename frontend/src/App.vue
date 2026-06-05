@@ -68,10 +68,8 @@ const naiveThemeOverrides = {
       <n-dialog-provider>
         <n-notification-provider>
           <ErrorBoundary>
-            <RouterView v-slot="{ Component }">
-              <Transition name="page-fade" mode="out-in">
-                <component :is="Component" />
-              </Transition>
+            <RouterView v-slot="{ Component, route: viewRoute }">
+              <component :is="Component" :key="viewRoute.fullPath" />
             </RouterView>
           </ErrorBoundary>
           <Toaster />

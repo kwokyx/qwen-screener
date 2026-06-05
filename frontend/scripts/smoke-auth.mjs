@@ -7,6 +7,13 @@ import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const BASE_URL = (process.env.SMOKE_BASE_URL || 'http://127.0.0.1:8080').replace(/\/$/, '')
+const USER_MENU_TRIGGER = `document.querySelector('.user-chip') || [...document.querySelectorAll('.n-avatar')]
+  .find((el) => {
+    const title = el.getAttribute('title') || '';
+    return title && title !== '点击登录' && title !== '通知';
+  })`
+const LOGIN_TRIGGER = `document.querySelector('.auth-link') || [...document.querySelectorAll('.n-avatar')]
+  .find((el) => (el.getAttribute('title') || '') === '点击登录')`
 
 function findChrome() {
   const candidates = [
@@ -121,7 +128,20 @@ async function waitForExpression(cdp, expression, label, timeoutMs = 15000) {
     }
     await delay(100)
   }
-  fail(`Timed out waiting for ${label}.`, lastError)
+  let snapshot = null
+  try {
+    snapshot = await evaluate(cdp, `(() => ({
+      href: location.href,
+      token: Boolean(localStorage.getItem('token')),
+      user: localStorage.getItem('user'),
+      hasUserChip: Boolean(document.querySelector('.user-chip')),
+      avatarTitles: [...document.querySelectorAll('.n-avatar')].map((el) => el.getAttribute('title') || ''),
+      text: document.body.innerText.replace(/\\s+/g, ' ').slice(0, 500),
+    }))()`)
+  } catch {
+    snapshot = lastError
+  }
+  fail(`Timed out waiting for ${label}.`, snapshot)
 }
 
 async function setViewport(cdp, width, height, mobile = false) {
@@ -163,6 +183,26 @@ async function clickDropdownOption(cdp, text) {
     return true;
   })()`)
   if (!clicked) fail(`Could not click dropdown option ${text}.`)
+}
+
+async function clickUserMenu(cdp) {
+  const clicked = await evaluate(cdp, `(() => {
+    const el = ${USER_MENU_TRIGGER};
+    if (!el) return false;
+    el.click();
+    return true;
+  })()`)
+  if (!clicked) fail('Could not click logged-in user menu.')
+}
+
+async function clickLoginEntry(cdp) {
+  const clicked = await evaluate(cdp, `(() => {
+    const el = ${LOGIN_TRIGGER};
+    if (!el) return false;
+    el.click();
+    return true;
+  })()`)
+  if (!clicked) fail('Could not click login entry.')
 }
 
 async function captchaCode(cdp) {
@@ -308,17 +348,17 @@ async function run() {
     await fillAuthForm(cdp, { username, password, captcha: await captchaCode(cdp) })
     await clickByText(cdp, '登 录', { selector: 'button' })
     await waitForExpression(cdp, 'location.pathname === "/dashboard"', 'login redirects to dashboard', 30000)
-    await waitForExpression(cdp, 'document.querySelector(".user-chip")', 'logged-in user chip')
+    await waitForExpression(cdp, `Boolean(${USER_MENU_TRIGGER})`, 'logged-in user menu')
 
-    await evaluate(cdp, `document.querySelector('.user-chip')?.click(); true`)
+    await clickUserMenu(cdp)
     await waitForExpression(cdp, 'document.body.innerText.includes("退出登录")', 'logout dropdown')
     await clickDropdownOption(cdp, '退出登录')
     await waitForExpression(cdp, 'location.pathname === "/dashboard" && !localStorage.getItem("token")', 'logged out dashboard')
-    await clickByText(cdp, '登录', { selector: '.auth-link' })
+    await clickLoginEntry(cdp)
     await navigateLogin(cdp)
     await fillAuthForm(cdp, { username, password, captcha: await captchaCode(cdp) })
     await clickByText(cdp, '登 录', { selector: 'button' })
-    await waitForExpression(cdp, 'location.pathname === "/dashboard" && document.querySelector(".user-chip")', 'relogin works', 30000)
+    await waitForExpression(cdp, `location.pathname === "/dashboard" && Boolean(${USER_MENU_TRIGGER})`, 'relogin works', 30000)
 
     const finalSnapshot = await loginSnapshot(cdp)
     console.log(JSON.stringify({
