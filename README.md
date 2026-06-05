@@ -236,6 +236,8 @@ python3 backend/scripts/release_smoke.py
 
 `release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、`stock_detail` 不筛选、真实筛选返回结果，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。AI 已配置但上游暂不可达时会输出 `WARN health/ai`，筛选链路继续走本地兜底并显示 `fallback_reason`；存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_smoke.py` 是手动真实 Agent 回归，会逐轮输出 `tool`、`screened/result/done`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时，便于定位慢在模型规划还是本地工具。
 
+Chat Agent 采用 bounded ReAct：模型每步只能选择一个白名单工具或给出最终回答；后端执行工具后把 observation 摘要回传给下一步。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答。前端只展示公开步骤摘要，不展示模型私有思考链。
+
 `/health/ai` 在运行时不会为首次上游探测阻塞页面：缓存未命中时先返回 `pending=true`，后台短超时刷新真实状态；已有过期状态时返回 `stale=true` 并继续刷新。AI 上游不可达属于预期降级路径，UI 会提示本地规则兜底，不应解读为本地筛选不可用。
 
 个股详情的实时行情只在短预算内等待外部 provider。超时、DNS 失败或熔断时，`/stock/{code}/quote` 会使用本地最新日线返回 `source=local`；页面仍应展示详情、K 线和本地指标，并明确不是实时行情。
@@ -312,13 +314,13 @@ qwen-stock-screener/
 | **认证** [`api/auth.py`](backend/app/api/auth.py) | JWT 注册 / 登录 / `me`；bcrypt 密码哈希；OAuth2 form 登录 | ✅ `test_auth_e2e.py` |
 | **股票数据** [`api/stock.py`](backend/app/api/stock.py) | 模糊搜索、个股详情（基本面 + 最新行情 + 财务）、K 线（任意 N 日，自动回填）、自选 CRUD | ✅ `test_stock_api.py` |
 | **筛选引擎** [`services/screener_engine.py`](backend/app/services/screener_engine.py) | 13 字段 × 7 操作符 × AND/OR 组合 + 排序 + 分页 | ✅ `test_screener.py` |
-| **千问 AI 客户端** [`services/qwen_client/`](backend/app/services/qwen_client/) | 三层降级（Function Calling → JSON 模式 → 容错 regex 抠 JSON）；OpenAI / DashScope 双后端切换；SSE 流式；指数退避重试；Redis 缓存 | — |
+| **千问 AI 客户端** [`services/qwen_client/`](backend/app/services/qwen_client/) | Function Calling + bounded ReAct step；OpenAI / DashScope 双后端切换；SSE 流式；指数退避重试；Redis 缓存 | ✅ `test_agent_planner.py` |
 | **NL 筛选** [`api/screener.py`](backend/app/api/screener.py) | 三个端点：结构化 / NL 一次性 / NL SSE 流式（thinking → parsed → result 三阶段） | ✅ `test_screener.py` |
 | **基本面分析** [`api/qwen.py`](backend/app/api/qwen.py) | 个股投资分析：一次性 + SSE 流式两个端点；1h Redis 缓存 | — |
 | **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
 | **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
 | **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
-| **智能选股 Agent** [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | 自然语言规划 → 结构化筛选工具 / 内置策略工具；AI 不可用时本地降级 | ✅ `test_strategy_agent.py` |
+| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | bounded ReAct：模型选工具 → 后端执行 → observation → 最终回答；AI 不可用时高置信度本地降级 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` |
 | **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | Baostock-first；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
 | **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
 | **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |
@@ -401,7 +403,7 @@ docker compose exec -T backend pytest
 | 详情页首次历史 K 线不足 | 先返回已有日线，后台补充历史；前端自动刷新图表，不阻塞详情页 |
 | 详情页实时行情上游慢或不可达 | 短预算等待 + 失败缓存 + 熔断；超时后返回本地日线 `source=local` |
 | OpenAI 兼容网关不支持 Responses API | 自动回退 Chat Completions，并在短期熔断窗口内跳过不兼容接口 |
-| 千问输出不是合法 JSON | 三层降级：FC → JSON 模式 → 容错 regex 抠 JSON |
+| 千问输出不是合法 JSON / 工具参数非法 | 后端 schema 强校验；ReAct step 最多修复一次，失败后只走高置信度本地兜底或澄清 |
 | 上游 AI 瞬时网络错误 | `/health/ai` pending/stale 快速返回 + 后台短超时刷新；前端降级后自动复测；业务调用指数退避重试 3 次 |
 | 全市场同步上游返回异常少 | `< DB 80%` 直接跳过该次任务（防止部分快照 wipe） |
 | Redis 不可达 | 静默回退到无缓存模式，业务不中断 |
@@ -414,6 +416,7 @@ docker compose exec -T backend pytest
 ## 已知限制
 
 - 财务字段是「最新一期」快照，适合当前选股，不适合严肃历史回测
+- Agent 只能筛选本地白名单字段：PE、PB、ROE、市值、股息率、营收同比、净利润同比、毛利率、负债率、行业、市场、收盘价、换手率；三年 CAGR、扣非净利润、经营现金流、EPS、PS/市销率、机构持仓、研报评级等会明确说明不支持，不返回部分满足结果
 - Baostock 分红接口不支持北交所 `.BJ`，这类股票股息率会明确显示缺失，不用假数据补 0
 - 分钟 K 依赖 Baostock 实时查询，失败时返回 503；前端明确提示，不会静默切到日线
 - 日 K 接口按旧到新返回；周 K/月 K 直接请求 Baostock 对应周期，不由前端临时聚合

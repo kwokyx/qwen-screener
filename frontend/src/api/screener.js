@@ -25,10 +25,16 @@ export async function screenNL(query) {
 }
 
 /**
- * 自然语言筛选（流式）。
+ * 自然语言筛选（流式 bounded ReAct）。
  * 事件 type:
- *   'thinking'  千问正在生成结构化条件，payload.text 是 token
- *   'parsed'    解析完成，payload.conditions 是结构化条件数组
+ *   'thinking'          公开进度文本
+ *   'planning'          Agent 计划元数据
+ *   'react_step'        模型选择下一步
+ *   'tool_start'        本地工具开始执行
+ *   'tool_observation'  工具 observation 摘要
+ *   'tool_done'         工具执行完成
+ *   'final'             ReAct 最终回答步骤
+ *   'parsed'            筛选参数校验完成，payload.conditions 是结构化条件数组
  *   'planned'   策略工具已确定，准备执行
  *   'screening' 引擎正在执行
  *   'result'    最终结果，payload = { items, total, parsed_conditions }

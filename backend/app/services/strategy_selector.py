@@ -518,12 +518,15 @@ def plan_agent_selection(
     query: str,
     limit: int = 50,
     context: dict[str, Any] | None = None,
+    *,
+    allow_model: bool = True,
+    model_failure_reason: str | None = None,
 ) -> StrategyAgentResponse:
     """Build an agent tool plan without executing project-owned tools.
 
     Model-first: when AI is configured and available, the model FC Agent
     selects the tool and generates structured args.  On any failure the
-    local rule Agent takes over as fallback.
+    local rules take over as fallback.
     """
     context = context or {}
     ai_configured_hint = _ai_configured()
@@ -538,6 +541,47 @@ def plan_agent_selection(
         if fast_path is not None:
             fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
             return fast_path
+
+    if not allow_model:
+        ai_configured = ai_configured_hint
+        warnings: list[str] = []
+        if is_strategy_design_query(query):
+            response = build_strategy_design_response(query, ai_configured=ai_configured)
+            if model_failure_reason:
+                response.warnings = [f"{model_failure_reason}，已使用本地规则兜底。"]
+            elif not ai_configured:
+                response.warnings = ["AI 服务未配置，当前使用本地规则；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。"]
+            return response
+        if model_failure_reason:
+            warnings.append(f"{model_failure_reason}，已使用本地规则兜底。")
+        elif not ai_configured:
+            warnings.append("AI 服务未配置，当前使用本地规则；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
+        plan = _plan_agent_locally(query, limit, ai_configured)
+        unsupported_metrics = _unsupported_metric_labels(query)
+        if plan.tool == "stock_screen" and unsupported_metrics:
+            response = build_unsupported_metric_response(
+                query,
+                unsupported_metrics,
+                ai_configured=ai_configured,
+            )
+            response.warnings = [
+                *warnings,
+                f"当前数据字段不支持：{'、'.join(unsupported_metrics)}。已停止筛选，避免返回不满足全部条件的股票。",
+            ]
+            return response
+        if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(query):
+            response = build_clarification_response(query, ai_configured=ai_configured)
+            response.warnings = [*warnings, "已阻止无条件全市场筛选。"]
+            response.tool_trace.append("未调用 screener_engine.screen：空条件筛选需要用户明确要求查看全部股票")
+            return response
+        plan.condition_labels = _condition_labels(plan.conditions)
+        return StrategyAgentResponse(
+            query=query,
+            plan=plan,
+            answer="工具规划完成，等待执行。",
+            warnings=warnings,
+            tool_calls=_planned_tool_calls(plan),
+        )
 
     ai_status = _ai_status()
     ai_configured = bool(ai_status.get("configured"))
@@ -554,12 +598,16 @@ def plan_agent_selection(
 
     # ── Model FC Agent (primary) ──
     model_plan = None
+    model_failure_reason: str | None = None
     if ai_configured and ai_available:
         try:
+            qwen_client.reset_plan_failure_reason()
             model_plan = qwen_client.plan_agent_turn(query, context)
+            model_failure_reason = qwen_client.last_plan_failure_reason()
         except Exception as e:
-            logger.warning("模型规划异常，已回退本地规则 Agent: {}", str(e)[:120])
-            warnings.append("模型规划暂不可用，已回退本地规则 Agent。")
+            logger.warning("模型规划异常，已使用本地规则兜底: {}", str(e)[:120])
+            model_failure_reason = "模型规划异常"
+            warnings.append("模型规划异常，已使用本地规则兜底。")
 
     if model_plan is not None:
         non_executing = _build_non_executing_model_response(query, context, model_plan)
@@ -582,7 +630,7 @@ def plan_agent_selection(
         )
         # Extra guard: implicit empty conditions without explicit all-stock
         if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(query):
-            warnings.append("模型未返回有效筛选条件，已回退本地规则。")
+            warnings.append("模型未返回有效筛选条件，已使用本地规则兜底。")
             plan = _plan_agent_locally(query, limit, ai_configured)
         else:
             tool_trace.append("模型 FC Agent 已选择工具并校验通过")
@@ -591,13 +639,27 @@ def plan_agent_selection(
         plan = _plan_agent_locally(query, limit, ai_configured)
         if ai_configured and not ai_available:
             reason = ai_status.get("reason") or "AI 服务不可用"
-            warnings.append(f"AI 服务已配置但当前不可用：{reason}。已使用本地规则 Agent 规划。")
+            warnings.append(f"AI 服务已配置但当前不可用：{reason}。已使用本地规则兜底。")
         elif ai_configured and ai_available:
-            warnings.append("模型未生成有效规划，已回退本地规则 Agent。")
+            reason = model_failure_reason or "模型未生成有效规划"
+            warnings.append(f"{reason}，已使用本地规则兜底。")
         elif not ai_configured:
-            warnings.append("AI 服务未配置，当前使用本地规则 Agent 规划；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
+            warnings.append("AI 服务未配置，当前使用本地规则；配置 OPENAI_API_KEY 或 DASHSCOPE_API_KEY 后会优先使用 AI 解析。")
 
     # ── Safety guard ──
+    unsupported_metrics = _unsupported_metric_labels(query)
+    if plan.tool == "stock_screen" and unsupported_metrics:
+        response = build_unsupported_metric_response(
+            query,
+            unsupported_metrics,
+            ai_configured=ai_configured,
+        )
+        response.warnings = [
+            *warnings,
+            f"当前数据字段不支持：{'、'.join(unsupported_metrics)}。已停止筛选，避免返回不满足全部条件的股票。",
+        ]
+        return response
+
     if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(query):
         response = build_clarification_response(query, ai_configured=ai_configured)
         response.warnings = [*warnings, "已阻止无条件全市场筛选。"]
@@ -782,6 +844,9 @@ def plan_chat_agent(
     query: str,
     context: dict[str, Any] | None = None,
     limit: int = 50,
+    *,
+    allow_model: bool = True,
+    model_failure_reason: str | None = None,
 ) -> StrategyAgentResponse:
     """Route and plan a chat turn without executing stock tools."""
     context = context or {}
@@ -790,6 +855,15 @@ def plan_chat_agent(
     if fast_path is not None:
         fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
         return fast_path
+
+    if not allow_model:
+        return plan_agent_selection(
+            query,
+            limit=limit,
+            context=context,
+            allow_model=False,
+            model_failure_reason=model_failure_reason,
+        )
 
     model_fallback: StrategyAgentResponse | None = None
     ai_status = _ai_status()
@@ -806,9 +880,18 @@ def run_chat_agent(
     query: str,
     context: dict[str, Any] | None = None,
     limit: int = 50,
+    *,
+    allow_model: bool = True,
+    model_failure_reason: str | None = None,
 ) -> StrategyAgentResponse:
     """Plan and execute a chat turn with optional previous-result context."""
-    response = plan_chat_agent(query, context=context, limit=limit)
+    response = plan_chat_agent(
+        query,
+        context=context,
+        limit=limit,
+        allow_model=allow_model,
+        model_failure_reason=model_failure_reason,
+    )
     return execute_agent_plan(db, response, limit=limit)
 
 
@@ -1003,6 +1086,36 @@ def build_clarification_response(query: str, ai_configured: bool = False) -> Str
         tool_trace=[
             "tool_router -> ask_clarification",
             "未调用 screener_engine.screen：缺少风格、行业或指标约束",
+        ],
+        tool_calls=_planned_tool_calls(plan),
+    )
+
+
+def build_unsupported_metric_response(
+    query: str,
+    metrics: list[str],
+    ai_configured: bool = False,
+) -> StrategyAgentResponse:
+    metric_text = "、".join(metrics)
+    plan = StrategyAgentPlan(
+        tool="ask_clarification",
+        tool_label="补充追问",
+        reasoning="用户包含当前本地字段无法验证的指标；为避免返回不满足全部条件的股票，先说明字段限制而不执行筛选。",
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    answer = "\n".join([
+        f"我不能直接按「{query}」筛选，因为当前本地数据字段还不支持：{metric_text}。",
+        "为避免把只满足部分条件的股票误当成完整命中，本轮没有执行筛选。",
+        "可以改成当前已支持的字段，例如：PE 低于 15、ROE 大于 15、最新季度净利润同比大于 20、消费股。",
+    ])
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=answer,
+        tool_trace=[
+            "tool_router -> ask_clarification",
+            f"未调用 screener_engine.screen：当前字段无法验证 {metric_text}",
         ],
         tool_calls=_planned_tool_calls(plan),
     )
@@ -1467,31 +1580,26 @@ def _plan_agent_locally(query: str, limit: int, ai_configured: bool) -> Strategy
 
 
 def _local_conditions(query: str) -> list[FilterCondition]:
-    conditions: list[FilterCondition] = []
+    explicit_conditions = _explicit_metric_conditions(query)
+    conditions: list[FilterCondition] = list(explicit_conditions)
 
     if any(k in query for k in ("低估值", "便宜", "估值低")):
-        conditions.extend([
-            FilterCondition(field="pe", op="lt", value=15),
-            FilterCondition(field="pb", op="lt", value=2),
-        ])
+        _append_if_missing_field(conditions, FilterCondition(field="pe", op="lt", value=15))
+        _append_if_missing_field(conditions, FilterCondition(field="pb", op="lt", value=2))
     if any(k in query for k in ("高分红", "股息", "分红")):
-        conditions.append(FilterCondition(field="dividend_yield", op="gt", value=3))
-    if any(k in query for k in ("成长", "高增长")):
-        conditions.extend([
-            FilterCondition(field="revenue_yoy", op="gt", value=20),
-            FilterCondition(field="profit_yoy", op="gt", value=20),
-        ])
+        _append_if_missing_field(conditions, FilterCondition(field="dividend_yield", op="gt", value=3))
+    if any(k in query for k in ("成长", "高增长")) and not explicit_conditions:
+        _append_if_missing_field(conditions, FilterCondition(field="revenue_yoy", op="gt", value=20))
+        _append_if_missing_field(conditions, FilterCondition(field="profit_yoy", op="gt", value=20))
     if any(k in query for k in ("白马", "优质")):
-        conditions.extend([
-            FilterCondition(field="roe", op="gt", value=15),
-            FilterCondition(field="market_cap", op="gt", value=500),
-        ])
+        _append_if_missing_field(conditions, FilterCondition(field="roe", op="gt", value=15))
+        _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="gt", value=500))
     if "小盘" in query:
-        conditions.append(FilterCondition(field="market_cap", op="lt", value=100))
+        _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="lt", value=100))
     if "中盘" in query:
-        conditions.append(FilterCondition(field="market_cap", op="between", value=[100, 500]))
+        _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="between", value=[100, 500]))
     if any(k in query for k in ("大盘", "蓝筹", "龙头")):
-        conditions.append(FilterCondition(field="market_cap", op="gt", value=500))
+        _append_if_missing_field(conditions, FilterCondition(field="market_cap", op="gt", value=500))
 
     industry_terms = [
         "银行", "白酒", "半导体", "光伏", "医药", "新能源", "新能源车", "汽车",
@@ -1499,7 +1607,76 @@ def _local_conditions(query: str) -> list[FilterCondition]:
     ]
     matched = [term for term in industry_terms if term in query]
     if matched:
-        conditions.append(FilterCondition(field="industry", op="in", value=matched))
+        _append_if_missing_field(conditions, FilterCondition(field="industry", op="in", value=matched))
+
+    return conditions
+
+
+def _append_if_missing_field(conditions: list[FilterCondition], condition: FilterCondition) -> None:
+    if any(item.field == condition.field for item in conditions):
+        return
+    conditions.append(condition)
+
+
+def _unsupported_metric_labels(query: str) -> list[str]:
+    q = query.strip().lower()
+    labels: list[str] = []
+    has_cagr = bool(re.search(r"(?:复合增速|复合增长率|复合增长|cagr)", q, re.IGNORECASE))
+    if not has_cagr:
+        return labels
+    if re.search(r"(?:净利润|净利|利润)", q):
+        labels.append("近三年净利润复合增速")
+    if re.search(r"(?:营收|营业收入|收入)", q):
+        labels.append("近三年营收复合增速")
+    if not labels:
+        labels.append("复合增速/CAGR")
+    return labels
+
+
+def _explicit_metric_conditions(query: str) -> list[FilterCondition]:
+    q = query.strip()
+    q_lower = q.lower()
+    conditions: list[FilterCondition] = []
+
+    def add(condition: FilterCondition) -> None:
+        _append_if_missing_field(conditions, condition)
+
+    metric_patterns = [
+        ("roe", r"(?:roe|净资产收益率)", re.IGNORECASE),
+        ("profit_yoy", r"(?:净利润同比|利润同比|净利同比)", 0),
+        ("revenue_yoy", r"(?:营收同比|营业收入同比|收入同比)", 0),
+        ("dividend_yield", r"(?:股息率|股息|分红率)", 0),
+        ("market_cap", r"(?:市值|总市值)", 0),
+        ("pe", r"(?:pe|市盈率)", re.IGNORECASE),
+        ("pb", r"(?:pb|市净率)", re.IGNORECASE),
+        ("gross_margin", r"(?:毛利率)", 0),
+        ("debt_ratio", r"(?:资产负债率|负债率)", 0),
+        ("turnover", r"(?:换手率)", 0),
+        ("close", r"(?:股价|收盘价|现价)", 0),
+    ]
+    op_patterns = [
+        ("gte", r"(?:不低于|不少于|至少|大于等于|高于等于|>=|≥)"),
+        ("lte", r"(?:不高于|不超过|至多|小于等于|低于等于|<=|≤)"),
+        ("gt", r"(?:大于|高于|超过|超|>|＞)"),
+        ("lt", r"(?:小于|低于|少于|<|＜)"),
+    ]
+
+    for field, metric_re, metric_flags in metric_patterns:
+        for op, op_re in op_patterns:
+            pattern = rf"{metric_re}\s*(?:为|是|在)?\s*{op_re}\s*([0-9]+(?:\.[0-9]+)?)\s*%?"
+            match = re.search(pattern, q, metric_flags)
+            if match:
+                add(FilterCondition(field=field, op=op, value=float(match.group(1))))
+                break
+
+    if re.search(r"(?:净利润同比|利润同比|净利同比)[^，。；、,;]*正增长", q):
+        add(FilterCondition(field="profit_yoy", op="gt", value=0))
+    if re.search(r"(?:营收同比|营业收入同比|收入同比)[^，。；、,;]*正增长", q):
+        add(FilterCondition(field="revenue_yoy", op="gt", value=0))
+    if "盈利正增长" in q or "利润正增长" in q:
+        add(FilterCondition(field="profit_yoy", op="gt", value=0))
+    if re.search(r"(?:roe|净资产收益率)[^0-9]*(?:高|好|强)", q_lower):
+        add(FilterCondition(field="roe", op="gt", value=15))
 
     return conditions
 
@@ -1917,7 +2094,9 @@ def _field_labels() -> dict[str, str]:
 
 def _format_condition_value(value) -> str:
     if isinstance(value, list):
-        return "、".join(str(item) for item in value)
+        return "、".join(_format_condition_value(item) for item in value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else f"{value:.2f}".rstrip("0").rstrip(".")
     return str(value)
 
 

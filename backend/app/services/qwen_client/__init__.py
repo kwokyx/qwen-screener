@@ -3,6 +3,7 @@
 公开能力：
 - parse_nl_query(query)           自然语言 → ScreenRequest（FC + 缓存 + JSON 模式兜底）
 - plan_agent_turn(query, context) 模型 FC Agent 规划（六工具，校验后返回）
+- plan_react_step(query, context, observations) bounded ReAct 单步决策
 - analyze_stock(snapshot)         基于基本面数据生成投资分析（缓存）
 - stream_analyze_stock(snapshot)  流式版本，yields 字符串 chunks
 - stream_call(prompt)             裸流式调用（不预设 prompt 模板）
@@ -22,12 +23,22 @@ from loguru import logger
 from app.config import settings
 from app.schemas.screener import ScreenRequest
 
-from .agent_planner import plan_agent_turn
+from .agent_planner import (
+    AgentReactDecision,
+    last_plan_failure_reason,
+    plan_agent_turn,
+    plan_react_step,
+    reset_plan_failure_reason,
+)
 from .transport import call as _call, openai_client, probe_health, stream_call
 
 __all__ = [
     "parse_nl_query",
     "plan_agent_turn",
+    "plan_react_step",
+    "AgentReactDecision",
+    "last_plan_failure_reason",
+    "reset_plan_failure_reason",
     "analyze_stock",
     "stream_analyze_stock",
     "stream_call",

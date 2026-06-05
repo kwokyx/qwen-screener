@@ -28,7 +28,7 @@
 | NL 筛选（一次性 + SSE 流式三阶段） | [`api/screener.py`](../backend/app/api/screener.py) | ✅ `test_screener.py`（含端到端） |
 | 千问 AI 客户端（FC + JSON + regex 三层降级 + 双后端切换 + 缓存） | [`services/qwen_client/`](../backend/app/services/qwen_client/) | ✅ `test_qwen_transport.py` + 手动端到端验证 |
 | 个股投资分析（一次 + SSE 流式） | [`api/qwen.py`](../backend/app/api/qwen.py) | ⚠️ 无单测，已手动验证 |
-| Agent 智能选股（结构化筛选工具 + 策略选股工具 + 本地降级规划） | [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_strategy_scoring.py` |
+| Agent 智能选股（bounded ReAct + 结构化筛选工具 + 策略选股工具 + 本地降级规划） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_scoring.py` |
 | 对话历史持久化（跨设备同步） | [`api/chat.py`](../backend/app/api/chat.py) | ✅ `test_chat_sessions.py` |
 | 通知中心（CRUD + 已读 / 全部已读） | [`api/notification.py`](../backend/app/api/notification.py) | ✅ `test_notifications.py` |
 | 数据同步（Baostock 优先，AKShare 少量兜底） | [`services/data_sync.py`](../backend/app/services/data_sync.py) | ✅ `test_data_sync_guard.py` + `test_dividend_sync.py` |
@@ -57,7 +57,7 @@
 **位置**：[`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) + [`views/Strategy.vue`](../frontend/src/views/Strategy.vue)
 
 **能跑通的部分** ✅：
-- 自然语言 Agent 先规划工具，再调用真实本地数据筛选
+- 自然语言 Agent 使用 bounded ReAct：模型选择工具，后端执行本地工具并生成 observation，再输出最终回答
 - 结构化条件筛选：13 字段 × 7 操作符 × AND/OR
 - 6 个项目内置日线策略：海龟突破、均线放量、RPS 强势突破、高位窄幅整理、涨停后承接、趋势急跌修复
 - 数据不足的股票跳过或在结果表明确标记缺失字段，不合成行情
@@ -131,7 +131,7 @@ cd frontend && npm run smoke:dashboard && npm run smoke:strategy && npm run smok
 
 `release_smoke.py` 是 P0/P1 交付封版检查：确认 Docker 服务健康、AI/数据健康、SSE fast-path 不走模型、`stock_detail` 不筛选、真实筛选返回结果，并执行定向密钥扫描。脚本末尾会输出 `pass/warn/fail` 汇总；若 `/health/ai` 返回 `ok=false`，脚本会以 `WARN` 明示上游不可达并继续验证本地兜底链路；若 `/health/data` 返回 `fresh=true` 但 `sync_warnings` 非空，或存在正在运行的重同步任务，应按 WARN 的下一步建议处理，不要把它解读成所有同步任务都成功。
 
-普通自动化测试不依赖真实 AI；`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
+普通自动化测试不依赖真实 AI；后端用 fake ReAct step 验证模型 action、工具 observation、重复工具拦截、unsupported metric 安全拦截和 SSE 顺序。`smoke:chat` 在浏览器内 mock SSE，只验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复。运行时 `/health/ai` 缓存未命中会先返回 `pending=true` 并后台刷新，外部 AI 网络慢不应拖慢 dashboard/chat/strategy。
 
 ### 🔧 4.2 「价值分」不是 AI 评分
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)

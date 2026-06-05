@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.schemas.screener import FilterCondition, ScreenRequest
 from app.main import app
 from app.services import qwen_client, strategy_selector
-from app.services.qwen_client.agent_planner import AgentPlanResult
+from app.services.qwen_client.agent_planner import AgentPlanResult, AgentReactDecision
 
 
 def _events(body: str) -> list[dict]:
@@ -54,6 +54,29 @@ def _context_from_events(events: list[dict]) -> dict:
 
 def _event_types(events: list[dict]) -> list[str]:
     return [event["type"] for event in events]
+
+
+def _patch_react_from_single_plan(monkeypatch, planner):
+    """Adapt existing single-tool fake planners to the ReAct step API."""
+
+    def plan_react_step(query, context=None, observations=None, step_index=1):
+        if observations:
+            return AgentReactDecision(
+                kind="final",
+                public_reason="模型基于工具 observation 生成最终回答。",
+                final_answer="已根据工具结果生成回答。",
+            )
+        plan = planner(query, context)
+        if plan is None:
+            return None
+        return AgentReactDecision(
+            kind="action",
+            public_reason=plan.reasoning,
+            plan=plan,
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", planner)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
 
 def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, monkeypatch):
@@ -151,7 +174,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
             )
         raise AssertionError(f"unexpected query: {query}")
 
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", plan_agent_turn)
+    _patch_react_from_single_plan(monkeypatch, plan_agent_turn)
 
     client = TestClient(app)
     context = {}
@@ -216,7 +239,7 @@ def test_nl_stream_no_context_fast_paths_never_screen_or_call_model(db, seed_sto
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("no-context local fast-path should not execute screening")
 
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", fail_plan)
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     client = TestClient(app)
@@ -246,7 +269,7 @@ def test_nl_stream_model_planning_failure_falls_back_to_local_screen(db, seed_st
     def fail_plan(_query, _context=None):
         raise RuntimeError("planner timeout test")
 
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", fail_plan)
 
     client = TestClient(app)
     events = _stream_events(client, "低估值高分红的银行股", context={})
@@ -264,12 +287,40 @@ def test_nl_stream_model_planning_failure_falls_back_to_local_screen(db, seed_st
         "label": "本地规则兜底",
         "fallback": True,
     }
-    assert "模型规划暂不可用" in result["fallback_reason"]
+    assert "模型 ReAct 异常" in result["fallback_reason"]
     assert result["parsed_conditions"]
     assert any(
         call["name"] == "stock_screen" and call["result"]["total"] == result["total"]
         for call in result["tool_calls"]
     )
+
+
+def test_nl_stream_blocks_unsupported_profit_cagr_without_partial_screen(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("unsupported CAGR query must not execute a partial screen")
+
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(strategy_selector.qwen_client, "reset_plan_failure_reason", lambda: None)
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", lambda _query, context=None, observations=None, step_index=1: None)
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    client = TestClient(app)
+    events = _stream_events(client, "找出 PE 低于 15、ROE>15%、近三年净利润复合增速>20%的消费股", context={})
+    event_types = _event_types(events)
+
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    assert event_types[-1] == "done"
+    terminal = next(event for event in events if event["type"] == "agent")
+    assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["conditions"] == []
+    assert "近三年净利润复合增速" in terminal["answer"]
+    assert "模型规划超过 10 秒" in terminal["fallback_reason"]
 
 
 def test_nl_stream_design_request_skips_ai_and_screening(db, seed_stocks, monkeypatch):
@@ -613,9 +664,8 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
         "_ai_status",
         lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_agent_turn",
+    _patch_react_from_single_plan(
+        monkeypatch,
         lambda _query, _context=None: AgentPlanResult(
             tool="stock_screen",
             tool_label="结构化股票筛选",
@@ -674,7 +724,90 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
     assert any(call["name"] == "stock_screen" and call["result"]["total"] == 1 for call in result["tool_calls"])
 
 
-def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks, monkeypatch):
+def test_nl_stream_react_final_uses_tool_observation(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    observed = {}
+
+    def plan_react_step(query, context=None, observations=None, step_index=1):
+        if step_index == 1:
+            return AgentReactDecision(
+                kind="action",
+                public_reason="先筛选低估值银行股。",
+                plan=AgentPlanResult(
+                    tool="stock_screen",
+                    tool_label="结构化股票筛选",
+                    reasoning="AI 解析低估值银行筛选",
+                    conditions=[
+                        FilterCondition(field="industry", op="in", value=["银行"]),
+                        FilterCondition(field="pe", op="lt", value=15),
+                    ],
+                    sort_by="dividend_yield",
+                    sort_desc=True,
+                ),
+            )
+        observed["payload"] = observations
+        assert observations and observations[0]["total"] == 1
+        return AgentReactDecision(
+            kind="final",
+            public_reason="模型基于筛选 observation 生成最终回答。",
+            final_answer="观察到命中 1 只，前排是招商银行。",
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
+    client = TestClient(app)
+    events = _stream_events(client, "低估值高分红的银行股", context={})
+    event_types = _event_types(events)
+
+    assert {"react_step", "tool_start", "tool_observation", "tool_done", "final"} <= set(event_types)
+    result = next(event for event in events if event["type"] == "result")
+    assert result["answer"] == "观察到命中 1 只，前排是招商银行。"
+    assert result["react_steps"]
+    assert observed["payload"][0]["items"][0]["code"] == "600036.SH"
+
+
+def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    plan = AgentPlanResult(
+        tool="stock_screen",
+        tool_label="结构化股票筛选",
+        reasoning="重复动作测试",
+        conditions=[
+            FilterCondition(field="industry", op="in", value=["银行"]),
+            FilterCondition(field="pe", op="lt", value=15),
+        ],
+        sort_by="dividend_yield",
+        sort_desc=True,
+    )
+
+    def plan_react_step(query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(kind="action", public_reason="重复选择同一工具", plan=plan)
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
+    client = TestClient(app)
+    events = _stream_events(client, "低估值高分红的银行股", context={})
+    result = next(event for event in events if event["type"] == "result")
+
+    assert result["total"] == 1
+    assert "重复调用相同工具参数" in result["fallback_reason"]
+    assert any("重复调用相同工具参数" in warning for warning in result["warnings"])
+
+
+def test_nl_stream_react_blocks_unsupported_metric_even_when_model_screens(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("unsupported model action must not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -682,7 +815,43 @@ def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks
     )
     monkeypatch.setattr(
         strategy_selector.qwen_client,
-        "plan_agent_turn",
+        "plan_react_step",
+        lambda _query, context=None, observations=None, step_index=1: AgentReactDecision(
+            kind="action",
+            public_reason="模型尝试筛选，但包含不支持指标。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="错误地忽略 CAGR 的筛选",
+                conditions=[
+                    FilterCondition(field="pe", op="lt", value=15),
+                    FilterCondition(field="roe", op="gt", value=15),
+                    FilterCondition(field="industry", op="in", value=["消费"]),
+                ],
+            ),
+        ),
+    )
+
+    client = TestClient(app)
+    events = _stream_events(client, "找出 PE 低于 15、ROE>15%、近三年净利润复合增速>20%的消费股", context={})
+    event_types = _event_types(events)
+    terminal = next(event for event in events if event["type"] == "agent")
+
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["plan"]["ai_used"] is True
+    assert "近三年净利润复合增速" in terminal["answer"]
+
+
+def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    _patch_react_from_single_plan(
+        monkeypatch,
         lambda _query, _context=None: AgentPlanResult(
             tool="strategy_design",
             tool_label="策略设计",
@@ -722,9 +891,8 @@ def test_nl_stream_fast_path_explain_result_skips_screening(db, seed_stocks, mon
         "_ai_status",
         lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_agent_turn",
+    _patch_react_from_single_plan(
+        monkeypatch,
         lambda _query, _context=None: AgentPlanResult(
             tool="explain_result",
             tool_label="结果解释",
@@ -772,9 +940,8 @@ def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
         "_ai_status",
         lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_agent_turn",
+    _patch_react_from_single_plan(
+        monkeypatch,
         lambda _query, _context=None: AgentPlanResult(
             tool="strategy_select",
             tool_label="策略选股",
@@ -823,7 +990,7 @@ def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypa
 
     events = _events(body)
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在选择工具" in t for t in thinking_texts)
+    assert any("正在选择下一步" in t for t in thinking_texts)
     assert any("已选择工具" in t for t in thinking_texts)
     assert any("参数校验已完成" in t for t in thinking_texts)
     assert any("正在执行本地工具：股票筛选" in t for t in thinking_texts)

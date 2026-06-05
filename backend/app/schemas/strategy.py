@@ -103,3 +103,4 @@ class StrategyAgentResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     tool_trace: list[str] = Field(default_factory=list)
     tool_calls: list[StrategyToolCall] = Field(default_factory=list)
+    react_steps: list[dict[str, Any]] = Field(default_factory=list)

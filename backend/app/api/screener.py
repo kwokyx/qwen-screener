@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.screener import NLScreenRequest, ScreenRequest, ScreenResponse
-from app.services import qwen_client, screener_engine, strategy_selector
+from app.services import agent_react, qwen_client, screener_engine, strategy_selector
 
 
 router = APIRouter(prefix="/screener", tags=["screener"])
@@ -28,7 +28,7 @@ def run_nl_screen(req: NLScreenRequest, db: Session = Depends(get_db)):
     """自然语言筛选：千问解析 → 引擎执行（一次性返回）"""
     if req.context:
         try:
-            response = strategy_selector.run_chat_agent(
+            response = agent_react.run_chat_react_agent(
                 db,
                 req.query,
                 context=req.context,
@@ -98,6 +98,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "warnings": response.warnings,
             "tool_trace": response.tool_trace,
             "tool_calls": [call.model_dump() for call in response.tool_calls],
+            "react_steps": response.react_steps,
             "timings": timing_payload,
             "planning_ms": timing_payload["planning_ms"],
             "model_ms": timing_payload["model_ms"],
@@ -138,59 +139,82 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             return "local_rules"
         return None
 
-    def gen():
-        timings = {
-            "planning_ms": 0,
-            "model_ms": 0,
-            "tool_ms": 0,
-            "fallback_reason": None,
+    def _react_timings(response) -> dict:
+        steps = response.react_steps or []
+        model_ms = sum(int(step.get("model_ms") or 0) for step in steps)
+        tool_ms = sum(
+            int(step.get("tool_ms") or 0)
+            for step in steps
+            if step.get("type") == "tool_done"
+        )
+        fallback_reason = next(
+            (
+                step.get("fallback_reason")
+                for step in steps
+                if step.get("fallback_reason")
+            ),
+            _fallback_reason(response),
+        )
+        return {
+            "planning_ms": model_ms,
+            "model_ms": model_ms if response.plan.ai_used else 0,
+            "tool_ms": tool_ms,
+            "fallback_reason": fallback_reason,
         }
-        yield event({"type": "thinking", "text": "正在选择工具（优先本地快速判断，必要时调用模型）…\n"})
+
+    def gen():
+        yield event({"type": "thinking", "text": "正在选择下一步（bounded ReAct，必要时调用模型）…\n"})
         try:
             planning_started = time.perf_counter()
-            response = strategy_selector.plan_chat_agent(
+            response = agent_react.run_chat_react_agent(
+                db,
                 req.query,
                 context=req.context or {},
                 limit=50,
             )
-            timings["planning_ms"] = int((time.perf_counter() - planning_started) * 1000)
         except Exception as e:
             logger.exception("Agent 规划失败")
             yield event({"type": "error", "message": f"智能筛选规划失败: {e}"})
             return
 
+        timings = _react_timings(response)
+        wall_ms = int((time.perf_counter() - planning_started) * 1000)
+        timings["planning_ms"] = max(int(timings.get("planning_ms") or 0), wall_ms)
         plan = response.plan
-        model_attempted = plan.ai_used or any("模型" in warning for warning in response.warnings)
-        timings["model_ms"] = timings["planning_ms"] if model_attempted else 0
-        timings["fallback_reason"] = _fallback_reason(response)
         source = "AI 模型" if plan.ai_used else "本地规则"
         effective_limit = min(max(plan.limit, 1), 50)
         logger.info(
-            "Agent SSE 规划完成: tool={} source={} validated=true conditions={} planning_ms={} model_ms={} fallback_reason={}",
+            "Agent SSE ReAct 完成: tool={} source={} validated=true conditions={} planning_ms={} model_ms={} tool_ms={} fallback_reason={}",
             plan.tool,
             "model" if plan.ai_used else "local",
             len(plan.conditions),
             timings["planning_ms"],
             timings["model_ms"],
+            timings["tool_ms"],
             timings["fallback_reason"],
         )
         yield event({"type": "thinking", "text": f"已选择工具：{plan.tool_label}（{source}，模型耗时 {timings['model_ms']}ms）\n"})
         yield event({"type": "thinking", "text": "参数校验已完成\n"})
 
         common = response_payload(response, timings)
+        pre_tool_timings = {**timings, "tool_ms": 0}
+        pre_tool_common = response_payload(response, pre_tool_timings)
         yield event({"type": "planning", **common})
+        for step in response.react_steps:
+            yield event(step)
         for call in response.tool_calls:
             yield event({"type": "tool_call", "tool_call": call.model_dump()})
 
-        if plan.tool == "stock_screen":
+        if response.screen_result is not None:
             logger.info(
-                "Agent SSE 执行工具: tool=stock_screen conditions={} limit={}",
+                "Agent SSE 返回筛选结果: tool=stock_screen conditions={} limit={} total={}",
                 len(plan.conditions),
                 effective_limit,
+                response.screen_result.total,
             )
             yield event({
                 "type": "parsed",
-                **common,
+                **pre_tool_common,
                 "logic": plan.logic,
                 "sort_by": plan.sort_by,
                 "sort_desc": plan.sort_desc,
@@ -217,22 +241,6 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                     "message": "正在调用本地筛选引擎",
                 },
             })
-            try:
-                tool_started = time.perf_counter()
-                response = strategy_selector.execute_agent_plan(db, response, limit=effective_limit)
-                timings["tool_ms"] = int((time.perf_counter() - tool_started) * 1000)
-            except Exception as e:
-                logger.exception("结构化股票筛选失败")
-                yield event({"type": "error", "message": f"筛选工具执行失败: {e}"})
-                return
-            if response.screen_result is None:
-                yield event({"type": "error", "message": "筛选工具没有返回结果"})
-                return
-            logger.info(
-                "Agent SSE 工具完成: tool=stock_screen total={} tool_ms={}",
-                response.screen_result.total,
-                timings["tool_ms"],
-            )
             yield event({
                 "type": "result",
                 **response_payload(response, timings),
@@ -250,13 +258,14 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             yield event({"type": "done"})
             return
 
-        if plan.tool == "strategy_select":
+        if response.strategy_result is not None:
             logger.info(
-                "Agent SSE 执行工具: tool=strategy_select strategy_id={} limit={}",
+                "Agent SSE 返回策略结果: tool=strategy_select strategy_id={} limit={} total={}",
                 plan.strategy_id,
                 effective_limit,
+                response.strategy_result.total,
             )
-            yield event({"type": "planned", **common})
+            yield event({"type": "planned", **pre_tool_common})
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
             yield event({
                 "type": "screening",
@@ -272,19 +281,6 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                     "message": "正在执行策略选股",
                 },
             })
-            try:
-                tool_started = time.perf_counter()
-                response = strategy_selector.execute_agent_plan(db, response, limit=effective_limit)
-                timings["tool_ms"] = int((time.perf_counter() - tool_started) * 1000)
-            except Exception as e:
-                logger.exception("策略选股失败")
-                yield event({"type": "error", "message": f"策略选股执行失败: {e}"})
-                return
-            logger.info(
-                "Agent SSE 工具完成: tool=strategy_select total={} tool_ms={}",
-                response.strategy_result.total if response.strategy_result else 0,
-                timings["tool_ms"],
-            )
 
         # explain_result / stock_detail / ask_clarification are non-executing
         if plan.tool in ("explain_result", "stock_detail", "ask_clarification"):

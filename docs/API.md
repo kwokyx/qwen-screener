@@ -268,17 +268,28 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 ---
 
 ### POST `/screener/nl/stream` ⚡
-自然语言筛选 **SSE 流式版本**，前端可以即时看到三个阶段。
+自然语言筛选 **SSE 流式版本**。Chat Agent 使用 bounded ReAct：模型选择一个白名单工具，后端执行本地工具并生成 observation，模型或安全兜底再给出最终回答。
 
 **协议**：每帧 `data: {json}\n\n`，`payload.type` ∈
 | type | 含义 | 字段 |
 |---|---|---|
-| `thinking` | 千问正在生成 JSON，token 实时回流 | `text` |
-| `parsed` | JSON 完整解析成功 | `conditions, logic, sort_by, sort_desc, limit` |
-| `screening` | 引擎开始执行 | — |
+| `thinking` | 前端可展示的公开进度文本 | `text` |
+| `planning` | Agent 计划元数据 | `plan, conditions, tool_calls, react_steps, timings` |
+| `react_step` | 模型选择下一步 | `step_index, tool, model_ms, public_summary` |
+| `tool_start` | 后端开始执行本地工具 | `step_index, tool, public_summary` |
+| `tool_observation` | 工具 observation 摘要 | `step_index, tool, tool_ms, observation` |
+| `tool_done` | 工具执行完成 | `step_index, tool, tool_ms` |
+| `final` | ReAct 本轮最终回答步骤 | `step_index, public_summary, fallback_reason` |
+| `parsed` | 股票筛选参数已校验 | `conditions, logic, sort_by, sort_desc, limit` |
+| `planned` | 策略选股参数已校验 | `plan` |
+| `screening` | 本地筛选或策略工具开始执行 | `tool, tool_call` |
 | `result` | 命中股票 | `total, items, parsed_conditions` |
+| `agent` | 文本型 Agent 结果或策略结果包装 | `plan, answer, tool_calls, result?` |
+| `design` | 策略设计结果，不执行筛选 | `plan, answer, conditions` |
 | `error` | 出错 | `message` |
 | `done` | 流结束 | — |
+
+`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时，`fallback_reason` 会说明模型超时、上游不可达、本地快速路径或安全拦截原因。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
 
 **示例**
 ```bash

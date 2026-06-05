@@ -170,11 +170,15 @@ const runtimeRows = computed(() => {
   const modelMs = Number(timings.model_ms || 0)
   const toolMs = Number(timings.tool_ms || 0)
   const usedModel = meta.ai_status?.used === true || meta.ai_status?.source === 'ai_agent'
+  const reason = fallbackReasonText(timings.fallback_reason)
+  const modelAttempted = !usedModel && modelMs > 0
   const rows = [
     {
       label: '工具选择',
-      value: usedModel ? `模型规划 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`,
-      state: usedModel ? 'model' : 'local',
+      value: usedModel
+        ? `ReAct 模型 ${fmtRuntimeMs(modelMs)}`
+        : (modelAttempted ? `模型未完成 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`),
+      state: usedModel ? 'model' : (modelAttempted ? 'skip' : 'local'),
     },
   ]
   if (tool === 'stock_screen' || tool === 'strategy_select') {
@@ -186,7 +190,6 @@ const runtimeRows = computed(() => {
   } else {
     rows.push({ label: '本地工具', value: '未执行筛选', state: 'skip' })
   }
-  const reason = fallbackReasonText(timings.fallback_reason)
   if (reason) rows.push({ label: '兜底原因', value: reason, state: 'skip' })
   return rows
 })
@@ -535,7 +538,7 @@ const stageColor = (s) => ({
             <textarea v-model="input"
                       @keydown.enter.exact.prevent="send"
                       :disabled="isStreaming"
-                      placeholder="例如：找出 PE 低于 15、ROE > 15%、近三年净利润复合增速 > 20% 的消费股…"
+                      placeholder="例如：找出 PE 低于 15、ROE > 15%、最新季度净利润同比 > 20% 的消费股…"
                       :style="{ width: '100%', height: '36px', border: 'none', outline: 'none', fontSize: '13px', fontFamily: 'IBM Plex Sans, Noto Sans SC, sans-serif', resize: 'none', background: 'transparent', opacity: isStreaming ? 0.6 : 1 }" />
             <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '8px', borderTop: `1px solid ${A2.borderHair}` }">
               <span v-if="!aiStatus.isUp" :style="{ fontSize: '10px', color: A2.amber, display: 'flex', alignItems: 'center', gap: '4px' }">
@@ -543,7 +546,7 @@ const stageColor = (s) => ({
                 {{ aiStatusLine }}
               </span>
               <span v-else :style="{ fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace' }">
-                {{ phase === 'thinking' ? '选择工具中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
+                {{ phase === 'thinking' ? '选择下一步中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
               </span>
               <div style="flex:1" />
               <button v-if="isStreaming" @click="stop"
@@ -552,7 +555,7 @@ const stageColor = (s) => ({
               </button>
               <button v-else @click="send"
                       :disabled="!canSubmit"
-                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}），将使用本地规则 Agent` : ''"
+                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}），将使用本地规则兜底` : ''"
                       :style="{ padding: '7px 14px', background: canSubmit ? A2.qwenGrad : '#B8B4A8', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: canSubmit ? 1 : 0.7 }">
                 发送 <Icon name="send" :size="12" />
               </button>
@@ -602,7 +605,7 @@ const stageColor = (s) => ({
                 <div class="thinking-card">
                   <div class="thinking-head">
                     <Icon name="brain" :size="11" :color="A2.qwen" />
-                    <span>正在选择工具…</span>
+                    <span>正在选择下一步…</span>
                     <span class="dot-flow"><i></i><i></i><i></i></span>
                   </div>
                   <pre v-if="turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>

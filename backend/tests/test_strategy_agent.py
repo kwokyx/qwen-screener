@@ -542,6 +542,95 @@ def test_agent_keeps_local_plan_when_model_returns_empty_conditions(db, seed_sto
     assert "模型未返回有效筛选条件" in res.warnings[0]
 
 
+def test_agent_fallback_preserves_explicit_roe_and_profit_growth(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_agent_turn",
+        lambda _query, _context=None: None,
+    )
+
+    res = strategy_selector.plan_agent_selection(
+        "ROE 大于 15 且最新季度净利润同比正增长的成长股",
+        limit=10,
+    )
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.ai_used is False
+    assert [(cond.field, cond.op, cond.value) for cond in res.plan.conditions] == [
+        ("roe", "gt", 15),
+        ("profit_yoy", "gt", 0),
+    ]
+    assert "营收同比大于20" not in res.plan.condition_labels
+    assert "净利润同比大于20" not in res.plan.condition_labels
+    assert "模型未生成有效规划" in res.warnings[0]
+
+
+def test_agent_fallback_reports_model_timeout_reason(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(strategy_selector.qwen_client, "reset_plan_failure_reason", lambda: None)
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", lambda _query, _context=None: None)
+
+    res = strategy_selector.plan_agent_selection("低估值银行", limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert res.plan.ai_used is False
+    assert "模型规划超过 10 秒，已使用本地规则兜底" in res.warnings[0]
+
+
+def test_agent_blocks_unsupported_profit_cagr_in_local_fallback(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("unsupported metrics must not execute a partial screen")
+
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(strategy_selector.qwen_client, "reset_plan_failure_reason", lambda: None)
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", lambda _query, _context=None: None)
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+
+    res = strategy_selector.run_agent_selection(
+        db,
+        "找出 PE 低于 15、ROE>15%、近三年净利润复合增速>20%的消费股",
+        limit=10,
+    )
+
+    assert res.plan.tool == "ask_clarification"
+    assert res.plan.conditions == []
+    assert res.screen_result is None
+    assert "近三年净利润复合增速" in res.answer
+    assert "本轮没有执行筛选" in res.answer
+    assert any("当前数据字段不支持：近三年净利润复合增速" in warning for warning in res.warnings)
+
+
+def test_agent_local_growth_template_only_applies_without_explicit_metrics(monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+    )
+
+    res = strategy_selector.plan_agent_selection("成长股", limit=10)
+
+    assert res.plan.tool == "stock_screen"
+    assert [(cond.field, cond.op, cond.value) for cond in res.plan.conditions] == [
+        ("revenue_yoy", "gt", 20),
+        ("profit_yoy", "gt", 20),
+    ]
+
+
 def test_agent_allows_explicit_all_stocks_query(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

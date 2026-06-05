@@ -1,13 +1,14 @@
-"""模型 Function Calling Agent 规划适配器。
+"""模型 Function Calling / ReAct Agent 规划适配器。
 
 向模型暴露六个工具，由模型自主选择并生成结构化参数；
-后端校验通过后才使用，否则回退本地规则 Agent。
+后端校验通过后才使用，否则使用本地规则兜底。
 """
 
 from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextvars import ContextVar
 from typing import Any
 
 from loguru import logger
@@ -18,6 +19,23 @@ from app.schemas.screener import ALLOWED_FIELDS, FilterCondition
 from .transport import openai_client
 
 _AGENT_PLAN_TIMEOUT_SECONDS = 10.0
+_AGENT_REACT_STEP_TIMEOUT_SECONDS = 8.0
+_LAST_PLAN_FAILURE_REASON: ContextVar[str | None] = ContextVar(
+    "last_agent_plan_failure_reason",
+    default=None,
+)
+
+
+def reset_plan_failure_reason() -> None:
+    _LAST_PLAN_FAILURE_REASON.set(None)
+
+
+def last_plan_failure_reason() -> str | None:
+    return _LAST_PLAN_FAILURE_REASON.get()
+
+
+def _fail_plan(reason: str) -> None:
+    _LAST_PLAN_FAILURE_REASON.set(reason)
 
 # ---------------------------------------------------------------------------
 # 六个模型可见工具
@@ -431,6 +449,18 @@ class AgentPlanResult(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentReactDecision(BaseModel):
+    """一次 bounded ReAct step 的模型决策。
+
+    kind=action 时由后端执行 plan 指向的工具；
+    kind=final 时只使用 final_answer 对用户作答，不再调用工具。
+    """
+    kind: str
+    public_reason: str = ""
+    plan: AgentPlanResult | None = None
+    final_answer: str = ""
+
+
 # ---------------------------------------------------------------------------
 # 公开 API
 # ---------------------------------------------------------------------------
@@ -443,8 +473,10 @@ def plan_agent_turn(
 
     成功返回校验后的 AgentPlanResult；任何失败返回 None（调用方回退本地规则）。
     """
+    reset_plan_failure_reason()
     chat_client = _agent_chat_client()
     if chat_client is None:
+        _fail_plan("模型工具规划客户端不可用")
         return None
     client, model, backend = chat_client
 
@@ -453,44 +485,90 @@ def plan_agent_turn(
         resp = _create_chat_completion_with_timeout(client, model, messages)
     except FutureTimeoutError:
         logger.info("Agent FC 超过 {} 秒，回退本地规则", _AGENT_PLAN_TIMEOUT_SECONDS)
+        _fail_plan(f"模型规划超过 {_AGENT_PLAN_TIMEOUT_SECONDS:g} 秒")
         return None
     except Exception as e:
         logger.info("Agent FC 不可用，回退本地规则: {}", str(e)[:120])
+        _fail_plan("模型规划请求失败")
         return None
 
     msg = resp.choices[0].message
     tool_calls = getattr(msg, "tool_calls", None) or []
     if not tool_calls:
         logger.info("模型未选择工具，回退本地规则")
+        _fail_plan("模型未选择工具")
         return None
 
-    tc = tool_calls[0]
-    tool_name = tc.function.name
-
-    if tool_name not in ALLOWED_TOOLS:
-        logger.info("模型选择了未知工具 '{}'，回退本地规则", tool_name)
+    result = _plan_result_from_tool_call(tool_calls[0], query)
+    if result is None:
         return None
-
-    try:
-        raw_args = json.loads(tc.function.arguments)
-    except json.JSONDecodeError as e:
-        logger.info("模型工具参数非 JSON，回退本地规则: {}", str(e)[:80])
-        return None
-
-    schema = TOOL_ARGS_SCHEMA[tool_name]
-    try:
-        validated = schema(**raw_args)
-    except Exception as e:
-        logger.info("工具参数校验失败（{}），回退本地规则: {}", tool_name, str(e)[:120])
-        return None
-
-    result = _to_plan_result(tool_name, validated, query)
     logger.info(
         "Agent FC 成功: tool={} backend={}",
-        tool_name,
+        result.tool,
         backend,
     )
     return result
+
+
+def plan_react_step(
+    query: str,
+    context: dict[str, Any] | None = None,
+    observations: list[dict[str, Any]] | None = None,
+    *,
+    step_index: int = 1,
+) -> AgentReactDecision | None:
+    """让模型执行一次 bounded ReAct 决策。
+
+    模型可以选择一个工具 action，也可以在已有 observation 后给出 final。
+    任何非法工具、非法 JSON/schema、超时或请求失败都返回 None，由 orchestrator
+    使用本地高置信度兜底或澄清。
+    """
+    reset_plan_failure_reason()
+    chat_client = _agent_chat_client()
+    if chat_client is None:
+        _fail_plan("模型工具规划客户端不可用")
+        return None
+    client, model, backend = chat_client
+
+    observations = observations or []
+    messages = _build_react_messages(query, context or {}, observations, step_index)
+    last_error: str | None = None
+    for attempt in range(2):
+        try:
+            resp = _create_react_completion_with_timeout(client, model, messages)
+        except FutureTimeoutError:
+            logger.info("Agent ReAct step 超过 {} 秒", _AGENT_REACT_STEP_TIMEOUT_SECONDS)
+            _fail_plan(f"模型 ReAct 步骤超过 {_AGENT_REACT_STEP_TIMEOUT_SECONDS:g} 秒")
+            return None
+        except Exception as e:
+            logger.info("Agent ReAct step 不可用: {}", str(e)[:120])
+            _fail_plan("模型 ReAct 请求失败")
+            return None
+
+        decision = _to_react_decision(resp, query)
+        if decision is not None:
+            logger.info(
+                "Agent ReAct step 成功: kind={} tool={} backend={} step={}",
+                decision.kind,
+                decision.plan.tool if decision.plan else "",
+                backend,
+                step_index,
+            )
+            return decision
+
+        last_error = last_plan_failure_reason() or "模型 ReAct 输出不合法"
+        if attempt == 0:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "上一条输出不符合工具 schema 或缺少可执行内容。"
+                    "请只选择一个已提供工具，或直接给出面向用户的最终回答；"
+                    "不要编造字段，不要输出私有推理。"
+                ),
+            })
+
+    _fail_plan(last_error or "模型 ReAct 输出不合法")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +620,29 @@ def _create_chat_completion_with_timeout(client, model: str, messages: list[dict
     )
     try:
         result = future.result(timeout=_AGENT_PLAN_TIMEOUT_SECONDS)
+    except FutureTimeoutError:
+        future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    except Exception:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown(wait=False)
+    return result
+
+
+def _create_react_completion_with_timeout(client, model: str, messages: list[dict]):
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-react")
+    future = executor.submit(
+        client.chat.completions.create,
+        model=model,
+        messages=messages,
+        tools=TOOLS,
+        tool_choice="auto",
+        timeout=_AGENT_REACT_STEP_TIMEOUT_SECONDS,
+    )
+    try:
+        result = future.result(timeout=_AGENT_REACT_STEP_TIMEOUT_SECONDS)
     except FutureTimeoutError:
         future.cancel()
         executor.shutdown(wait=False, cancel_futures=True)
@@ -635,6 +736,154 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
 
     messages.append({"role": "user", "content": query})
     return messages
+
+
+def _compact_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    if not context:
+        return {}
+    context_summary: dict[str, Any] = {
+        "session_id": context.get("session_id"),
+        "上一轮问题": str(context.get("last_query") or "")[:180],
+        "上一轮工具": (context.get("last_plan") or {}).get("tool")
+        if isinstance(context.get("last_plan"), dict)
+        else None,
+        "上一轮回答": str(context.get("last_answer") or "")[:240],
+        "上一轮条件": (context.get("last_conditions") or [])[:10],
+        "上一轮工具调用": [
+            {
+                "name": call.get("name"),
+                "label": call.get("label"),
+                "status": call.get("status"),
+                "message": str(call.get("message") or "")[:120],
+            }
+            for call in (context.get("last_tool_calls") or [])[-6:]
+            if isinstance(call, dict)
+        ],
+        "最近对话": (context.get("recent_turns") or [])[-6:],
+    }
+    last_result = context.get("last_result") if isinstance(context, dict) else None
+    if isinstance(last_result, dict):
+        items = last_result.get("items") or []
+        if isinstance(items, list):
+            context_summary["上一轮前排股票"] = [
+                {"code": it.get("code"), "name": it.get("name")}
+                for it in items[:5]
+                if isinstance(it, dict)
+            ]
+            context_summary["上一轮命中数"] = last_result.get("total", 0)
+        conds = (
+            last_result.get("parsed_conditions")
+            or context.get("last_conditions")
+            or []
+        )
+        if conds:
+            context_summary["上一轮条件"] = conds[:10]
+    return context_summary
+
+
+def _build_react_messages(
+    query: str,
+    context: dict[str, Any],
+    observations: list[dict[str, Any]],
+    step_index: int,
+) -> list[dict]:
+    system = (
+        "你是A股投研聊天里的 bounded ReAct 工具编排器。你每一步只能做两件事之一：\n"
+        "A. 选择一个已提供工具并生成严格 JSON 参数；\n"
+        "B. 如果已有工具 observation 足够回答，则直接用中文给最终回答。\n"
+        "不要输出私有思考链，只输出可给用户看的简短说明或工具调用。\n"
+        "硬规则：\n"
+        "1. 支持字段只有 pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。\n"
+        "2. 不支持三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS、PS/市销率、机构持仓、研报评级；遇到这些字段要 ask_clarification 或最终说明，不要改写成别的指标继续筛选。\n"
+        "3. stock_detail 只定位详情，不得触发筛选。\n"
+        "4. explain_result、排序、分页必须依赖上一轮结果；没有上下文就 ask_clarification。\n"
+        "5. strategy_design 默认只设计不执行；用户说“现在执行/可以，做吧”时只有上一轮有可执行条件才执行。\n"
+        "6. 已有 observation 后，优先基于 observation 生成最终回答；不要重复调用完全相同工具参数。\n"
+        "7. 翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
+    )
+    messages: list[dict] = [{"role": "system", "content": system}]
+    compact_context = _compact_context(context)
+    if compact_context:
+        messages.append({
+            "role": "system",
+            "content": "对话上下文（仅供判断意图）：\n"
+            + json.dumps(compact_context, ensure_ascii=False),
+        })
+    if observations:
+        safe_observations = observations[-4:]
+        messages.append({
+            "role": "system",
+            "content": "已经执行过的工具 observation（请基于这些决定下一步或最终回答）：\n"
+            + json.dumps(safe_observations, ensure_ascii=False, default=str),
+        })
+    messages.append({
+        "role": "user",
+        "content": f"用户请求：{query}\n当前 ReAct 步骤：{step_index}",
+    })
+    return messages
+
+
+def _plan_result_from_tool_call(tc: Any, query: str) -> AgentPlanResult | None:
+    tool_name = tc.function.name
+
+    if tool_name not in ALLOWED_TOOLS:
+        logger.info("模型选择了未知工具 '{}'，回退本地规则", tool_name)
+        _fail_plan("模型选择了未知工具")
+        return None
+
+    try:
+        raw_args = json.loads(tc.function.arguments)
+    except json.JSONDecodeError as e:
+        logger.info("模型工具参数非 JSON，回退本地规则: {}", str(e)[:80])
+        _fail_plan("模型工具参数非 JSON")
+        return None
+
+    schema = TOOL_ARGS_SCHEMA[tool_name]
+    try:
+        validated = schema(**raw_args)
+    except Exception as e:
+        logger.info("工具参数校验失败（{}），回退本地规则: {}", tool_name, str(e)[:120])
+        _fail_plan("模型工具参数校验失败")
+        return None
+
+    return _to_plan_result(tool_name, validated, query)
+
+
+def _to_react_decision(resp: Any, query: str) -> AgentReactDecision | None:
+    msg = resp.choices[0].message
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    if tool_calls:
+        plan = _plan_result_from_tool_call(tool_calls[0], query)
+        if plan is None:
+            return None
+        return AgentReactDecision(
+            kind="action",
+            public_reason=plan.reasoning,
+            plan=plan,
+        )
+
+    content = (getattr(msg, "content", "") or "").strip()
+    if not content:
+        _fail_plan("模型未选择工具且未给出最终回答")
+        return None
+
+    final_answer = content
+    public_reason = "模型基于已有观察生成最终回答。"
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            final_answer = str(parsed.get("final_answer") or parsed.get("answer") or content).strip()
+            public_reason = str(parsed.get("public_reason") or public_reason).strip()
+    except json.JSONDecodeError:
+        pass
+    if not final_answer:
+        _fail_plan("模型最终回答为空")
+        return None
+    return AgentReactDecision(
+        kind="final",
+        public_reason=public_reason,
+        final_answer=final_answer[:2000],
+    )
 
 
 def _to_plan_result(

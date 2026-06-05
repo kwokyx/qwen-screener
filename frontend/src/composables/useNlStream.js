@@ -34,6 +34,7 @@ function normalizeTurn(raw = {}) {
     agentPlan: raw.agentPlan || null,
     toolTrace: raw.toolTrace || [],
     toolCalls: raw.toolCalls || raw.tool_calls || [],
+    reactSteps: raw.reactSteps || raw.react_steps || [],
     aiStatus: raw.aiStatus || raw.ai_status || null,
     errorMsg: raw.errorMsg || '',
     tStart: raw.tStart || 0,
@@ -69,6 +70,23 @@ function extractTimingMeta(ev = {}, previousMeta = {}) {
     tool_ms: timings.tool_ms,
     fallback_reason: timings.fallback_reason,
   }
+}
+
+function reactEventText(ev = {}) {
+  const toolLabel = {
+    stock_screen: '股票筛选',
+    strategy_select: '策略选股',
+    strategy_design: '策略设计',
+    explain_result: '结果解释',
+    stock_detail: '个股详情',
+    ask_clarification: '补充追问',
+  }[ev.tool] || ev.tool || 'Agent'
+  if (ev.type === 'react_step') return `模型选择下一步：${toolLabel}`
+  if (ev.type === 'tool_start') return `正在调用工具：${toolLabel}`
+  if (ev.type === 'tool_observation') return `已获得观察结果：${ev.public_summary || toolLabel}`
+  if (ev.type === 'tool_done') return `工具完成：${toolLabel}`
+  if (ev.type === 'final') return ev.public_summary || '已生成最终回答'
+  return ev.public_summary || ''
 }
 
 function loadCurrentThread() {
@@ -164,6 +182,7 @@ export function useNlStream(historyStore, hooks = {}) {
   const agentPlan = ref(null)
   const toolTrace = ref([])
   const toolCalls = ref([])
+  const reactSteps = ref([])
   const errorMsg = ref('')
   const thread = ref(loadInitialThread(historyStore))
 
@@ -195,6 +214,7 @@ export function useNlStream(historyStore, hooks = {}) {
     agentPlan.value = null
     toolTrace.value = []
     toolCalls.value = []
+    reactSteps.value = []
     errorMsg.value = ''
   }
 
@@ -216,6 +236,7 @@ export function useNlStream(historyStore, hooks = {}) {
     agentPlan.value = t.agentPlan || null
     toolTrace.value = t.toolTrace || []
     toolCalls.value = t.toolCalls || []
+    reactSteps.value = t.reactSteps || []
     errorMsg.value = t.errorMsg || ''
     tStart.value = t.tStart || (t.ts ? t.ts * 1000 : 0)
     tParsed.value = t.tParsed || tStart.value
@@ -252,6 +273,7 @@ export function useNlStream(historyStore, hooks = {}) {
       agentPlan: cloneJson(agentPlan.value, null),
       toolTrace: cloneJson(toolTrace.value, []),
       toolCalls: cloneJson(toolCalls.value, []),
+      reactSteps: cloneJson(reactSteps.value, []),
       aiStatus: cloneJson(screenMeta.value?.ai_status, null),
       errorMsg: errorMsg.value,
       tStart: tStart.value,
@@ -327,6 +349,9 @@ export function useNlStream(historyStore, hooks = {}) {
     if (Array.isArray(ev.tool_calls)) {
       ev.tool_calls.forEach(mergeToolCall)
     }
+    if (Array.isArray(ev.react_steps)) {
+      reactSteps.value = cloneJson(ev.react_steps, [])
+    }
     screenMeta.value = {
       ...previousMeta,
       ...extractTimingMeta(ev, previousMeta),
@@ -337,6 +362,7 @@ export function useNlStream(historyStore, hooks = {}) {
       agent_answer: ev.answer || '',
       tool_trace: ev.tool_trace || [],
       tool_calls: cloneJson(toolCalls.value, []),
+      react_steps: cloneJson(reactSteps.value, []),
       ai_status: ev.ai_status || previousMeta.ai_status || null,
       sort_by: ev.sort_by ?? ev.plan?.sort_by ?? previousMeta.sort_by,
       sort_desc: ev.sort_desc ?? ev.plan?.sort_desc ?? previousMeta.sort_desc,
@@ -390,6 +416,10 @@ export function useNlStream(historyStore, hooks = {}) {
       await streamNL(q, (ev) => {
         if (ev.type === 'thinking') {
           thinkingBuf.value += ev.text
+        } else if (['react_step', 'tool_start', 'tool_observation', 'tool_done', 'final'].includes(ev.type)) {
+          reactSteps.value = [...reactSteps.value, cloneJson(ev, {})]
+          const text = reactEventText(ev)
+          if (text) thinkingBuf.value += `${text}\n`
         } else if (ev.type === 'tool_call') {
           mergeToolCall(ev.tool_call)
         } else if (ev.type === 'parsed') {
@@ -512,7 +542,7 @@ export function useNlStream(historyStore, hooks = {}) {
 
   return {
     // state
-    phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, toolCalls, errorMsg,
+    phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, toolCalls, reactSteps, errorMsg,
     thread, liveTurn,
     tStart, tParsed, tDone,
     isStreaming,
