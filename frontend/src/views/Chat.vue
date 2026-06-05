@@ -187,6 +187,12 @@ const runtimeRows = computed(() => {
       value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : (phase.value === 'screening' ? '执行中…' : '0ms'),
       state: phase.value === 'screening' ? 'running' : 'local',
     })
+  } else if (tool === 'sort_results' || tool === 'paginate_results') {
+    rows.push({
+      label: '本地结果操作',
+      value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : '0ms',
+      state: 'local',
+    })
   } else {
     rows.push({ label: '本地工具', value: '未执行筛选', state: 'skip' })
   }

@@ -20,7 +20,7 @@ from app.services import qwen_client, strategy_selector
 
 MAX_REACT_STEPS = 4
 MAX_REACT_SECONDS = 20.0
-EXECUTABLE_TOOLS = {"stock_screen", "strategy_select"}
+EXECUTABLE_TOOLS = {"stock_screen", "strategy_select", "sort_results", "paginate_results"}
 
 
 def run_chat_react_agent(

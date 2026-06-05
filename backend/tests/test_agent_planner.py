@@ -85,6 +85,29 @@ def test_plan_agent_turn_accepts_valid_screen_and_compact_context(monkeypatch):
     assert captured["timeout"] == agent_planner._AGENT_PLAN_TIMEOUT_SECONDS
 
 
+def test_plan_agent_turn_accepts_sort_results_tool(monkeypatch):
+    _configure(monkeypatch, "sort_results", {"sort_by": "dividend_yield", "sort_desc": True})
+
+    result = agent_planner.plan_agent_turn("按股息率排序", context={"last_result": {"total": 3}})
+
+    assert result is not None
+    assert result.tool == "sort_results"
+    assert result.sort_by == "dividend_yield"
+    assert result.sort_desc is True
+    assert result.conditions == []
+
+
+def test_plan_agent_turn_accepts_paginate_results_tool(monkeypatch):
+    _configure(monkeypatch, "paginate_results", {"limit": 20})
+
+    result = agent_planner.plan_agent_turn("换一批", context={"last_result": {"total": 3}})
+
+    assert result is not None
+    assert result.tool == "paginate_results"
+    assert result.limit == 20
+    assert result.conditions == []
+
+
 def test_plan_agent_turn_hard_times_out_slow_model(monkeypatch):
     def create(**_kwargs):
         time.sleep(0.08)

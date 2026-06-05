@@ -78,6 +78,8 @@ function reactEventText(ev = {}) {
     strategy_select: '策略选股',
     strategy_design: '策略设计',
     explain_result: '结果解释',
+    sort_results: '结果排序',
+    paginate_results: '结果分页',
     stock_detail: '个股详情',
     ask_clarification: '补充追问',
   }[ev.tool] || ev.tool || 'Agent'

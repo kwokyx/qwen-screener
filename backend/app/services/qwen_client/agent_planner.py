@@ -1,6 +1,6 @@
 """模型 Function Calling / ReAct Agent 规划适配器。
 
-向模型暴露六个工具，由模型自主选择并生成结构化参数；
+向模型暴露一组白名单工具，由模型自主选择并生成结构化参数；
 后端校验通过后才使用，否则使用本地规则兜底。
 """
 
@@ -38,7 +38,7 @@ def _fail_plan(reason: str) -> None:
     _LAST_PLAN_FAILURE_REASON.set(reason)
 
 # ---------------------------------------------------------------------------
-# 六个模型可见工具
+# 模型可见工具
 # ---------------------------------------------------------------------------
 
 TOOLS: list[dict] = [
@@ -47,11 +47,8 @@ TOOLS: list[dict] = [
         "function": {
             "name": "stock_screen",
             "description": (
-                "执行股票筛选。将自然语言选股需求转换为结构化条件，"
-                "调用本地筛选引擎返回匹配的A股列表。"
-                "仅在用户给出了具体筛选条件（行业、估值范围、财务指标等）时使用。"
-                "模糊不清的需求不要用此工具。"
-                "用户明确提出「全部股票/全市场/不设条件/不限条件」时，conditions可以为空数组。"
+                "执行A股筛选；只用于明确条件。模糊需求或不支持字段用 ask_clarification。"
+                "只有用户明确说全部股票/全市场/不设条件时 conditions 才可为空。"
             ),
             "parameters": {
                 "type": "object",
@@ -72,9 +69,7 @@ TOOLS: list[dict] = [
                                 },
                                 "value": {
                                     "description": (
-                                        "between → [低, 高] 数组；"
-                                        "in → 字符串数组（仅 industry/market）；"
-                                        "其他 → 单个数或字符串"
+                                        "between=[低,高]；in=字符串数组（仅 industry/market）；其他=单值"
                                     ),
                                 },
                             },
@@ -100,8 +95,7 @@ TOOLS: list[dict] = [
         "function": {
             "name": "strategy_design",
             "description": (
-                "仅设计选股策略、列出量化条件，不执行实际股票筛选。"
-                "当用户明确说「只列/只设计/不要筛/不筛选/不用筛/不执行/先别跑」时使用。"
+                "只设计/列出量化条件，不执行筛选；用户说不筛选、不执行、先别跑时使用。"
             ),
             "parameters": {
                 "type": "object",
@@ -129,13 +123,8 @@ TOOLS: list[dict] = [
         "function": {
             "name": "strategy_select",
             "description": (
-                "执行内置选股策略。可用策略："
-                "turtle_breakout（海龟突破：突破20日新高）、"
-                "ma_volume（均线放量：5日线上穿20日线且放量）、"
-                "rps_breakout（RPS强势突破：120日相对强度前10%）、"
-                "high_tight_flag（高位窄幅整理：强势后的缩量旗形整理）、"
-                "limit_up_shakeout（涨停后承接：涨停次日放量收阴且支撑不破）、"
-                "uptrend_limit_down（趋势急跌修复：上升趋势中放量急跌）。"
+                "执行内置策略：turtle_breakout、ma_volume、rps_breakout、"
+                "high_tight_flag、limit_up_shakeout、uptrend_limit_down。"
             ),
             "parameters": {
                 "type": "object",
@@ -167,9 +156,7 @@ TOOLS: list[dict] = [
         "function": {
             "name": "explain_result",
             "description": (
-                "解释上一轮筛选结果，不重新执行筛选。"
-                "当用户追问为什么这些股票被选中、怎么看某只股票、分析结果时使用。"
-                "仅在对话上下文中有上一轮结果时使用，否则应使用 ask_clarification。"
+                "解释上一轮结果，不筛选；无上一轮结果时用 ask_clarification。"
             ),
             "parameters": {
                 "type": "object",
@@ -178,6 +165,42 @@ TOOLS: list[dict] = [
                         "type": "string",
                         "description": "用户想重点了解的方向",
                     },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sort_results",
+            "description": (
+                "调整上一轮结果排序，不生成新条件；无上一轮结果时用 ask_clarification。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sort_by": {
+                        "type": "string",
+                        "enum": sorted(ALLOWED_FIELDS | {"score", "change_pct"}),
+                        "description": "排序字段",
+                    },
+                    "sort_desc": {"type": "boolean", "default": True},
+                },
+                "required": ["sort_by"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "paginate_results",
+            "description": (
+                "查看上一轮结果下一批，不生成新条件；无上一轮结果时用 ask_clarification。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
                 },
             },
         },
@@ -377,6 +400,22 @@ class ExplainResultArgs(_StrictArgs):
     focus: str = Field(default="", max_length=200)
 
 
+class SortResultsArgs(_StrictArgs):
+    sort_by: str
+    sort_desc: bool = True
+
+    @field_validator("sort_by")
+    @classmethod
+    def _valid_sort(cls, v: str) -> str:
+        if v not in VALID_SORT_FIELDS:
+            raise ValueError(f"非法排序字段: {v}")
+        return v
+
+
+class PaginateResultsArgs(_StrictArgs):
+    limit: int = Field(default=50, ge=1, le=200)
+
+
 class StockDetailArgs(_StrictArgs):
     code: str = Field(default="", max_length=16)
     name: str = Field(default="", max_length=40)
@@ -416,6 +455,8 @@ TOOL_ARGS_SCHEMA: dict[str, type[BaseModel]] = {
     "strategy_design": StrategyDesignArgs,
     "strategy_select": StrategySelectArgs,
     "explain_result": ExplainResultArgs,
+    "sort_results": SortResultsArgs,
+    "paginate_results": PaginateResultsArgs,
     "stock_detail": StockDetailArgs,
     "ask_clarification": AskClarificationArgs,
 }
@@ -425,6 +466,8 @@ TOOL_LABELS: dict[str, str] = {
     "strategy_design": "策略设计",
     "strategy_select": "策略选股",
     "explain_result": "结果解释",
+    "sort_results": "结果排序",
+    "paginate_results": "结果分页",
     "stock_detail": "个股详情",
     "ask_clarification": "补充追问",
 }
@@ -666,24 +709,14 @@ def _dashscope_openai_client():
 
 def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
     system = (
-        "你是A股量化筛选助手。根据用户输入选择最合适的工具。\n"
-        "规则：\n"
-        "1. 有具体筛选条件（行业、估值、财务指标等）→ stock_screen\n"
-        "2. 明确说「只列/设计/不执行/先别跑」 → strategy_design\n"
-        "3. 提到海龟/突破/均线/放量/RPS/强势/窄幅整理/涨停承接/洗盘/急跌/跌停 → strategy_select\n"
-        "4. 追问为什么/怎么看/分析结果（有上下文时）→ explain_result\n"
-        "5. 明确要求查看/打开某只股票详情页 → stock_detail\n"
-        "6. 模糊无具体条件 → ask_clarification\n"
-        "7. 「全部股票/全市场/不设条件」→ stock_screen with conditions=[]\n"
-        "8. 结合对话上下文处理承接语：确认执行时沿用上一轮条件；"
-        "调整排序时只修改 sort_by/sort_desc；换一批时沿用条件并增加 offset；"
-        "查看第一只/第二只详情时使用 stock_detail；追问命中原因时使用 explain_result，不要重新筛选。"
-        "如果上下文不足，使用 ask_clarification。\n"
-        "ask_clarification 的 missing_info 只使用：行业、风格偏好、估值范围、持有周期、风险承受；"
-        "不确定时省略 missing_info，只给 question。\n"
+        "你是A股量化筛选工具路由器。只选择一个工具并给 JSON 参数。\n"
+        "路由：具体筛选→stock_screen；只设计/不执行→strategy_design；内置突破/均线/RPS/涨停承接/急跌修复→strategy_select；"
+        "解释上一轮→explain_result；排序上一轮→sort_results；换一批/下一页→paginate_results；个股详情→stock_detail；模糊或上下文不足→ask_clarification。\n"
+        "全部股票/全市场/不设条件才允许 stock_screen conditions=[]。"
+        "ask_clarification.missing_info 仅可用：行业、风格偏好、估值范围、持有周期、风险承受。\n"
         "支持字段仅限 pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。"
         "不支持三年CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；"
-        "遇到不支持字段应使用 ask_clarification，不要改写成别的指标继续筛选。\n"
+        "遇到不支持字段必须 ask_clarification，不要改写成别的指标继续筛选。\n"
         "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；"
         "成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；"
         "小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
@@ -791,18 +824,13 @@ def _build_react_messages(
     step_index: int,
 ) -> list[dict]:
     system = (
-        "你是A股投研聊天里的 bounded ReAct 工具编排器。你每一步只能做两件事之一：\n"
-        "A. 选择一个已提供工具并生成严格 JSON 参数；\n"
-        "B. 如果已有工具 observation 足够回答，则直接用中文给最终回答。\n"
-        "不要输出私有思考链，只输出可给用户看的简短说明或工具调用。\n"
-        "硬规则：\n"
-        "1. 支持字段只有 pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。\n"
-        "2. 不支持三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；遇到这些字段要 ask_clarification 或最终说明，不要改写成别的指标继续筛选。\n"
-        "3. stock_detail 只定位详情，不得触发筛选。\n"
-        "4. explain_result、排序、分页必须依赖上一轮结果；没有上下文就 ask_clarification。\n"
-        "5. strategy_design 默认只设计不执行；用户说“现在执行/可以，做吧”时只有上一轮有可执行条件才执行。\n"
-        "6. 已有 observation 后，优先基于 observation 生成最终回答；不要重复调用完全相同工具参数。\n"
-        "7. 翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
+        "你是 bounded ReAct 工具路由器。每步只做一个 action 工具调用，或基于 observation 给中文 final。"
+        "不要私有思考链。\n"
+        "支持字段：pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。\n"
+        "不支持：三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；必须 ask_clarification 或 final 说明，不能近似改写后筛选。\n"
+        "stock_detail 只定位详情。explain_result/sort_results/paginate_results 必须有上一轮结果，否则 ask_clarification。"
+        "strategy_design 默认不执行；确认执行只有上一轮有条件才可筛选。已有 observation 时优先 final，禁止重复相同工具参数。\n"
+        "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
     )
     messages: list[dict] = [{"role": "system", "content": system}]
     compact_context = _compact_context(context)
@@ -943,6 +971,25 @@ def _to_plan_result(
             tool_label=label,
             reasoning="用户追问上一轮结果，基于上下文解释。",
             extra={"focus": args.focus},
+        )
+
+    if tool_name == "sort_results":
+        args: SortResultsArgs
+        return AgentPlanResult(
+            tool=tool_name,
+            tool_label=label,
+            reasoning="用户要求调整上一轮结果排序，沿用上下文条件。",
+            sort_by=args.sort_by,
+            sort_desc=args.sort_desc,
+        )
+
+    if tool_name == "paginate_results":
+        args: PaginateResultsArgs
+        return AgentPlanResult(
+            tool=tool_name,
+            tool_label=label,
+            reasoning="用户要求查看上一轮结果的下一批，沿用上下文条件。",
+            limit=args.limit,
         )
 
     if tool_name == "stock_detail":

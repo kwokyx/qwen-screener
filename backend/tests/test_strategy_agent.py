@@ -385,7 +385,7 @@ def test_chat_agent_sorts_previous_conditions(db, seed_stocks, monkeypatch):
 
     res = strategy_selector.run_chat_agent(db, "按股息率排序", context=context, limit=10)
 
-    assert res.plan.tool == "stock_screen"
+    assert res.plan.tool == "sort_results"
     assert res.plan.sort_by == "dividend_yield"
     assert res.plan.sort_desc is True
     assert res.screen_result is not None
@@ -411,7 +411,7 @@ def test_chat_agent_next_page_uses_previous_offset(db, seed_stocks, monkeypatch)
 
     res = strategy_selector.run_chat_agent(db, "换一批", context=context, limit=2)
 
-    assert res.plan.tool == "stock_screen"
+    assert res.plan.tool == "paginate_results"
     assert res.plan.offset == 2
     assert res.screen_result is not None
     assert res.screen_result.offset == 2
@@ -439,7 +439,7 @@ def test_chat_agent_next_page_rolls_over_when_past_end(db, seed_stocks, monkeypa
 
     res = strategy_selector.run_chat_agent(db, "换一批", context=context, limit=2)
 
-    assert res.plan.tool == "stock_screen"
+    assert res.plan.tool == "paginate_results"
     assert res.plan.offset == 0
     assert res.screen_result is not None
     assert res.screen_result.offset == 0

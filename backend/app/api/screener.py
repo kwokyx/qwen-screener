@@ -120,11 +120,15 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "strategy_design": "策略设计",
             "strategy_select": "策略选股",
             "explain_result": "结果解释",
+            "sort_results": "结果排序",
+            "paginate_results": "结果分页",
             "stock_detail": "详情页定位",
             "ask_clarification": "补充追问",
         }
         if tool in {"stock_screen", "strategy_select"}:
             return f"正在执行本地工具：{labels.get(tool, '处理')}…\n"
+        if tool in {"sort_results", "paginate_results"}:
+            return f"正在执行本地结果操作：{labels.get(tool, '处理')}…\n"
         return f"正在整理响应：{labels.get(tool, '处理')}（{source}）…\n"
 
     def _fallback_reason(response) -> str | None:
@@ -206,41 +210,44 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             yield event({"type": "tool_call", "tool_call": call.model_dump()})
 
         if response.screen_result is not None:
+            is_result_operation = plan.tool in {"sort_results", "paginate_results"}
             logger.info(
-                "Agent SSE 返回筛选结果: tool=stock_screen conditions={} limit={} total={}",
+                "Agent SSE 返回结果: tool={} conditions={} limit={} total={}",
+                plan.tool,
                 len(plan.conditions),
                 effective_limit,
                 response.screen_result.total,
             )
-            yield event({
-                "type": "parsed",
-                **pre_tool_common,
-                "logic": plan.logic,
-                "sort_by": plan.sort_by,
-                "sort_desc": plan.sort_desc,
-                "limit": effective_limit,
-                "offset": plan.offset,
-            })
             yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
-            yield event({
-                "type": "screening",
-                "tool": plan.tool,
-                "tool_label": plan.tool_label,
-                "tool_call": {
-                    "id": "stock_screen",
-                    "name": "stock_screen",
-                    "label": plan.tool_label,
-                    "status": "running",
-                    "params": {
-                        "conditions": len(plan.conditions),
-                        "sort_by": plan.sort_by,
-                        "offset": plan.offset,
-                        "limit": effective_limit,
+            if not is_result_operation:
+                yield event({
+                    "type": "parsed",
+                    **pre_tool_common,
+                    "logic": plan.logic,
+                    "sort_by": plan.sort_by,
+                    "sort_desc": plan.sort_desc,
+                    "limit": effective_limit,
+                    "offset": plan.offset,
+                })
+                yield event({
+                    "type": "screening",
+                    "tool": plan.tool,
+                    "tool_label": plan.tool_label,
+                    "tool_call": {
+                        "id": "stock_screen",
+                        "name": "stock_screen",
+                        "label": plan.tool_label,
+                        "status": "running",
+                        "params": {
+                            "conditions": len(plan.conditions),
+                            "sort_by": plan.sort_by,
+                            "offset": plan.offset,
+                            "limit": effective_limit,
+                        },
+                        "result": {},
+                        "message": "正在调用本地筛选引擎",
                     },
-                    "result": {},
-                    "message": "正在调用本地筛选引擎",
-                },
-            })
+                })
             yield event({
                 "type": "result",
                 **response_payload(response, timings),

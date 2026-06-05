@@ -92,7 +92,7 @@ def test_eval_next_page_preserves_context_and_moves_offset(db, seed_stocks):
 
     result = strategy_selector.run_chat_agent(db, "换一批", context=context, limit=2)
 
-    assert result.plan.tool == "stock_screen"
+    assert result.plan.tool == "paginate_results"
     assert result.plan.offset == 2
     assert result.screen_result is not None
     assert result.screen_result.offset == 2
@@ -178,7 +178,7 @@ def test_eval_sort_request_reuses_previous_conditions(db, seed_stocks):
 
     result = strategy_selector.run_chat_agent(db, "按股息率排序", context=context, limit=10)
 
-    assert result.plan.tool == "stock_screen"
+    assert result.plan.tool == "sort_results"
     assert result.plan.sort_by == "dividend_yield"
     assert result.plan.sort_desc is True
     assert len(result.plan.conditions) == 1

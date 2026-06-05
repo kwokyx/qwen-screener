@@ -182,8 +182,8 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     cases = [
         ("低估值高分红的银行股", "stock_screen", True, "result", True, 1),
         ("为什么这些股票排在前面", "explain_result", False, "agent", False, 0),
-        ("按股息率排序", "stock_screen", True, "result", False, 1),
-        ("换一批", "stock_screen", True, "result", False, 1),
+        ("按股息率排序", "sort_results", False, "result", False, 1),
+        ("换一批", "paginate_results", False, "result", False, 1),
         ("查看第一只详情", "stock_detail", False, "agent", False, 0),
         ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
         ("现在执行", "stock_screen", True, "result", False, 0),
@@ -208,11 +208,17 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
             assert terminal["fallback_reason"] == "local_fast_path"
         assert event_types[-1] == "done"
         assert ("screening" in event_types) is should_screen
-        assert ("result" in event_types) is should_screen
+        assert ("result" in event_types) is (terminal_type == "result")
         if should_screen:
             assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
             assert terminal["total"] >= min_total
             assert any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
+        elif terminal_type == "result":
+            assert "parsed" not in event_types
+            assert "screening" not in event_types
+            assert terminal["total"] >= min_total
+            assert any(call["name"] == "result_sort" for call in terminal["tool_calls"])
+            assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
         else:
             assert "parsed" not in event_types
             assert "result" not in event_types

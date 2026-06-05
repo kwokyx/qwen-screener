@@ -375,7 +375,27 @@ def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
             ),
         )
     )
-    if plan.tool in ("stock_screen", "strategy_design") and plan.conditions:
+    if plan.tool == "sort_results":
+        calls.append(
+            _tool_call(
+                "result_sort",
+                "结果排序",
+                params={"sort_by": plan.sort_by, "sort_desc": plan.sort_desc},
+                message="沿用上一轮条件调整排序",
+            )
+        )
+        return calls
+    if plan.tool == "paginate_results":
+        calls.append(
+            _tool_call(
+                "result_sort",
+                "结果分页",
+                params={"offset": plan.offset, "limit": plan.limit},
+                message="沿用上一轮条件查看下一批结果",
+            )
+        )
+        return calls
+    if plan.tool in ("stock_screen", "strategy_design", "sort_results", "paginate_results") and plan.conditions:
         calls.append(
             _tool_call(
                 "condition_parser",
@@ -501,6 +521,15 @@ def _build_non_executing_model_response(
             response = build_explain_result_response(query, context or {}, ai_configured=True)
         else:
             response = build_missing_context_response(query, ai_configured=True)
+        return _mark_model_response(response, model_plan)
+    if model_plan.tool == "sort_results":
+        response = build_context_sort_response(query, context or {}, ai_configured=True)
+        if response.plan.tool == "sort_results":
+            response.plan.sort_by = model_plan.sort_by or response.plan.sort_by
+            response.plan.sort_desc = model_plan.sort_desc
+        return _mark_model_response(response, model_plan)
+    if model_plan.tool == "paginate_results":
+        response = build_context_page_response(query, context or {}, limit=model_plan.limit, ai_configured=True)
         return _mark_model_response(response, model_plan)
     if model_plan.tool == "stock_detail":
         response = build_stock_detail_response(
@@ -684,9 +713,10 @@ def execute_agent_plan(
 ) -> StrategyAgentResponse:
     """Execute a prepared tool plan and attach the real result."""
     plan = response.plan
-    if plan.tool not in ("stock_screen", "strategy_select"):
+    executable_screen_tools = {"stock_screen", "sort_results", "paginate_results"}
+    if plan.tool not in executable_screen_tools and plan.tool != "strategy_select":
         return response
-    if plan.tool == "stock_screen" and not plan.conditions and not is_explicit_all_stocks_query(response.query):
+    if plan.tool in executable_screen_tools and not plan.conditions and not is_explicit_all_stocks_query(response.query):
         guarded = build_clarification_response(response.query, ai_configured=plan.ai_configured)
         guarded.answer = "我还没有拿到可执行的筛选条件。请补充指标、行业或风险偏好后再执行。"
         guarded.warnings = [*response.warnings, "已阻止无条件全市场筛选。"]
@@ -697,8 +727,8 @@ def execute_agent_plan(
         guarded.tool_calls = [
             *response.tool_calls,
             _tool_call(
-                "stock_screen",
-                "股票筛选",
+                plan.tool,
+                plan.tool_label,
                 status="skipped",
                 message="空条件筛选已拦截",
             ),
@@ -761,6 +791,28 @@ def execute_agent_plan(
     if page_reset:
         picked = "、".join(names) if names else "暂无命中"
         answer = f"上一轮已经到最后一批，已回到第一批结果。当前共 {result.total} 只，前排结果：{picked}。"
+    if plan.tool == "sort_results":
+        completion_call = _tool_call(
+            "result_sort",
+            "结果排序",
+            result={"total": result.total, "returned": len(result.items), "sort_by": plan.sort_by},
+            message="结果排序完成",
+        )
+    elif plan.tool == "paginate_results":
+        completion_call = _tool_call(
+            "result_sort",
+            "结果分页",
+            result={"total": result.total, "returned": len(result.items), "offset": req.offset, "limit": req.limit},
+            message="结果分页完成",
+        )
+    else:
+        completion_call = _tool_call(
+            "stock_screen",
+            "股票筛选",
+            result={"total": result.total, "returned": len(result.items), "offset": req.offset, "limit": req.limit},
+            message="股票筛选完成",
+        )
+
     return StrategyAgentResponse(
         query=response.query,
         plan=plan,
@@ -782,12 +834,7 @@ def execute_agent_plan(
                 if page_reset
                 else []
             ),
-            _tool_call(
-                "stock_screen",
-                "股票筛选",
-                result={"total": result.total, "returned": len(result.items), "offset": req.offset, "limit": req.limit},
-                message="股票筛选完成",
-            ),
+            completion_call,
         ],
     )
 
@@ -1243,9 +1290,9 @@ def build_context_sort_response(
         previous_plan = {}
     sort_by = _requested_sort_by(query) or previous_plan.get("sort_by") or "score"
     plan = StrategyAgentPlan(
-        tool="stock_screen",
-        tool_label="结构化股票筛选",
-        reasoning="用户要求调整上一轮结果排序；沿用条件并修改排序参数后重新筛选。",
+        tool="sort_results",
+        tool_label="结果排序",
+        reasoning="用户要求调整上一轮结果排序；沿用条件并修改排序参数。",
         conditions=conditions,
         condition_labels=_condition_labels(conditions),
         logic=previous_plan.get("logic") if previous_plan.get("logic") in ("AND", "OR") else "AND",
@@ -1258,12 +1305,12 @@ def build_context_sort_response(
         query=query,
         plan=plan,
         answer="已沿用上一轮条件并调整排序，等待执行。",
-        tool_trace=["tool_router -> stock_screen", f"调整排序：{sort_by}"],
+        tool_trace=["tool_router -> sort_results", f"调整排序：{sort_by}"],
         tool_calls=[
             _tool_call(
                 "tool_router",
                 "意图判断",
-                result={"tool": "stock_screen", "action": "result_sort"},
+                result={"tool": "sort_results", "action": "result_sort"},
                 message=plan.reasoning,
             ),
             _tool_call(
@@ -1304,8 +1351,8 @@ def build_context_page_response(
     previous_limit = int(last_result.get("limit") or limit)
     next_offset = previous_offset + max(previous_limit, 1)
     plan = StrategyAgentPlan(
-        tool="stock_screen",
-        tool_label="结构化股票筛选",
+        tool="paginate_results",
+        tool_label="结果分页",
         reasoning="用户要求查看下一批结果；沿用上一轮条件并移动分页偏移。",
         conditions=conditions,
         condition_labels=_condition_labels(conditions),
@@ -1320,12 +1367,12 @@ def build_context_page_response(
         query=query,
         plan=plan,
         answer="已沿用上一轮条件，准备查看下一批结果。",
-        tool_trace=["tool_router -> stock_screen", f"结果翻页：offset={next_offset}"],
+        tool_trace=["tool_router -> paginate_results", f"结果翻页：offset={next_offset}"],
         tool_calls=[
             _tool_call(
                 "tool_router",
                 "意图判断",
-                result={"tool": "stock_screen", "action": "next_page"},
+                result={"tool": "paginate_results", "action": "next_page"},
                 message=plan.reasoning,
             ),
             _tool_call(
