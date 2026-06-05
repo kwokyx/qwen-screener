@@ -587,18 +587,19 @@ def test_agent_fallback_reports_model_timeout_reason(db, seed_stocks, monkeypatc
     assert "模型规划超过 10 秒，已使用本地规则兜底" in res.warnings[0]
 
 
-def test_agent_blocks_unsupported_profit_cagr_in_local_fallback(db, seed_stocks, monkeypatch):
+def test_agent_preflights_unsupported_profit_cagr_without_ai_or_screen(db, seed_stocks, monkeypatch):
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("unsupported metrics must not execute a partial screen")
 
-    monkeypatch.setattr(
-        strategy_selector,
-        "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
-    )
-    monkeypatch.setattr(strategy_selector.qwen_client, "reset_plan_failure_reason", lambda: None)
-    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", lambda _query, _context=None: None)
+    def fail_ai_status():
+        raise AssertionError("unsupported preflight should not probe AI health")
+
+    def fail_model(*_args, **_kwargs):
+        raise AssertionError("unsupported preflight should not call the model")
+
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(strategy_selector, "_ai_status", fail_ai_status)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_model)
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     res = strategy_selector.run_agent_selection(
@@ -610,8 +611,11 @@ def test_agent_blocks_unsupported_profit_cagr_in_local_fallback(db, seed_stocks,
     assert res.plan.tool == "ask_clarification"
     assert res.plan.conditions == []
     assert res.screen_result is None
+    assert res.plan.ai_configured is True
+    assert res.plan.ai_used is False
     assert "近三年净利润复合增速" in res.answer
     assert "本轮没有执行筛选" in res.answer
+    assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
     assert any("当前数据字段不支持：近三年净利润复合增速" in warning for warning in res.warnings)
 
 
@@ -619,10 +623,16 @@ def test_agent_blocks_unsupported_metric_families_without_partial_screen(db, see
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("unsupported metric queries must not execute a partial screen")
 
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": False, "ok": False, "reason": "未配置 AI 服务凭证"},
+        lambda: (_ for _ in ()).throw(AssertionError("unsupported preflight should not probe AI health")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_agent_turn",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unsupported preflight should not call the model")),
     )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
@@ -643,6 +653,9 @@ def test_agent_blocks_unsupported_metric_families_without_partial_screen(db, see
         assert res.plan.tool == "ask_clarification"
         assert res.plan.conditions == []
         assert res.screen_result is None
+        assert res.plan.ai_configured is True
+        assert res.plan.ai_used is False
+        assert res.tool_trace[0] == "本地快速路径命中，跳过模型规划"
         assert label in res.answer
         assert any(f"当前数据字段不支持：{label}" in warning for warning in res.warnings)
 

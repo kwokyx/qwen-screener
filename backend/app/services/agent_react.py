@@ -40,6 +40,12 @@ def run_chat_react_agent(
     """
     context = context or {}
     ai_configured = strategy_selector.is_ai_configured()
+    unsupported_preflight = strategy_selector.build_unsupported_metric_preflight_response(
+        query,
+        ai_configured=ai_configured,
+    )
+    if unsupported_preflight is not None:
+        return _execute_prepared_response(db, unsupported_preflight, limit, [])
 
     fast_path = strategy_selector._plan_chat_fast_path(
         query,
@@ -134,6 +140,7 @@ def run_chat_react_agent(
                 step_index,
                 tool=final.plan.tool,
                 model_ms=model_ms,
+                timing_phase="model_final",
                 public_summary=decision.public_reason or "模型基于 observation 生成最终回答。",
             ))
             final.react_steps = [*react_events]
@@ -158,6 +165,7 @@ def run_chat_react_agent(
             step_index,
             tool=plan.tool,
             model_ms=model_ms,
+            timing_phase="model_action",
             public_summary=decision.public_reason or plan.reasoning,
         ))
         if action_key in seen_actions:
@@ -186,6 +194,7 @@ def run_chat_react_agent(
                     "final",
                     step_index,
                     tool=response.plan.tool,
+                    timing_phase="local_final",
                     public_summary="该工具不需要执行本地筛选，已直接生成回答。",
                 ),
             ]
@@ -195,6 +204,7 @@ def run_chat_react_agent(
             "tool_start",
             step_index,
             tool=response.plan.tool,
+            timing_phase="tool_start",
             public_summary=f"正在调用：{response.plan.tool_label}",
         ))
         tool_started = time.perf_counter()
@@ -213,6 +223,7 @@ def run_chat_react_agent(
                 step_index,
                 tool=response.plan.tool,
                 tool_ms=int((time.perf_counter() - tool_started) * 1000),
+                timing_phase="tool_execution",
                 public_summary=observation["summary"],
                 observation=observation,
             ))
@@ -236,6 +247,7 @@ def run_chat_react_agent(
             step_index,
             tool=response.plan.tool,
             tool_ms=tool_ms,
+            timing_phase="tool_execution",
             public_summary=observation["summary"],
             observation=observation,
         ))
@@ -244,6 +256,7 @@ def run_chat_react_agent(
             step_index,
             tool=response.plan.tool,
             tool_ms=tool_ms,
+            timing_phase="tool_execution",
             public_summary="工具执行完成。",
             observation=observation,
         ))
@@ -273,6 +286,7 @@ def _execute_prepared_response(
         "tool_start",
         step_index,
         tool=response.plan.tool,
+        timing_phase="tool_start",
         public_summary=f"正在调用：{response.plan.tool_label}",
         fallback_reason=_fallback_from_response(response),
     ))
@@ -285,6 +299,7 @@ def _execute_prepared_response(
         step_index,
         tool=response.plan.tool,
         tool_ms=tool_ms,
+        timing_phase="tool_execution",
         fallback_reason=_fallback_from_response(response),
         public_summary=observation["summary"],
         observation=observation,
@@ -294,6 +309,7 @@ def _execute_prepared_response(
         step_index,
         tool=response.plan.tool,
         tool_ms=tool_ms,
+        timing_phase="tool_execution",
         fallback_reason=_fallback_from_response(response),
         public_summary="工具执行完成。",
         observation=observation,
@@ -426,6 +442,7 @@ def _finish_or_fallback(
             tool=current_response.plan.tool,
             model_ms=model_ms,
             fallback_reason=reason,
+            timing_phase="model_final_fallback",
             public_summary=reason,
         ))
         current_response.react_steps = [*react_events]
@@ -447,6 +464,7 @@ def _finish_or_fallback(
             tool=response.plan.tool,
             model_ms=model_ms,
             fallback_reason=reason,
+            timing_phase="model_action_fallback",
             public_summary=f"{reason}，已使用本地规则兜底。",
         ),
     ]
@@ -529,6 +547,7 @@ def _event(
     model_ms: int = 0,
     tool_ms: int = 0,
     fallback_reason: str | None = None,
+    timing_phase: str = "",
     public_summary: str = "",
     observation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -539,6 +558,7 @@ def _event(
         "model_ms": int(model_ms or 0),
         "tool_ms": int(tool_ms or 0),
         "fallback_reason": fallback_reason,
+        "timing_phase": timing_phase,
         "public_summary": public_summary,
     }
     if observation is not None:

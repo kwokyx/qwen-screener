@@ -559,6 +559,12 @@ def plan_agent_selection(
     """
     context = context or {}
     ai_configured_hint = _ai_configured()
+    unsupported_preflight = build_unsupported_metric_preflight_response(
+        query,
+        ai_configured=ai_configured_hint,
+    )
+    if unsupported_preflight is not None:
+        return unsupported_preflight
 
     # Explicit non-execution strategy design is deterministic and should not
     # wait for AI health probing, or be overridden by model tool routing.
@@ -852,6 +858,12 @@ def preview_chat_plan(
 ) -> StrategyAgentPlan:
     """Return a fast local routing preview for progressive SSE feedback."""
     context = context or {}
+    unsupported_preflight = build_unsupported_metric_preflight_response(
+        query,
+        ai_configured=_ai_configured(),
+    )
+    if unsupported_preflight is not None:
+        return unsupported_preflight.plan
     fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=_ai_configured())
     if fast_path is not None:
         return fast_path.plan
@@ -898,6 +910,12 @@ def plan_chat_agent(
     """Route and plan a chat turn without executing stock tools."""
     context = context or {}
     ai_configured = _ai_configured()
+    unsupported_preflight = build_unsupported_metric_preflight_response(
+        query,
+        ai_configured=ai_configured,
+    )
+    if unsupported_preflight is not None:
+        return unsupported_preflight
     fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=ai_configured)
     if fast_path is not None:
         fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
@@ -1166,6 +1184,26 @@ def build_unsupported_metric_response(
         ],
         tool_calls=_planned_tool_calls(plan),
     )
+
+
+def build_unsupported_metric_preflight_response(
+    query: str,
+    ai_configured: bool = False,
+) -> StrategyAgentResponse | None:
+    """Return a local fast-path response for unsupported fields before model calls."""
+    unsupported_metrics = _unsupported_metric_labels(query)
+    if not unsupported_metrics:
+        return None
+    response = build_unsupported_metric_response(
+        query,
+        unsupported_metrics,
+        ai_configured=ai_configured,
+    )
+    response.tool_trace = ["本地快速路径命中，跳过模型规划", *response.tool_trace]
+    response.warnings = [
+        f"当前数据字段不支持：{'、'.join(unsupported_metrics)}。已前置停止筛选，避免等待模型或返回不满足全部条件的股票。",
+    ]
+    return response
 
 
 def build_context_screen_response(

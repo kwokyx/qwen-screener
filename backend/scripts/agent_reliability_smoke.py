@@ -226,6 +226,8 @@ def main() -> int:
         terminal = _terminal(events)
         text = json.dumps(terminal, ensure_ascii=False)
         _require(not summary["screened"] and not summary["result"], "unsupported CAGR query executed a partial screen")
+        _require(summary["model_ms"] == 0, "unsupported CAGR query should be blocked before model planning")
+        _require(summary["fallback_reason"] == "local_fast_path", "unsupported CAGR query should use local fast path")
         _require("不支持" in text and ("复合增速" in text or "CAGR" in text), "unsupported CAGR query did not explain unsupported metric")
     except SmokeFailure as exc:
         print(f"[FAIL] {exc}", flush=True)

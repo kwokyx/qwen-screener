@@ -329,14 +329,17 @@ def test_nl_stream_blocks_unsupported_profit_cagr_without_partial_screen(db, see
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("unsupported CAGR query must not execute a partial screen")
 
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
+        lambda: (_ for _ in ()).throw(AssertionError("unsupported preflight should not probe AI health")),
     )
-    monkeypatch.setattr(strategy_selector.qwen_client, "reset_plan_failure_reason", lambda: None)
-    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", lambda _query, context=None, observations=None, step_index=1: None)
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unsupported preflight should not call the model")),
+    )
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     client = TestClient(app)
@@ -348,9 +351,12 @@ def test_nl_stream_blocks_unsupported_profit_cagr_without_partial_screen(db, see
     assert event_types[-1] == "done"
     terminal = next(event for event in events if event["type"] == "agent")
     assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["plan"]["ai_configured"] is True
+    assert terminal["plan"]["ai_used"] is False
     assert terminal["conditions"] == []
+    assert terminal["model_ms"] == 0
+    assert terminal["fallback_reason"] == "local_fast_path"
     assert "近三年净利润复合增速" in terminal["answer"]
-    assert "模型规划超过 10 秒" in terminal["fallback_reason"]
 
 
 def test_nl_stream_design_request_skips_ai_and_screening(db, seed_stocks, monkeypatch):
@@ -795,6 +801,9 @@ def test_nl_stream_react_final_uses_tool_observation(db, seed_stocks, monkeypatc
     event_types = _event_types(events)
 
     assert {"react_step", "tool_start", "tool_observation", "tool_done", "final"} <= set(event_types)
+    assert next(event for event in events if event["type"] == "react_step")["timing_phase"] == "model_action"
+    assert next(event for event in events if event["type"] == "tool_done")["timing_phase"] == "tool_execution"
+    assert next(event for event in events if event["type"] == "final")["timing_phase"] == "model_final"
     result = next(event for event in events if event["type"] == "result")
     assert result["answer"] == "观察到命中 1 只，前排是招商银行。"
     assert result["react_steps"]
@@ -833,33 +842,16 @@ def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypat
     assert any("重复调用相同工具参数" in warning for warning in result["warnings"])
 
 
-def test_nl_stream_react_blocks_unsupported_metric_even_when_model_screens(db, seed_stocks, monkeypatch):
+def test_nl_stream_preflights_unsupported_metric_before_model_action(db, seed_stocks, monkeypatch):
     def fail_screen(*_args, **_kwargs):
-        raise AssertionError("unsupported model action must not execute screening")
+        raise AssertionError("unsupported preflight must not execute screening")
 
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
-    monkeypatch.setattr(
-        strategy_selector,
-        "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
-    )
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector.qwen_client,
         "plan_react_step",
-        lambda _query, context=None, observations=None, step_index=1: AgentReactDecision(
-            kind="action",
-            public_reason="模型尝试筛选，但包含不支持指标。",
-            plan=AgentPlanResult(
-                tool="stock_screen",
-                tool_label="结构化股票筛选",
-                reasoning="错误地忽略 CAGR 的筛选",
-                conditions=[
-                    FilterCondition(field="pe", op="lt", value=15),
-                    FilterCondition(field="roe", op="gt", value=15),
-                    FilterCondition(field="industry", op="in", value=["消费"]),
-                ],
-            ),
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unsupported preflight should not call model action")),
     )
 
     client = TestClient(app)
@@ -870,7 +862,10 @@ def test_nl_stream_react_blocks_unsupported_metric_even_when_model_screens(db, s
     assert "screening" not in event_types
     assert "result" not in event_types
     assert terminal["plan"]["tool"] == "ask_clarification"
-    assert terminal["plan"]["ai_used"] is True
+    assert terminal["plan"]["ai_configured"] is True
+    assert terminal["plan"]["ai_used"] is False
+    assert terminal["model_ms"] == 0
+    assert terminal["fallback_reason"] == "local_fast_path"
     assert "近三年净利润复合增速" in terminal["answer"]
 
 
