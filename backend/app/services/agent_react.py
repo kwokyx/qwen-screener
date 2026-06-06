@@ -48,6 +48,11 @@ def run_chat_react_agent(
     if unsupported_preflight is not None:
         return _execute_prepared_response(db, unsupported_preflight, limit, [], event_sink=event_sink)
 
+    if strategy_selector.is_clarification_query(query) and not strategy_selector.is_confirmation_query(query):
+        response = strategy_selector.build_clarification_response(query, ai_configured=ai_configured)
+        response.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *response.tool_trace]
+        return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
+
     if strategy_selector.is_explicit_non_execution_design_query(query):
         response = strategy_selector.plan_chat_agent(
             query,

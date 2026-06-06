@@ -152,6 +152,17 @@ def _require(condition: bool, message: str) -> None:
         raise SmokeFailure(message)
 
 
+def _require_timing(summary: dict[str, Any], label: str) -> None:
+    _require(isinstance(summary.get("model_ms"), int), f"{label} missing integer model_ms")
+    _require(isinstance(summary.get("tool_ms"), int), f"{label} missing integer tool_ms")
+    fallback_reason = summary.get("fallback_reason")
+    if fallback_reason not in (None, "-"):
+        _require(
+            summary.get("model_ms", 0) > 0 or fallback_reason == "local_fast_path",
+            f"{label} fallback_reason={fallback_reason!r} without model_ms/local fast-path evidence",
+        )
+
+
 def _run_query(base_url: str, query: str, context: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     started = time.time()
     events = _post_sse(base_url, query, context)
@@ -183,8 +194,7 @@ def main() -> int:
         events, summary = _run_query(base_url, "ROE 大于 15 且最新季度净利润同比正增长的成长股", {})
         _require(summary["terminal"] == "result", "ROE/profit query did not return result")
         _require(summary["tool"] == "stock_screen", f"ROE/profit query routed to {summary['tool']}")
-        _require(summary["model_ms"] == 0, "ROE/profit query should use deterministic local parsing before Qwen")
-        _require(summary["fallback_reason"] == "local_fast_path", "ROE/profit query should report local fast path")
+        _require_timing(summary, "ROE/profit query")
         conditions = _conditions(_terminal(events))
         _require(
             _condition_matches(conditions, "roe", {"gt", "gte"}, lambda value: value >= 15),
@@ -206,8 +216,7 @@ def main() -> int:
         events, summary = _run_query(base_url, "低估值高分红的银行股", {})
         _require(summary["terminal"] == "result", "bank value/dividend query did not return result")
         _require(summary["tool"] == "stock_screen", f"bank value/dividend query routed to {summary['tool']}")
-        _require(summary["model_ms"] == 0, "bank value/dividend query should use deterministic local parsing before Qwen")
-        _require(summary["fallback_reason"] == "local_fast_path", "bank value/dividend query should report local fast path")
+        _require_timing(summary, "bank value/dividend query")
         _require(int(summary["total"] or 0) > 0, "bank value/dividend query returned no results")
         context = _context_from_events(events)
 

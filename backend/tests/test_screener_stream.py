@@ -183,7 +183,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
         ("查看第一只详情", "stock_detail", False, "agent", True, 0),
         ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
         ("现在执行", "stock_screen", True, "result", True, 0),
-        ("你好", "ask_clarification", False, "agent", True, 0),
+        ("你好", "ask_clarification", False, "agent", False, 0),
         ("可以，做吧", "ask_clarification", False, "agent", True, 0),
     ]
 
@@ -246,7 +246,14 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
 
     client = TestClient(app)
-    for query in ("你好", "可以，做吧", "为什么这些股票排在前面", "查看第一只详情"):
+    events = _stream_events(client, "你好", context={})
+    terminal = next(event for event in reversed(events) if event["type"] == "agent")
+    assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["plan"]["ai_used"] is False
+    assert terminal["model_ms"] == 0
+    assert terminal["fallback_reason"] == "local_fast_path"
+
+    for query in ("可以，做吧", "为什么这些股票排在前面", "查看第一只详情"):
         events = _stream_events(client, query, context={})
         event_types = _event_types(events)
         terminal = next(event for event in reversed(events) if event["type"] == "agent")
