@@ -129,6 +129,7 @@ def _event_types(events: list[dict[str, Any]]) -> list[str | None]:
 def _summarize(query: str, events: list[dict[str, Any]], elapsed: float) -> dict[str, Any]:
     terminal = _terminal(events)
     plan = terminal.get("plan") or {}
+    embedded_result = terminal.get("result") if isinstance(terminal.get("result"), dict) else {}
     conditions = _conditions(terminal)
     summary = {
         "query": query,
@@ -137,7 +138,7 @@ def _summarize(query: str, events: list[dict[str, Any]], elapsed: float) -> dict
         "conditions": conditions,
         "screened": "screening" in _event_types(events),
         "result": terminal.get("type") == "result",
-        "total": terminal.get("total"),
+        "total": terminal.get("total") if terminal.get("total") is not None else embedded_result.get("total"),
         "model_ms": terminal.get("model_ms"),
         "tool_ms": terminal.get("tool_ms"),
         "fallback_reason": terminal.get("fallback_reason") or "-",
@@ -244,6 +245,37 @@ def main() -> int:
         _require_timing(summary, "bank value/dividend query")
         _require(int(summary["total"] or 0) > 0, "bank value/dividend query returned no results")
         context = _context_from_events(events)
+
+        for query, strategy_id in (
+            ("找最近强势突破的股票", "turtle_breakout"),
+            ("找均线放量的股票", "ma_volume"),
+        ):
+            events, summary = _run_query(base_url, query, {})
+            terminal = _terminal(events)
+            plan = terminal.get("plan") or {}
+            embedded_result = terminal.get("result") if isinstance(terminal.get("result"), dict) else {}
+            strategy = embedded_result.get("strategy") if isinstance(embedded_result.get("strategy"), dict) else {}
+            _require(summary["terminal"] == "agent", f"{query!r} did not return an agent wrapper")
+            _require(summary["tool"] == "strategy_select", f"{query!r} routed to {summary['tool']}")
+            _require(plan.get("strategy_id") == strategy_id, f"{query!r} strategy_id={plan.get('strategy_id')}")
+            _require(plan.get("ai_used") is False, f"{query!r} unexpectedly used AI")
+            _require(summary["model_ms"] == 0, f"{query!r} model_ms={summary['model_ms']}, expected 0")
+            _require(summary["fallback_reason"] == "local_fast_path", f"{query!r} fallback={summary['fallback_reason']}")
+            _require("screening" in _event_types(events), f"{query!r} did not execute strategy tool")
+            _require(strategy.get("id") == strategy_id, f"{query!r} result strategy id mismatch")
+
+        events, summary = _run_query(base_url, "这个 Agent 是什么", {})
+        terminal = _terminal(events)
+        plan = terminal.get("plan") or {}
+        terminal_text = json.dumps(terminal, ensure_ascii=False)
+        _require(summary["terminal"] == "agent", "plain chat did not return agent wrapper")
+        _require(summary["tool"] == "ask_clarification", f"plain chat routed to {summary['tool']}")
+        _require(plan.get("tool_label") == "普通回复", f"plain chat label={plan.get('tool_label')}")
+        _require(plan.get("ai_used") is False, "plain chat unexpectedly used AI")
+        _require(summary["model_ms"] == 0, f"plain chat model_ms={summary['model_ms']}, expected 0")
+        _require(summary["fallback_reason"] == "local_fast_path", f"plain chat fallback={summary['fallback_reason']}")
+        _require("screening" not in _event_types(events) and "result" not in _event_types(events), "plain chat called a tool")
+        _require("有界选股 Agent" in terminal_text, "plain chat did not explain Agent boundary")
 
         for query, expected_tool in (
             ("为什么这些股票排在前面", "explain_result"),

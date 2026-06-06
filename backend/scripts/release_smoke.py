@@ -293,6 +293,43 @@ def _check_fast_path(base_url: str) -> None:
     _pass("SSE fast-path", "你好 -> ask_clarification, model_ms=0")
 
 
+def _check_plain_chat(base_url: str) -> None:
+    events = _post_sse(base_url, "这个 Agent 是什么", {})
+    types = _event_types(events)
+    terminal = _terminal(events)
+    plan = terminal.get("plan") or {}
+    terminal_text = json.dumps(terminal, ensure_ascii=False)
+    _require(plan.get("tool") == "ask_clarification", f"plain chat routed to {plan.get('tool')}")
+    _require(plan.get("tool_label") == "普通回复", f"plain chat label={plan.get('tool_label')}")
+    _require(plan.get("ai_used") is False, "plain chat unexpectedly used AI")
+    _require(terminal.get("model_ms") == 0, f"plain chat model_ms={terminal.get('model_ms')}, expected 0")
+    _require(terminal.get("fallback_reason") == "local_fast_path", f"plain chat fallback={terminal.get('fallback_reason')!r}")
+    _require("screening" not in types and "result" not in types and "planned" not in types, "plain chat triggered tool events")
+    _require("有界选股 Agent" in terminal_text, "plain chat did not explain Agent boundary")
+    _pass("SSE plain chat", "这个 Agent 是什么 -> 普通回复, model_ms=0")
+
+
+def _check_strategy_fast_path(base_url: str) -> None:
+    events = _post_sse(base_url, "找最近强势突破的股票", {})
+    types = _event_types(events)
+    terminal = _terminal(events)
+    plan = terminal.get("plan") or {}
+    embedded_result = terminal.get("result") if isinstance(terminal.get("result"), dict) else {}
+    strategy = embedded_result.get("strategy") if isinstance(embedded_result.get("strategy"), dict) else {}
+    _require(plan.get("tool") == "strategy_select", f"strategy query routed to {plan.get('tool')}")
+    _require(plan.get("strategy_id") == "turtle_breakout", f"strategy_id={plan.get('strategy_id')}")
+    _require(plan.get("ai_used") is False, "strategy fast-path unexpectedly used AI")
+    _require(terminal.get("model_ms") == 0, f"strategy fast-path model_ms={terminal.get('model_ms')}, expected 0")
+    _require(terminal.get("fallback_reason") == "local_fast_path", f"strategy fast-path fallback={terminal.get('fallback_reason')!r}")
+    _require("planned" in types and "screening" in types and "agent" in types, "strategy fast-path missing strategy events")
+    _require("result" not in types, "strategy_select should not emit stock_screen result event")
+    _require(strategy.get("id") == "turtle_breakout", "strategy result id mismatch")
+    _pass(
+        "SSE strategy fast-path",
+        f"找最近强势突破的股票 -> turtle_breakout total={embedded_result.get('total')} model_ms=0",
+    )
+
+
 def _check_detail(base_url: str) -> None:
     context = {
         "last_result": {
@@ -416,6 +453,8 @@ def main() -> int:
         lambda: _check_compose(cwd),
         lambda: _check_health(base_url),
         lambda: _check_fast_path(base_url),
+        lambda: _check_plain_chat(base_url),
+        lambda: _check_strategy_fast_path(base_url),
         lambda: _check_detail(base_url),
         lambda: _check_named_detail(base_url),
         lambda: _check_real_screen(base_url),
