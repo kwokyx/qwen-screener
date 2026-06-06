@@ -250,8 +250,8 @@ def _check_health(base_url: str) -> None:
     else:
         _warn(
             "health/ai",
-            f"configured=true fallback=true reason={ai.get('reason') or 'unknown'}; "
-            "next=rerun after AI upstream recovers",
+            f"probe_ok=false backend={backend} model={model} reason={ai.get('reason') or 'unknown'}; "
+            "next=continue reading SSE real screen result below; rerun later if both probe and real screen fail",
         )
 
     data = _http_json(base_url, "/health/data")
