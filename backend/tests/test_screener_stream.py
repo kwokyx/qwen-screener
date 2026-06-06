@@ -265,6 +265,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     events = _stream_events(client, "你好", context={})
     terminal = next(event for event in reversed(events) if event["type"] == "agent")
     assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["plan"]["tool_label"] == "普通回复"
     assert terminal["plan"]["ai_used"] is False
     assert terminal["model_ms"] == 0
     assert terminal["fallback_reason"] == "local_fast_path"

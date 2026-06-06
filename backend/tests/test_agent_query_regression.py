@@ -258,7 +258,14 @@ def test_chat_react_unknown_strategy_does_not_use_local_strategy(db, seed_stocks
     assert response.strategy_result is None
 
 
-def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch):
+@pytest.mark.parametrize(
+    ("query", "expected_text"),
+    [
+        ("这个 Agent 是什么", "有界选股 Agent"),
+        ("你好", "你好，我可以帮你"),
+    ],
+)
+def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch, query, expected_text):
     _patch_no_ai(monkeypatch)
     monkeypatch.setattr(
         strategy_selector.screener_engine,
@@ -271,12 +278,12 @@ def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not strategy_select")),
     )
 
-    response = agent_react.run_chat_react_agent(db, "这个 Agent 是什么", context={}, limit=5)
+    response = agent_react.run_chat_react_agent(db, query, context={}, limit=5)
 
     assert response.plan.tool == "ask_clarification"
     assert response.plan.tool_label == "普通回复"
     assert response.plan.ai_used is False
-    assert "有界选股 Agent" in response.answer
+    assert expected_text in response.answer
     assert response.screen_result is None
     assert response.strategy_result is None
     assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"

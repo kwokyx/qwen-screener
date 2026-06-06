@@ -1083,6 +1083,21 @@ def is_plain_chat_query(query: str) -> bool:
     """Return True for product/help questions that should not call tools."""
     q = query.strip().lower()
     normalized = "".join(ch for ch in q if ch not in " ，。！？!?、,.：:；;“”\"'（）()")
+    smalltalk_queries = {
+        "你好",
+        "您好",
+        "hello",
+        "hi",
+        "嗨",
+        "谢谢",
+        "感谢",
+        "辛苦了",
+        "随便聊聊",
+        "聊聊",
+        "在吗",
+    }
+    if normalized in smalltalk_queries:
+        return True
     exact_queries = {
         "这个agent是什么",
         "agent是什么",
@@ -1323,6 +1338,7 @@ def build_plain_chat_response(query: str, ai_configured: bool = False) -> Strate
     """Return a local non-tool explanation for product/help questions."""
     if not is_plain_chat_query(query):
         return None
+    normalized = "".join(ch for ch in query.strip().lower() if ch not in " ，。！？!?、,.：:；;“”\"'（）()")
     plan = StrategyAgentPlan(
         tool="ask_clarification",
         tool_label="普通回复",
@@ -1330,12 +1346,20 @@ def build_plain_chat_response(query: str, ai_configured: bool = False) -> Strate
         ai_configured=ai_configured,
         ai_used=False,
     )
-    answer = "\n".join([
-        "我是这个项目里的有界选股 Agent，不是无限自主交易 Agent。",
-        "我可以把明确的选股条件转换成本地筛选，执行内置策略，或基于上一轮结果做解释、排序、分页和详情定位。",
-        "智能选股会经过白名单工具、本地数据和字段边界校验；普通 AI 对话更像开放问答，不会自动调用本地筛选工具。",
-        "可以直接说：低估值高分红的银行股、找最近强势突破的股票、按股息率排序，或查看第一只详情。",
-    ])
+    if normalized in {"你好", "您好", "hello", "hi", "嗨", "在吗"}:
+        answer = "\n".join([
+            "你好，我可以帮你做 A 股筛选、内置策略选股、结果解释、排序分页和个股详情定位。",
+            "直接告诉我明确条件即可，例如：低估值高分红的银行股、找最近强势突破的股票、按股息率排序。",
+        ])
+    elif normalized in {"谢谢", "感谢", "辛苦了"}:
+        answer = "不客气。需要继续筛选、解释上一轮结果或查看个股详情时，直接告诉我条件。"
+    else:
+        answer = "\n".join([
+            "我是这个项目里的有界选股 Agent，不是无限自主交易 Agent。",
+            "我可以把明确的选股条件转换成本地筛选，执行内置策略，或基于上一轮结果做解释、排序、分页和详情定位。",
+            "智能选股会经过白名单工具、本地数据和字段边界校验；普通 AI 对话更像开放问答，不会自动调用本地筛选工具。",
+            "可以直接说：低估值高分红的银行股、找最近强势突破的股票、按股息率排序，或查看第一只详情。",
+        ])
     return StrategyAgentResponse(
         query=query,
         plan=plan,

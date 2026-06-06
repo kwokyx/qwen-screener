@@ -286,11 +286,12 @@ def _check_fast_path(base_url: str) -> None:
     terminal = _terminal(events)
     plan = terminal.get("plan") or {}
     _require(plan.get("tool") == "ask_clarification", f"你好 routed to {plan.get('tool')}")
+    _require(plan.get("tool_label") == "普通回复", f"你好 label={plan.get('tool_label')}")
     _require(terminal.get("model_ms") == 0, f"你好 model_ms={terminal.get('model_ms')}, expected 0")
     _require(terminal.get("fallback_reason") == "local_fast_path", f"你好 fallback_reason={terminal.get('fallback_reason')!r}")
     _require("screening" not in types and "result" not in types, "你好 triggered screening/result events")
     _require("done" in types, "你好 stream did not emit done")
-    _pass("SSE fast-path", "你好 -> ask_clarification, model_ms=0")
+    _pass("SSE fast-path", "你好 -> 普通回复, model_ms=0")
 
 
 def _check_plain_chat(base_url: str) -> None:

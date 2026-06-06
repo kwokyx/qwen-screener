@@ -375,7 +375,7 @@ async function installMockChatSse(cdp) {
       }
       function eventsFor(query) {
         if (query === '你好') {
-          return textEvents(query, 'ask_clarification', '补充追问', '你好，我可以帮你筛选 A 股、解释上一轮结果，或查看个股详情。');
+          return textEvents(query, 'ask_clarification', '普通回复', '你好，我可以帮你筛选 A 股、解释上一轮结果，或查看个股详情。', [], chatOnlyStatus);
         }
         if (query === '可以，做吧') {
           return textEvents(query, 'ask_clarification', '补充追问', '还没有可执行的筛选条件，请先告诉我选股目标。');

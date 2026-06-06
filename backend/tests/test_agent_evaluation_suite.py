@@ -154,6 +154,7 @@ def test_eval_smalltalk_never_screens_market(db, seed_stocks, query, monkeypatch
     result = strategy_selector.run_agent_selection(db, query, limit=10)
 
     assert result.plan.tool == "ask_clarification"
+    assert result.plan.tool_label == "普通回复"
     assert result.screen_result is None
     assert len(result.plan.conditions) == 0
     _assert_not_implicit_full_market(result)
