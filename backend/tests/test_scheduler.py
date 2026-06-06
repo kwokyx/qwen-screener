@@ -192,6 +192,85 @@ def test_run_async_short_circuits_ready_data_and_repairs_failed_meta(db, monkeyp
     assert "daily_market" not in scheduler._running_jobs
 
 
+def test_run_async_repairs_stuck_ready_job_even_when_reserved(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    report_date = date(2026, 3, 31)
+    monkeypatch.setattr(scheduler, "_latest_expected_financial_report_date", lambda day=None: report_date)
+    _seed_basic(db, 100)
+    for code, in db.query(StockBasic.code).limit(90).all():
+        db.add(StockFinancial(code=code, report_date=report_date, roe=12.3))
+    db.commit()
+
+    def should_not_call():
+        raise AssertionError("ready data should repair stuck meta without remote sync")
+
+    monkeypatch.setitem(scheduler.JOBS, "weekly_fundamentals", should_not_call)
+    scheduler._ensure_meta_table()
+    old = datetime.utcnow() - timedelta(hours=4)
+    with scheduler.engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+            "VALUES (:n, :t, :s, :d, :x)"
+        ), {
+            "n": "weekly_fundamentals",
+            "t": old,
+            "s": "running",
+            "d": 0,
+            "x": "任务执行中",
+        })
+
+    scheduler._running_jobs.add("weekly_fundamentals")
+    try:
+        rv = scheduler.run_async("weekly_fundamentals")
+    finally:
+        scheduler._running_jobs.discard("weekly_fundamentals")
+
+    assert rv["queued"] is False
+    assert rv["running"] is False
+    assert rv["shortcut"] is True
+    assert rv["repaired"] is True
+    assert rv["meta"]["status"] == "success"
+    assert "财务覆盖 90/100" in rv["meta"]["detail"]
+    assert "weekly_fundamentals" not in scheduler._running_jobs
+
+
+def test_run_async_repairs_stuck_weekly_basic_when_stock_list_ready(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    _seed_basic(db, 120)
+
+    def should_not_call():
+        raise AssertionError("ready stock list should repair stuck meta without remote sync")
+
+    monkeypatch.setitem(scheduler.JOBS, "weekly_basic", should_not_call)
+    scheduler._ensure_meta_table()
+    old = datetime.utcnow() - timedelta(hours=2)
+    with scheduler.engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+            "VALUES (:n, :t, :s, :d, :x)"
+        ), {
+            "n": "weekly_basic",
+            "t": old,
+            "s": "running",
+            "d": 0,
+            "x": "任务执行中",
+        })
+
+    scheduler._running_jobs.add("weekly_basic")
+    try:
+        rv = scheduler.run_async("weekly_basic")
+    finally:
+        scheduler._running_jobs.discard("weekly_basic")
+
+    assert rv["queued"] is False
+    assert rv["running"] is False
+    assert rv["shortcut"] is True
+    assert rv["repaired"] is True
+    assert rv["meta"]["status"] == "success"
+    assert "股票列表 120 只" in rv["meta"]["detail"]
+    assert "weekly_basic" not in scheduler._running_jobs
+
+
 def test_failed_job_state_does_not_block_retry(db, monkeypatch):
     scheduler._running_jobs.clear()
 

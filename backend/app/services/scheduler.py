@@ -345,6 +345,26 @@ def _weekly_fundamentals_status(db: Session) -> dict:
     }
 
 
+def _weekly_basic_status(db: Session) -> dict:
+    basic_cnt = db.query(StockBasic).count()
+    industry_cnt = db.query(StockBasic).filter(StockBasic.industry.isnot(None)).count()
+    threshold = 100
+    ready = basic_cnt >= threshold
+    detail = (
+        f"数据已达标，跳过远程同步：股票列表 {basic_cnt} 只，"
+        f"行业覆盖 {industry_cnt}/{basic_cnt}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else f"股票列表未达标：{basic_cnt}/{threshold}",
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "basic_rows": basic_cnt,
+        "industry_rows": industry_cnt,
+        "coverage_threshold": threshold,
+    }
+
+
 def _latest_daily_counts(db: Session) -> tuple[int, date | None, date, int, int]:
     basic_cnt = db.query(StockBasic).count()
     expected = _latest_expected_weekday()
@@ -483,6 +503,7 @@ _JOB_DATA_STATUS = {
     "daily_value": _daily_value_status,
     "weekly_fundamentals": _weekly_fundamentals_status,
     "weekly_dividend": _weekly_dividend_status,
+    "weekly_basic": _weekly_basic_status,
     "weekly_kline_backfill": _weekly_kline_backfill_status,
 }
 
@@ -516,6 +537,28 @@ def _shortcut_detail_if_ready(name: str) -> str | None:
     if repair_detail:
         detail = f"{detail}；{repair_detail}"
     return detail
+
+
+def _repair_stuck_or_failed_if_ready(name: str) -> dict | None:
+    """Repair stale sync_meta when local data already satisfies the job."""
+    meta = get_meta().get(name, {})
+    display_status = meta.get("display_status") or meta.get("status")
+    if display_status not in {"failed", "stuck"}:
+        return None
+    shortcut_detail = _shortcut_detail_if_ready(name)
+    if not shortcut_detail:
+        return None
+    _record(name, "success", 0, shortcut_detail)
+    _clear_runtime_caches_after_data_job(name, "success")
+    _release_job(name)
+    return {
+        "queued": False,
+        "running": False,
+        "job": name,
+        "shortcut": True,
+        "repaired": True,
+        "meta": get_meta().get(name, {}),
+    }
 
 
 def _refresh_latest_dividend_yield_if_needed() -> str | None:
@@ -764,6 +807,9 @@ def run_now(job_name: str) -> dict:
     fn = JOBS.get(job_name)
     if not fn:
         raise ValueError(f"未知任务: {job_name}，支持 {list(JOBS)}")
+    repaired = _repair_stuck_or_failed_if_ready(job_name)
+    if repaired is not None:
+        return repaired["meta"]
     if not _reserve_job(job_name):
         meta = get_meta().get(job_name, {})
         return {"already_running": True, **meta}
@@ -780,6 +826,9 @@ def run_async(job_name: str) -> dict:
     fn = JOBS.get(job_name)
     if not fn:
         raise ValueError(f"未知任务: {job_name}，支持 {list(JOBS)}")
+    repaired = _repair_stuck_or_failed_if_ready(job_name)
+    if repaired is not None:
+        return repaired
     if not _reserve_job(job_name):
         meta = get_meta().get(job_name, {})
         return {"queued": False, "running": True, "job": job_name, "meta": meta}
