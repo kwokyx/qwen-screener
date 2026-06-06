@@ -123,7 +123,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 ### GET `/stock/{code}`
 个股详情：基本信息 + 最新行情 + 最新财务摘要 + 涨跌幅（vs 上一交易日收盘）。
 
-`code` 格式：`600519.SH` / `000651.SZ` / `8XXXXX.BJ`
+`code` 格式：`600519.SH` / `000651.SZ` / `920175.BJ`
 
 **响应** `200`
 ```json

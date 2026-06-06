@@ -931,9 +931,6 @@ def _fetch_hist_sina(code: str, start, end):
     """sina 源（英文列名 + sh/sz 前缀）。eastmoney 被封时兜底。"""
     import akshare as ak
     sym, mkt = code.split(".")
-    if mkt == "BJ":
-        # sina 不覆盖北交所，让调用方走 em
-        return None
     sina_sym = mkt.lower() + sym  # sh600519 / sz000001
     df = ak.stock_zh_a_daily(
         symbol=sina_sym,
@@ -1019,7 +1016,12 @@ def backfill_kline_single(db: Session, code: str, days: int) -> int:
     return inserted
 
 
-def backfill_kline_all(db: Session, days: int = 60, workers: int = 6) -> int:
+def backfill_kline_all(
+    db: Session,
+    days: int = 60,
+    workers: int = 6,
+    codes: list[str] | None = None,
+) -> int:
     """全市场 K 线回填：给所有 stock_basic 里的代码补 N 个交易日历史。
 
     每个 akshare 调用本身 ~8s（sina）/ 5s（em），串行 5500 只要 12+ 小时太慢。
@@ -1031,7 +1033,8 @@ def backfill_kline_all(db: Session, days: int = 60, workers: int = 6) -> int:
     import concurrent.futures
     from app.database import SessionLocal
 
-    codes = [c for (c,) in db.query(StockBasic.code).all()]
+    if codes is None:
+        codes = [c for (c,) in db.query(StockBasic.code).all()]
     n = len(codes)
     logger.info("[KLINE-BACKFILL {}d] {} 只, workers={}", days, n, workers)
     total_inserted = 0
@@ -1790,6 +1793,11 @@ def sync_dividend_yield_bs(
 
 def backfill_kline_single_bs(db: Session, code: str, days: int) -> int:
     """baostock 版本的单只 K 线回填 —— 与 AKShare 版同签名的替代函数。"""
+    if code.endswith(".BJ"):
+        # baostock rejects bj.* symbols ("股票代码未标识sh或sz").  BJ history
+        # is available from AKShare/Sina, so avoid two doomed bs retries and
+        # fill the same stock_daily table through the legacy path.
+        return backfill_kline_single(db, code, days)
     try:
         return sync_kline_bs(db, code, days)
     except Exception as e:
@@ -1808,4 +1816,12 @@ def backfill_kline_all_bs(db: Session, days: int = 60) -> int:
     sd = start.strftime("%Y-%m-%d")
     ed = end.strftime("%Y-%m-%d")
 
-    return sync_daily_bs(db, codes=codes, start_date=sd, end_date=ed)
+    bj_codes = [code for code in codes if code.endswith(".BJ")]
+    non_bj_codes = [code for code in codes if not code.endswith(".BJ")]
+
+    affected = 0
+    if non_bj_codes:
+        affected += sync_daily_bs(db, codes=non_bj_codes, start_date=sd, end_date=ed)
+    if bj_codes:
+        affected += backfill_kline_all(db, days=days, workers=6, codes=bj_codes)
+    return affected

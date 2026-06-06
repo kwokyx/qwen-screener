@@ -14,7 +14,7 @@ FastAPI 后端 + Vue 3 前端，集成大模型实现「自然语言筛选 + 基
    ▼
 FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自选 / 对话历史）
                 ├──  Redis 缓存（千问解析结果、个股分析）
-                ├──  Baostock（全 A 基础信息、K 线、财务、分红）+ AKShare 少量兜底
+                ├──  Baostock（沪深 K 线、财务、分红）+ AKShare/Sina（北交所 K 线与兜底）
                 └──  AI 后端：OpenAI 兼容（默认） / 阿里云百炼千问（备用）
 ```
 
@@ -40,7 +40,7 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 ### 后端（Python 3.10+）
 - **FastAPI 0.115** + Uvicorn + SQLAlchemy 2.0 + Pydantic v2
 - **APScheduler** 定时任务（每日收盘后行情、周末财务回填、6h 一次 SQLite 冷备份）
-- **Baostock 优先** 数据源（全 A 基础信息、日 K、周/月 K、分钟 K、财务与分红；AKShare 仅保留少量兜底）
+- **Baostock 优先** 数据源（沪深日 K、周/月 K、分钟 K、财务与分红；北交所历史 K 线走 AKShare/Sina）
 - **OpenAI SDK + dashscope** 双 AI 后端，可一键切换
 - **Redis**（可选）缓存千问解析结果
 
@@ -424,9 +424,10 @@ docker compose exec -T backend pytest
 | 详情页首次历史 K 线不足 | 先返回已有日线，后台补充历史；前端自动刷新图表，不阻塞详情页 |
 | 详情页实时行情上游慢或不可达 | 短预算等待 + 失败缓存 + 熔断；超时后返回本地日线 `source=local` |
 | OpenAI 兼容网关不支持 Responses API | 自动回退 Chat Completions，并在短期熔断窗口内跳过不兼容接口 |
-| 千问输出不是合法 JSON / 工具参数非法 | 后端 schema 强校验；ReAct step 最多修复一次，失败后只走高置信度本地兜底或澄清 |
+| 千问输出不是合法 JSON / 工具参数非法 | 后端 schema 强校验；ReAct step 最多修复一次；仍无合法 action 时普通回复，不自动筛选 |
 | 上游 AI 瞬时网络错误 | `/health/ai` pending/stale 快速返回 + 后台短超时刷新；前端降级后自动复测；业务调用指数退避重试 3 次 |
 | 全市场同步上游返回异常少 | `< DB 80%` 直接跳过该次任务（防止部分快照 wipe） |
+| 北交所历史 K 线不足 | baostock 不支持 `bj.*` 历史查询；`.BJ` 单股和周回填自动走 AKShare/Sina，并发补齐可用历史 |
 | Redis 不可达 | 静默回退到无缓存模式，业务不中断 |
 | 千问 Key 未配置 | 千问相关功能给出明确错误，其他功能正常 |
 | 登录 / 注册验证码错误或过期 | 本次请求失败并刷新验证码；验证码一次性使用，不降低后端校验 |
