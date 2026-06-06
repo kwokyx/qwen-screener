@@ -971,6 +971,17 @@ def run_chat_agent(
     model_failure_reason: str | None = None,
 ) -> StrategyAgentResponse:
     """Plan and execute a chat turn with optional previous-result context."""
+    context = context or {}
+    detail_response = build_stock_detail_response_from_db(
+        db,
+        query,
+        context,
+        ai_configured=_ai_configured(),
+    )
+    if detail_response is not None:
+        detail_response.tool_trace = ["本地快速路径命中，跳过模型规划", *detail_response.tool_trace]
+        return execute_agent_plan(db, detail_response, limit=limit)
+
     response = plan_chat_agent(
         query,
         context=context,
@@ -1548,6 +1559,40 @@ def build_stock_detail_response(
     )
 
 
+def build_stock_detail_response_from_db(
+    db: Session,
+    query: str,
+    context: dict[str, Any],
+    ai_configured: bool = False,
+) -> StrategyAgentResponse | None:
+    """Resolve direct stock detail requests without asking the model.
+
+    This covers turns like "看一下寒武纪的详情" when there is no previous
+    result context. The model still owns fuzzy conversational routing; this
+    path only opens a detail page after a local stock table match.
+    """
+    if not (is_stock_detail_query(query) or _has_stock_lookup_verb(query)):
+        return None
+
+    context_response = build_stock_detail_response(query, context, ai_configured=ai_configured)
+    if context_response.plan.tool == "stock_detail":
+        return context_response
+
+    target = _resolve_stock_detail_target_from_db(db, query)
+    if target:
+        return build_stock_detail_response(
+            query,
+            context,
+            ai_configured=ai_configured,
+            code=target["code"],
+            name=target.get("name") or "",
+        )
+
+    if is_stock_detail_query(query):
+        return context_response
+    return None
+
+
 def build_missing_context_response(query: str, ai_configured: bool = False) -> StrategyAgentResponse:
     plan = StrategyAgentPlan(
         tool="ask_clarification",
@@ -2033,6 +2078,78 @@ def _extract_stock_code(text: str) -> str | None:
         else:
             market = "SH" if digits.startswith(("5", "6", "9")) else "SZ"
     return f"{digits}.{market}"
+
+
+def _has_stock_lookup_verb(query: str) -> bool:
+    q = query.strip().lower()
+    return any(term in q for term in ("查看", "看一下", "看下", "看看", "打开", "进入"))
+
+
+def _stock_name_search_terms(query: str) -> list[str]:
+    text = query.strip()
+    text = re.sub(r"(?i)\b(?:(?:sh|sz|bj)\s*)?\d{6}(?:\s*[.。]\s*(?:sh|sz|bj))?\b", " ", text)
+    for term in (
+        "我想", "想要", "麻烦", "帮我", "请", "一下", "看看", "看一下", "看下",
+        "查看", "打开", "进入", "详情页", "详细资料", "详细", "详情", "个股",
+        "股票", "公司", "走势", "k线", "K线", "的",
+    ):
+        text = text.replace(term, " ")
+    raw_terms = re.findall(r"[\u4e00-\u9fffA-Za-z0-9][\u4e00-\u9fffA-Za-z0-9A-Za-z.-]{1,}", text)
+    stop_terms = {"银行股", "消费股", "半导体股", "股票", "个股", "公司"}
+    terms: list[str] = []
+    for raw in raw_terms:
+        term = raw.strip(".- ")
+        if len(term) < 2 or term in stop_terms:
+            continue
+        if term not in terms:
+            terms.append(term)
+    return sorted(terms, key=len, reverse=True)
+
+
+def _stock_match_score(name: str, query: str, term: str) -> float:
+    score = 0.0
+    if name and name in query:
+        score += 1000
+    if term == name:
+        score += 500
+    if name.startswith(term):
+        score += 250
+    if term in name:
+        score += 100
+    score += min(len(term), 8)
+    score -= len(name) * 0.01
+    return score
+
+
+def _resolve_stock_detail_target_from_db(db: Session, query: str) -> dict[str, Any] | None:
+    requested_code = _extract_stock_code(query)
+    if requested_code:
+        basic = db.get(StockBasic, requested_code)
+        if basic:
+            return {"code": basic.code, "name": basic.name}
+        return None
+
+    candidates: dict[str, tuple[float, StockBasic]] = {}
+    for term in _stock_name_search_terms(query):
+        rows = (
+            db.query(StockBasic)
+            .filter(StockBasic.name.like(f"%{term}%"))
+            .limit(8)
+            .all()
+        )
+        for row in rows:
+            score = _stock_match_score(row.name or "", query, term)
+            current = candidates.get(row.code)
+            if current is None or score > current[0]:
+                candidates[row.code] = (score, row)
+
+    ranked = sorted(candidates.values(), key=lambda item: item[0], reverse=True)
+    if not ranked:
+        return None
+    if len(ranked) > 1 and ranked[0][0] <= ranked[1][0] + 0.001:
+        return None
+    basic = ranked[0][1]
+    return {"code": basic.code, "name": basic.name}
 
 
 def _detail_ordinal_index(query: str) -> int | None:

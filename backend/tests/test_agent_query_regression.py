@@ -142,6 +142,24 @@ def test_text_only_chat_operations_do_not_rescreen(db, seed_stocks, monkeypatch,
         assert detail_call.result["url"] == "/detail/600036.SH"
 
 
+def test_named_stock_detail_uses_local_tool_without_ai(db, seed_stocks, monkeypatch):
+    _patch_no_ai(monkeypatch)
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stock_detail must not screen")),
+    )
+
+    response = agent_react.run_chat_react_agent(db, "我想看一下招商银行的详情", context={}, limit=2)
+
+    assert response.plan.tool == "stock_detail"
+    assert response.plan.ai_used is False
+    assert response.screen_result is None
+    assert response.tool_trace[0] == "本地快速路径命中，跳过 ReAct 模型规划"
+    detail_call = next(call for call in response.tool_calls if call.name == "stock_detail")
+    assert detail_call.result["url"] == "/detail/600036.SH"
+
+
 @pytest.mark.parametrize(
     ("query", "tool", "offset"),
     [

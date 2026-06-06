@@ -195,7 +195,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
         ("为什么这些股票排在前面", "explain_result", False, "agent", True, 0),
         ("按股息率排序", "sort_results", False, "result", True, 1),
         ("换一批", "paginate_results", False, "result", True, 1),
-        ("查看第一只详情", "stock_detail", False, "agent", True, 0),
+        ("查看第一只详情", "stock_detail", False, "agent", False, 0),
         ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
         ("现在执行", "stock_screen", True, "result", True, 0),
         ("你好", "ask_clarification", False, "agent", False, 0),
@@ -268,7 +268,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     assert terminal["model_ms"] == 0
     assert terminal["fallback_reason"] == "local_fast_path"
 
-    for query in ("可以，做吧", "为什么这些股票排在前面", "查看第一只详情"):
+    for query in ("可以，做吧", "为什么这些股票排在前面"):
         events = _stream_events(client, query, context={})
         event_types = _event_types(events)
         terminal = next(event for event in reversed(events) if event["type"] == "agent")
@@ -281,7 +281,19 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
         assert terminal["plan"]["ai_used"] is False
         assert terminal["model_ms"] >= 0
         assert terminal["fallback_reason"] == "模型 ReAct 异常"
-        assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
+
+    events = _stream_events(client, "查看第一只详情", context={})
+    event_types = _event_types(events)
+    terminal = next(event for event in reversed(events) if event["type"] == "agent")
+    assert event_types[-1] == "done"
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    assert "parsed" not in event_types
+    assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["plan"]["ai_used"] is False
+    assert terminal["model_ms"] == 0
+    assert terminal["fallback_reason"] == "local_fast_path"
+    assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
 
 
 def test_nl_stream_screen_query_uses_model_before_local_fallback(db, seed_stocks, monkeypatch):
@@ -652,7 +664,7 @@ def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, m
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+        lambda: (_ for _ in ()).throw(AssertionError("stock detail fast path should not probe AI health")),
     )
     client = TestClient(app)
     with client.stream(
@@ -680,7 +692,48 @@ def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, m
     assert "agent" in event_types
     assert "screening" not in event_types
     assert "result" not in event_types
-    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    terminal = next(event for event in reversed(events) if event["type"] == "agent")
+    assert terminal["plan"]["tool"] == "stock_detail"
+    assert terminal["fallback_reason"] == "local_fast_path"
+    detail_call = next(call for call in terminal["tool_calls"] if call["name"] == "stock_detail")
+    assert detail_call["result"]["url"] == "/detail/600036.SH"
+
+
+def test_nl_stream_named_stock_detail_uses_local_lookup_without_ai(db, seed_stocks, monkeypatch):
+    def fail_screen(*_args, **_kwargs):
+        raise AssertionError("stock_detail should not execute screening")
+
+    monkeypatch.setattr(strategy_selector.screener_engine, "screen", fail_screen)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: (_ for _ in ()).throw(AssertionError("stock detail lookup should not probe AI health")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stock detail lookup should not call model")),
+    )
+
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/v1/screener/nl/stream",
+        json={"query": "我想看一下招商银行的详情", "context": {}},
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(response.iter_text())
+
+    events = _events(body)
+    event_types = [event["type"] for event in events]
+    assert "agent" in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    terminal = next(event for event in reversed(events) if event["type"] == "agent")
+    assert terminal["plan"]["tool"] == "stock_detail"
+    assert terminal["fallback_reason"] == "local_fast_path"
+    detail_call = next(call for call in terminal["tool_calls"] if call["name"] == "stock_detail")
+    assert detail_call["result"]["url"] == "/detail/600036.SH"
 
 
 def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):

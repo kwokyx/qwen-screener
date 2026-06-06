@@ -64,6 +64,16 @@ def run_chat_react_agent(
         response.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *response.tool_trace]
         return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
 
+    detail_fast_path = strategy_selector.build_stock_detail_response_from_db(
+        db,
+        query,
+        context,
+        ai_configured=ai_configured,
+    )
+    if detail_fast_path is not None:
+        detail_fast_path.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *detail_fast_path.tool_trace]
+        return _execute_prepared_response(db, detail_fast_path, limit, [], event_sink=event_sink)
+
     ai_status = strategy_selector._ai_status()
     if not ai_status.get("configured") or not ai_status.get("ok"):
         reason = "AI 服务未配置"
