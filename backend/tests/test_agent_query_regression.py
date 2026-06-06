@@ -177,6 +177,32 @@ def test_chat_react_deterministic_screen_uses_local_tool_without_ai(db, seed_sto
 
 
 @pytest.mark.parametrize(
+    ("query", "tool"),
+    [
+        ("为什么这些股票排在前面", "explain_result"),
+        ("按股息率排序", "sort_results"),
+        ("换一批", "paginate_results"),
+    ],
+)
+def test_chat_react_context_operations_use_local_path_without_ai(db, seed_stocks, monkeypatch, query, tool):
+    _patch_no_ai(monkeypatch)
+
+    response = agent_react.run_chat_react_agent(db, query, context=LAST_RESULT_CONTEXT, limit=2)
+
+    assert response.plan.tool == tool
+    assert response.plan.ai_used is False
+    assert response.tool_trace[0] == "本地快速路径命中，跳过 ReAct 模型规划"
+    assert response.react_steps
+    assert all(step["model_ms"] == 0 for step in response.react_steps)
+    if tool == "explain_result":
+        assert response.screen_result is None
+        assert "不重新筛选" in response.answer
+    else:
+        assert response.screen_result is not None
+        assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
+
+
+@pytest.mark.parametrize(
     ("query", "tool", "offset"),
     [
         ("按股息率排序", "sort_results", 0),

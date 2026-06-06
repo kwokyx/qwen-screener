@@ -260,7 +260,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 "普通回复"
                 if plan.tool == "ask_clarification"
                 and timings.get("fallback_reason") not in (None, "local_fast_path", "local_rules")
-                else "本地规则"
+                else ("本地处理" if plan.ai_configured else "本地规则")
             )
         )
         effective_limit = min(max(plan.limit, 1), 50)

@@ -913,6 +913,35 @@ def _plan_chat_fast_path(
     return None
 
 
+def build_deterministic_chat_operation_response(
+    query: str,
+    context: dict[str, Any] | None = None,
+    *,
+    limit: int = 50,
+    ai_configured: bool = False,
+) -> StrategyAgentResponse | None:
+    """Return local responses for deterministic context operations.
+
+    This is narrower than ``plan_chat_agent(..., allow_model=False)``: it only
+    handles turns that explicitly refer to the previous result or strategy
+    context, and it never falls through to broad local stock-picking rules.
+    """
+    context = context or {}
+    if is_adjustment_query(query):
+        return build_adjust_conditions_response(query, context, ai_configured=ai_configured)
+    if is_result_page_query(query):
+        return build_context_page_response(query, context, limit=limit, ai_configured=ai_configured)
+    if is_result_sort_query(query):
+        return build_context_sort_response(query, context, ai_configured=ai_configured)
+    if is_confirmation_query(query):
+        return build_context_screen_response(query, context, ai_configured=ai_configured)
+    if is_result_explanation_query(query):
+        if is_explain_result_query(query, context):
+            return build_explain_result_response(query, context, ai_configured=ai_configured)
+        return build_missing_context_response(query, ai_configured=ai_configured)
+    return None
+
+
 def plan_chat_agent(
     query: str,
     context: dict[str, Any] | None = None,

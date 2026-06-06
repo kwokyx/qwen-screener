@@ -192,14 +192,14 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     context = {}
     cases = [
         ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", False, 1),
-        ("为什么这些股票排在前面", "explain_result", False, "agent", True, 0),
-        ("按股息率排序", "sort_results", False, "result", True, 1),
-        ("换一批", "paginate_results", False, "result", True, 1),
+        ("为什么这些股票排在前面", "explain_result", False, "agent", False, 0),
+        ("按股息率排序", "sort_results", False, "result", False, 1),
+        ("换一批", "paginate_results", False, "result", False, 1),
         ("查看第一只详情", "stock_detail", False, "agent", False, 0),
         ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
-        ("现在执行", "stock_screen", True, "result", True, 0),
+        ("现在执行", "stock_screen", True, "result", False, 0),
         ("你好", "ask_clarification", False, "agent", False, 0),
-        ("可以，做吧", "ask_clarification", False, "agent", True, 0),
+        ("可以，做吧", "ask_clarification", False, "agent", False, 0),
     ]
 
     for query, expected_tool, should_screen, terminal_type, expected_ai_used, min_total in cases:
@@ -279,8 +279,8 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
         assert "parsed" not in event_types
         assert terminal["plan"]["tool"] == "ask_clarification"
         assert terminal["plan"]["ai_used"] is False
-        assert terminal["model_ms"] >= 0
-        assert terminal["fallback_reason"] == "模型 ReAct 异常"
+        assert terminal["model_ms"] == 0
+        assert terminal["fallback_reason"] == "local_fast_path"
 
     events = _stream_events(client, "查看第一只详情", context={})
     event_types = _event_types(events)
@@ -507,7 +507,7 @@ def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks,
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "ask_clarification"
-    assert "不执行筛选" in agent["answer"]
+    assert "还没有可以直接执行" in agent["answer"]
 
 
 def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks, monkeypatch):
@@ -540,7 +540,18 @@ def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stock
         body = "".join(response.iter_text())
 
     events = _events(body)
-    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    event_types = _event_types(events)
+    assert "result" in event_types
+    assert "screening" in event_types
+    result = next(event for event in events if event["type"] == "result")
+    assert result["plan"]["tool"] == "stock_screen"
+    assert result["plan"]["ai_used"] is False
+    assert result["model_ms"] == 0
+    assert result["fallback_reason"] == "local_fast_path"
+    assert result["parsed_conditions"] == [
+        {"field": "pe", "op": "lt", "value": 20},
+        {"field": "roe", "op": "gt", "value": 20},
+    ]
 
 
 def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch):
@@ -569,8 +580,13 @@ def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch)
         },
     )
 
-    assert response.status_code == 400
-    assert "不执行筛选" in response.text
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] >= 0
+    assert body["parsed_conditions"] == [
+        {"field": "pe", "op": "lt", "value": 20},
+        {"field": "roe", "op": "gt", "value": 20},
+    ]
 
 
 def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
@@ -598,7 +614,14 @@ def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
         body = "".join(response.iter_text())
 
     events = _events(body)
-    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    event_types = _event_types(events)
+    assert "result" in event_types
+    assert "screening" in event_types
+    result = next(event for event in events if event["type"] == "result")
+    assert result["plan"]["tool"] == "stock_screen"
+    assert result["plan"]["ai_used"] is False
+    assert result["model_ms"] == 0
+    assert result["fallback_reason"] == "local_fast_path"
 
 
 def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, monkeypatch):
@@ -623,14 +646,19 @@ def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, m
     assert "result" not in event_types
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "ask_clarification"
-    assert "不执行筛选" in agent["answer"]
+    assert "还没有上一轮条件" in agent["answer"]
 
 
 def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+        lambda: (_ for _ in ()).throw(AssertionError("explain fast path should not probe AI health")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("explain fast path should not call model")),
     )
     client = TestClient(app)
     with client.stream(
@@ -668,7 +696,12 @@ def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks,
     assert "screening" not in event_types
     assert "result" not in event_types
 
-    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    agent = next(event for event in events if event["type"] == "agent")
+    assert agent["plan"]["tool"] == "explain_result"
+    assert agent["plan"]["ai_used"] is False
+    assert agent["model_ms"] == 0
+    assert agent["fallback_reason"] == "local_fast_path"
+    assert "不重新筛选" in agent["answer"]
 
 
 def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
@@ -1039,19 +1072,16 @@ def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks
     assert design["plan"]["ai_used"] is True
 
 
-def test_nl_stream_model_explain_result_skips_screening(db, seed_stocks, monkeypatch):
+def test_nl_stream_local_explain_result_preempts_model(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
+        lambda: (_ for _ in ()).throw(AssertionError("local explain should not probe AI health")),
     )
-    _patch_react_from_single_plan(
-        monkeypatch,
-        lambda _query, _context=None: AgentPlanResult(
-            tool="explain_result",
-            tool_label="结果解释",
-            reasoning="解释上一轮",
-        ),
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local explain should not call model")),
     )
 
     client = TestClient(app)
@@ -1083,9 +1113,9 @@ def test_nl_stream_model_explain_result_skips_screening(db, seed_stocks, monkeyp
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "explain_result"
-    assert agent["plan"]["ai_used"] is True
-    assert agent["model_ms"] >= 0
-    assert agent["fallback_reason"] is None
+    assert agent["plan"]["ai_used"] is False
+    assert agent["model_ms"] == 0
+    assert agent["fallback_reason"] == "local_fast_path"
 
 
 def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):

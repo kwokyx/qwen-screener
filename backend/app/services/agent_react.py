@@ -75,6 +75,16 @@ def run_chat_react_agent(
         detail_fast_path.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *detail_fast_path.tool_trace]
         return _execute_prepared_response(db, detail_fast_path, limit, [], event_sink=event_sink)
 
+    chat_operation = strategy_selector.build_deterministic_chat_operation_response(
+        query,
+        context,
+        limit=limit,
+        ai_configured=ai_configured,
+    )
+    if chat_operation is not None:
+        chat_operation.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *chat_operation.tool_trace]
+        return _execute_prepared_response(db, chat_operation, limit, [], event_sink=event_sink)
+
     deterministic_screen = strategy_selector.build_deterministic_stock_screen_response(
         query,
         limit=limit,
@@ -295,6 +305,15 @@ def _execute_prepared_response(
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> StrategyAgentResponse:
     if response.plan.tool not in EXECUTABLE_TOOLS:
+        step_index = len([event for event in react_events if event["type"] == "react_step"]) + 1
+        _append_event(react_events, _event(
+            "final",
+            step_index,
+            tool=response.plan.tool,
+            timing_phase="local_final",
+            fallback_reason=_fallback_from_response(response),
+            public_summary="本地确定性响应已生成。",
+        ), event_sink)
         response.react_steps = react_events
         return response
     step_index = len([event for event in react_events if event["type"] == "react_step"]) + 1
