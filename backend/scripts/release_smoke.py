@@ -104,6 +104,26 @@ def _http_json(base_url: str, path: str, *, timeout: float = 20.0) -> dict[str, 
         raise SmokeFailure(f"GET {path} returned non-JSON body: {body[:200]}") from exc
 
 
+def _expected_ai_backend() -> str | None:
+    value = (
+        os.environ.get("RELEASE_SMOKE_EXPECTED_AI_BACKEND")
+        or os.environ.get("AI_BACKEND")
+        or ""
+    ).strip()
+    return value or None
+
+
+def _expected_ai_model(backend: str | None) -> str | None:
+    explicit = os.environ.get("RELEASE_SMOKE_EXPECTED_AI_MODEL")
+    if explicit:
+        return explicit.strip() or None
+    if backend == "openai":
+        return (os.environ.get("OPENAI_MODEL") or "").strip() or None
+    if backend == "dashscope":
+        return (os.environ.get("QWEN_MODEL") or "").strip() or None
+    return None
+
+
 def _post_sse(base_url: str, query: str, context: dict[str, Any]) -> list[dict[str, Any]]:
     body = json.dumps({"query": query, "context": context}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
@@ -213,15 +233,25 @@ def _check_compose(cwd: Path) -> None:
 def _check_health(base_url: str) -> None:
     ai = _http_json(base_url, "/health/ai")
     _require(ai.get("configured") is True, "/health/ai reports AI is not configured")
-    _require(ai.get("backend") == "openai", f"/health/ai backend is {ai.get('backend')!r}, expected openai")
-    _require(ai.get("model") == "qwen3.6-plus", f"/health/ai model is {ai.get('model')!r}")
+    backend = ai.get("backend")
+    model = ai.get("model")
+    expected_backend = _expected_ai_backend()
+    if expected_backend:
+        _require(backend == expected_backend, f"/health/ai backend is {backend!r}, expected {expected_backend!r}")
+    else:
+        _require(isinstance(backend, str) and bool(backend), "/health/ai backend is empty")
+    expected_model = _expected_ai_model(backend if isinstance(backend, str) else None)
+    if expected_model:
+        _require(model == expected_model, f"/health/ai model is {model!r}, expected {expected_model!r}")
+    else:
+        _require(isinstance(model, str) and bool(model), "/health/ai model is empty")
     if ai.get("ok") is True:
-        _pass("health/ai", f"ok=true latency_ms={ai.get('latency_ms')}")
+        _pass("health/ai", f"ok=true backend={backend} model={model} latency_ms={ai.get('latency_ms')}")
     else:
         _warn(
             "health/ai",
             f"configured=true fallback=true reason={ai.get('reason') or 'unknown'}; "
-            "next=rerun after OpenCode Go/Qwen upstream recovers",
+            "next=rerun after AI upstream recovers",
         )
 
     data = _http_json(base_url, "/health/data")

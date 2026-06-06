@@ -128,6 +128,7 @@ npm run dev                                     # → http://localhost:5173
 | `CORS_ORIGINS` | `http://localhost:5173` | 多个用逗号分隔 |
 
 > **AI 后端两种配法选其一即可**。OpenCode Go 属于 OpenAI-compatible Chat Completions 网关，因此 `AI_BACKEND=openai`、`OPENAI_RESPONSES_ENABLED=false`。不要把真实 Key 提交进仓库。
+> 若当前账号/网关对 `deepseek-v4-flash` 更稳定，可只在本地 `backend/.env` 改 `OPENAI_MODEL=deepseek-v4-flash`；`release_smoke.py` 会按运行环境里的模型校验，不再固定某个模型名。
 
 ---
 
