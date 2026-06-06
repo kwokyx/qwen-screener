@@ -259,6 +259,34 @@ async function installMockChatSse(cdp) {
           signals: ['下一批结果', '股息率 5.0%'],
         },
       ];
+      const strategyStocks = [
+        {
+          code: '688256.SH',
+          name: '寒武纪',
+          industry: '半导体',
+          close: 1299.2,
+          change_pct: -4.39,
+          pe: 300.44,
+          pb: 18.2,
+          roe: 32.8,
+          dividend_yield: 0.12,
+          score: 96,
+          signals: ['海龟突破', '成交额过亿'],
+        },
+        {
+          code: '688041.SH',
+          name: '海光信息',
+          industry: '半导体',
+          close: 274.06,
+          change_pct: -4.1,
+          pe: 233.67,
+          pb: 12.4,
+          roe: 11.96,
+          dividend_yield: 0.03,
+          score: 91,
+          signals: ['阶段新高', '趋势强势'],
+        },
+      ];
       const designConditions = [
         { field: 'roe', op: 'gte', value: 12 },
         { field: 'dividend_yield', op: 'gte', value: 3 },
@@ -275,6 +303,13 @@ async function installMockChatSse(cdp) {
         fallback: true,
         configured: false,
         reason: 'smoke mock',
+      };
+      const chatOnlyStatus = {
+        source: 'chat_only',
+        used: false,
+        fallback: false,
+        configured: true,
+        label: '普通回复',
       };
       function plan(tool, label, conditions = []) {
         return {
@@ -312,7 +347,7 @@ async function installMockChatSse(cdp) {
           timings: timings || { planning_ms: 4, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
         };
       }
-      function textEvents(query, tool, label, answer, conditions = []) {
+      function textEvents(query, tool, label, answer, conditions = [], status = aiStatus) {
         return [
           { type: 'thinking', text: '本地快速判断工具。' },
           {
@@ -320,7 +355,7 @@ async function installMockChatSse(cdp) {
             plan: plan(tool, label, conditions),
             answer,
             conditions,
-            ai_status: aiStatus,
+            ai_status: status,
             tool_trace: ['tool_router -> ' + tool, '未调用 screener_engine.screen：非筛选工具'],
             tool_calls: [toolCall(tool, label, 'done', {}, '未执行股票筛选')],
             timings: { planning_ms: 3, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
@@ -330,7 +365,7 @@ async function installMockChatSse(cdp) {
             plan: plan(tool, label, conditions),
             answer,
             conditions,
-            ai_status: aiStatus,
+            ai_status: status,
             tool_trace: ['tool_router -> ' + tool, '未调用 screener_engine.screen：非筛选工具'],
             tool_calls: [toolCall(tool, label, 'done', {}, '未执行股票筛选')],
             timings: { planning_ms: 3, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
@@ -344,6 +379,62 @@ async function installMockChatSse(cdp) {
         }
         if (query === '可以，做吧') {
           return textEvents(query, 'ask_clarification', '补充追问', '还没有可执行的筛选条件，请先告诉我选股目标。');
+        }
+        if (query === '这个 Agent 是什么') {
+          return textEvents(
+            query,
+            'ask_clarification',
+            '普通回复',
+            '我是这个项目里的有界选股 Agent，可以执行明确选股条件、内置策略、结果解释、排序、分页和详情定位；普通 AI 对话不会自动调用本地筛选工具。',
+            [],
+            chatOnlyStatus,
+          );
+        }
+        if (query === '找最近强势突破的股票') {
+          const strategyPlan = {
+            ...plan('strategy_select', '策略选股', []),
+            strategy_id: 'turtle_breakout',
+            ai_used: false,
+          };
+          return [
+            { type: 'thinking', text: '本地策略白名单命中。' },
+            {
+              type: 'planned',
+              plan: strategyPlan,
+              conditions: [],
+              ai_status: aiStatus,
+              tool_trace: ['tool_router -> strategy_select', '内置策略白名单：海龟突破'],
+              tool_calls: [toolCall('strategy_select', '策略选股', 'running', {}, '执行海龟突破')],
+              timings: { planning_ms: 2, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+            },
+            {
+              type: 'screening',
+              tool: 'strategy_select',
+              tool_label: '策略选股',
+              tool_call: toolCall('strategy_select', '策略选股', 'running', {}, '执行海龟突破'),
+              timings: { planning_ms: 2, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
+            },
+            {
+              type: 'agent',
+              plan: strategyPlan,
+              answer: '已匹配内置策略「海龟突破」，命中 2 只，前排结果：寒武纪、海光信息。',
+              conditions: [],
+              ai_status: aiStatus,
+              result: {
+                total: 2,
+                offset: 0,
+                limit: 20,
+                trade_date: '2026-06-04',
+                parsed_conditions: [],
+                strategy: { id: 'turtle_breakout', name: '海龟突破' },
+                items: strategyStocks,
+              },
+              tool_trace: ['tool_router -> strategy_select', '调用 strategy_selector.run_strategy_selection'],
+              tool_calls: [toolCall('strategy_select', '策略选股', 'done', { total: 2, strategy_id: 'turtle_breakout' }, '策略选股完成')],
+              timings: { planning_ms: 2, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
+            },
+            { type: 'done' },
+          ];
         }
         if (query === '为什么这些股票排在前面') {
           return textEvents(query, 'explain_result', '结果解释', '招商银行排在前面，主要因为银行行业、低估值和较高股息率同时满足上一轮条件。', bankConditions);
@@ -475,6 +566,7 @@ async function installMockChatSse(cdp) {
             ...(ev.tool_calls || []).map((call) => call.name),
           ]).filter(Boolean))],
           resultEvents: events.filter((ev) => ev.type === 'result').length,
+          hasEmbeddedResult: events.some((ev) => ev.type === 'agent' && ev.result),
           terminal: events.find((ev) => ev.type === 'agent' || ev.type === 'design' || ev.type === 'result') || null,
         });
         const encoder = new TextEncoder();
@@ -547,7 +639,7 @@ async function sendChat(cdp, query, expectedText, expectedTool, expectsResult) {
   )
   const call = await evaluate(cdp, `window.__chatSmokeCalls[window.__chatSmokeCalls.length - 1]`)
   if (!call?.tools?.includes(expectedTool)) fail(`Unexpected tool for ${query}.`, call)
-  if (expectsResult && call.resultEvents < 1) fail(`Expected result event for ${query}.`, call)
+  if (expectsResult && call.resultEvents < 1 && !call.hasEmbeddedResult) fail(`Expected result payload for ${query}.`, call)
   if (!expectsResult && call.resultEvents !== 0) fail(`Did not expect result event for ${query}.`, call)
   return call
 }
@@ -619,8 +711,10 @@ async function run() {
 
     const calls = []
     calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false))
+    calls.push(await sendChat(cdp, '这个 Agent 是什么', '有界选股 Agent', 'ask_clarification', false))
     calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', 'ask_clarification', false))
     calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true))
+    calls.push(await sendChat(cdp, '找最近强势突破的股票', '策略选股结果', 'strategy_select', true))
     calls.push(await sendChat(cdp, '为什么这些股票排在前面', '招商银行排在前面', 'explain_result', false))
     calls.push(await sendChat(cdp, '按股息率排序', '南京银行', 'result_sort', true))
     calls.push(await sendChat(cdp, '换一批', '兴业银行', 'result_sort', true))
@@ -636,16 +730,22 @@ async function run() {
     await waitForExpression(cdp, 'location.pathname === "/chat"', 'browser back to chat')
     await waitForExpression(
       cdp,
-      'location.pathname === "/chat" && document.querySelectorAll(".conversation-turn").length >= 9',
+      'location.pathname === "/chat" && document.querySelectorAll(".conversation-turn").length >= 11',
       'chat state after back',
     )
 
     await cdp.send('Page.reload')
     await waitForExpression(cdp, 'location.pathname === "/chat" && document.body.innerText.includes("现在执行")', 'chat refresh restore')
     const desktop = await chatSnapshot(cdp)
-    if (desktop.turns < 9) fail('Chat did not render the expected multi-turn thread.', desktop)
+    if (desktop.turns < 11) fail('Chat did not render the expected multi-turn thread.', desktop)
     if (!desktop.hasFullResults) fail('Chat result preview did not expose full results.', desktop)
     if (!desktop.hasFallbackReason) fail('Chat runtime panel did not expose fallback/timing details.', desktop)
+    if (!calls.some((call) => call.query === '这个 Agent 是什么' && call.terminal?.plan?.tool_label === '普通回复')) {
+      fail('Chat smoke did not preserve the plain-chat local route.', calls)
+    }
+    if (!calls.some((call) => call.query === '找最近强势突破的股票' && call.hasEmbeddedResult && call.terminal?.plan?.tool === 'strategy_select')) {
+      fail('Chat smoke did not preserve the strategy_select embedded result route.', calls)
+    }
 
     await setViewport(cdp, 390, 844, true)
     await navigate(cdp, `${BASE_URL}/chat`)
@@ -682,6 +782,7 @@ async function run() {
           query: call.query,
           tools: call.tools,
           resultEvents: call.resultEvents,
+          hasEmbeddedResult: call.hasEmbeddedResult,
         })),
       },
       mobile,
