@@ -90,6 +90,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "model_ms": int(timings.get("model_ms") or 0),
             "tool_ms": int(timings.get("tool_ms") or 0),
             "fallback_reason": timings.get("fallback_reason"),
+            "completion_reason": timings.get("completion_reason"),
         }
         non_executing_model_stop = (
             plan.tool == "ask_clarification"
@@ -123,6 +124,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "model_ms": timing_payload["model_ms"],
             "tool_ms": timing_payload["tool_ms"],
             "fallback_reason": timing_payload["fallback_reason"],
+            "completion_reason": timing_payload["completion_reason"],
             "ai_status": {
                 "configured": plan.ai_configured,
                 "used": plan.ai_used,
@@ -176,7 +178,17 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 for step in reversed(steps)
                 if step.get("type") == "final"
                 and step.get("fallback_reason")
-                and str(step.get("timing_phase") or "").startswith("model_")
+                and step.get("timing_phase") == "model_action_stopped"
+            ),
+            None,
+        )
+        completion_reason = next(
+            (
+                step.get("fallback_reason")
+                for step in reversed(steps)
+                if step.get("type") == "final"
+                and step.get("fallback_reason")
+                and step.get("timing_phase") == "model_final_fallback"
             ),
             None,
         )
@@ -185,6 +197,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 step.get("fallback_reason")
                 for step in steps
                 if step.get("fallback_reason")
+                and step.get("timing_phase") != "model_final_fallback"
             ),
             _fallback_reason(response),
         )
@@ -193,6 +206,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "model_ms": model_ms,
             "tool_ms": tool_ms,
             "fallback_reason": fallback_reason,
+            "completion_reason": completion_reason,
         }
 
     def gen():

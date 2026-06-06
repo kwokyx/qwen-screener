@@ -50,10 +50,12 @@ function extractTimingMeta(ev = {}, previousMeta = {}) {
     ev.model_ms != null ||
     ev.tool_ms != null ||
     ev.fallback_reason != null ||
+    ev.completion_reason != null ||
     source.planning_ms != null ||
     source.model_ms != null ||
     source.tool_ms != null ||
-    source.fallback_reason != null
+    source.fallback_reason != null ||
+    source.completion_reason != null
   )
   if (!hasTiming) return {}
   const previous = previousMeta.timings || {}
@@ -62,6 +64,7 @@ function extractTimingMeta(ev = {}, previousMeta = {}) {
     model_ms: ev.model_ms ?? source.model_ms ?? previous.model_ms ?? previousMeta.model_ms ?? 0,
     tool_ms: ev.tool_ms ?? source.tool_ms ?? previous.tool_ms ?? previousMeta.tool_ms ?? 0,
     fallback_reason: ev.fallback_reason ?? source.fallback_reason ?? previous.fallback_reason ?? previousMeta.fallback_reason ?? null,
+    completion_reason: ev.completion_reason ?? source.completion_reason ?? previous.completion_reason ?? previousMeta.completion_reason ?? null,
   }
   return {
     timings,
@@ -69,6 +72,7 @@ function extractTimingMeta(ev = {}, previousMeta = {}) {
     model_ms: timings.model_ms,
     tool_ms: timings.tool_ms,
     fallback_reason: timings.fallback_reason,
+    completion_reason: timings.completion_reason,
   }
 }
 

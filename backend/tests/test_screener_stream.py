@@ -819,6 +819,46 @@ def test_nl_stream_react_final_uses_tool_observation(db, seed_stocks, monkeypatc
     assert observed["payload"][0]["items"][0]["code"] == "600036.SH"
 
 
+def test_nl_stream_react_final_timeout_reports_completion_reason(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+
+    def plan_react_step(query, context=None, observations=None, step_index=1):
+        if not observations:
+            return AgentReactDecision(
+                kind="action",
+                public_reason="先筛选低估值银行股。",
+                plan=AgentPlanResult(
+                    tool="stock_screen",
+                    tool_label="结构化股票筛选",
+                    reasoning="AI 解析低估值银行筛选",
+                    conditions=[
+                        FilterCondition(field="industry", op="in", value=["银行"]),
+                        FilterCondition(field="pe", op="lt", value=15),
+                    ],
+                    sort_by="dividend_yield",
+                    sort_desc=True,
+                ),
+            )
+        return None
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 8 秒")
+
+    client = TestClient(app)
+    events = _stream_events(client, "请根据模型判断做一次筛选观察", context={})
+    result = next(event for event in events if event["type"] == "result")
+
+    assert result["total"] == 1
+    assert result["plan"]["ai_used"] is True
+    assert result["fallback_reason"] is None
+    assert result["completion_reason"] == "模型 ReAct 步骤超过 8 秒"
+    assert "最终总结未完成" in result["warnings"][-1]
+
+
 def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
@@ -847,8 +887,9 @@ def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypat
     result = next(event for event in events if event["type"] == "result")
 
     assert result["total"] == 1
-    assert "重复调用相同工具参数" in result["fallback_reason"]
-    assert any("重复调用相同工具参数" in warning for warning in result["warnings"])
+    assert result["fallback_reason"] is None
+    assert "重复调用相同工具参数" in result["completion_reason"]
+    assert any("最终总结未完成" in warning for warning in result["warnings"])
 
 
 def test_nl_stream_preflights_unsupported_metric_before_model_action(db, seed_stocks, monkeypatch):

@@ -289,7 +289,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 | `error` | 出错 | `message` |
 | `done` | 流结束 | — |
 
-`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时，`fallback_reason` 会说明模型超时、上游不可达、本地快速路径或安全拦截原因；当没有合法工具 action 时，SSE 不会出现 `screening/result`。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
+`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时。`fallback_reason` 只表示没有执行模型工具 action 的安全停止、本地快速路径或本地规则路径；当没有合法工具 action 时，SSE 不会出现 `screening/result`。如果模型已经给出合法 action 且工具已执行，但最终自然语言总结超时或被截断，结果仍返回，原因写入 `completion_reason`，不应展示成“兜底筛选”。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
 
 **示例**
 ```bash

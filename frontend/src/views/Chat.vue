@@ -156,6 +156,17 @@ function fallbackReasonText(reason) {
   const text = String(reason)
   return text.length > 42 ? `${text.slice(0, 42)}…` : text
 }
+function completionReasonText(reason) {
+  if (!reason) return ''
+  const text = String(reason)
+  if (text.includes('模型 ReAct 步骤超过') || text.includes('超过 8 秒')) {
+    return '模型最终总结超时，已展示工具结果'
+  }
+  if (text.includes('重复调用相同工具参数')) {
+    return '模型重复调用同一工具，已保留现有结果'
+  }
+  return text.length > 42 ? `${text.slice(0, 42)}…` : text
+}
 const runtimeRows = computed(() => {
   const turn = latestTurn.value
   const meta = turn?.screenMeta || screenMeta.value || {}
@@ -164,7 +175,8 @@ const runtimeRows = computed(() => {
     timings.planning_ms != null ||
     timings.model_ms != null ||
     timings.tool_ms != null ||
-    timings.fallback_reason != null
+    timings.fallback_reason != null ||
+    timings.completion_reason != null
   )
   if (!hasTiming) return []
   const tool = meta.tool || turn?.agentPlan?.tool || agentPlan.value?.tool
@@ -172,6 +184,7 @@ const runtimeRows = computed(() => {
   const toolMs = Number(timings.tool_ms || 0)
   const usedModel = meta.ai_status?.used === true || meta.ai_status?.source === 'ai_agent'
   const reason = fallbackReasonText(timings.fallback_reason)
+  const completionReason = completionReasonText(timings.completion_reason)
   const modelAttempted = !usedModel && modelMs > 0
   const fallbackByTimeout = modelAttempted && Boolean(timings.fallback_reason)
   const rows = [
@@ -206,6 +219,9 @@ const runtimeRows = computed(() => {
         ? { label: '执行路径', value: reason, state: 'local' }
         : { label: '未执行原因', value: reason, state: 'skip' },
     )
+  }
+  if (completionReason) {
+    rows.push({ label: '总结状态', value: completionReason, state: 'skip' })
   }
   return rows
 })

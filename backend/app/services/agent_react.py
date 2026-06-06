@@ -431,8 +431,8 @@ def _finish_or_fallback(
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> StrategyAgentResponse:
     if current_response is not None:
-        current_response.warnings = [*current_response.warnings, reason]
-        current_response.tool_trace = [*current_response.tool_trace, f"ReAct 结束：{reason}"]
+        current_response.warnings = [*current_response.warnings, f"最终总结未完成：{reason}"]
+        current_response.tool_trace = [*current_response.tool_trace, f"ReAct 工具已执行，最终总结未完成：{reason}"]
         _append_event(react_events, _event(
             "final",
             len([event for event in react_events if event["type"] == "react_step"]) + 1,
@@ -440,7 +440,7 @@ def _finish_or_fallback(
             model_ms=model_ms,
             fallback_reason=reason,
             timing_phase="model_final_fallback",
-            public_summary=reason,
+            public_summary=f"模型最终总结未完成，已展示工具结果：{reason}",
         ), event_sink)
         current_response.react_steps = [*react_events]
         return current_response

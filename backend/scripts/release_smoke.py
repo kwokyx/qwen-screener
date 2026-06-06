@@ -304,6 +304,7 @@ def _check_real_screen(base_url: str) -> dict[str, Any]:
             "SSE real screen",
             f"total={terminal.get('total')} model_ms={terminal.get('model_ms')} "
             f"tool_ms={terminal.get('tool_ms')} fallback_reason={terminal.get('fallback_reason') or '-'} "
+            f"completion_reason={terminal.get('completion_reason') or '-'} "
             f"elapsed={elapsed:.1f}s",
         )
         return _context_from_events(events)

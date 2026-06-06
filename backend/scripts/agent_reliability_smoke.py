@@ -141,6 +141,7 @@ def _summarize(query: str, events: list[dict[str, Any]], elapsed: float) -> dict
         "model_ms": terminal.get("model_ms"),
         "tool_ms": terminal.get("tool_ms"),
         "fallback_reason": terminal.get("fallback_reason") or "-",
+        "completion_reason": terminal.get("completion_reason") or "-",
         "elapsed_s": round(elapsed, 1),
     }
     print(json.dumps(summary, ensure_ascii=False, default=str), flush=True)
