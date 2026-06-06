@@ -85,13 +85,30 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
     def response_payload(response, timings: dict | None = None) -> dict:
         timings = timings or {}
         plan = response.plan
-        ai_source = "ai_agent" if plan.ai_used else ("local_fallback" if plan.ai_configured else "local_rules")
         timing_payload = {
             "planning_ms": int(timings.get("planning_ms") or 0),
             "model_ms": int(timings.get("model_ms") or 0),
             "tool_ms": int(timings.get("tool_ms") or 0),
             "fallback_reason": timings.get("fallback_reason"),
         }
+        non_executing_model_stop = (
+            plan.tool == "ask_clarification"
+            and plan.ai_configured
+            and not plan.ai_used
+            and timing_payload["fallback_reason"] not in (None, "local_fast_path", "local_rules")
+        )
+        if plan.ai_used:
+            ai_source = "ai_agent"
+            ai_label = "AI Agent"
+            ai_fallback = False
+        elif non_executing_model_stop:
+            ai_source = "chat_only"
+            ai_label = "普通回复"
+            ai_fallback = False
+        else:
+            ai_source = "local_fallback" if plan.ai_configured else "local_rules"
+            ai_label = "本地处理" if plan.ai_configured else "本地规则"
+            ai_fallback = plan.ai_configured and not plan.ai_used
         return {
             "query": response.query,
             "plan": plan.model_dump(),
@@ -110,8 +127,8 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 "configured": plan.ai_configured,
                 "used": plan.ai_used,
                 "source": ai_source,
-                "label": "AI Agent" if plan.ai_used else ("本地规则兜底" if plan.ai_configured else "本地规则"),
-                "fallback": plan.ai_configured and not plan.ai_used,
+                "label": ai_label,
+                "fallback": ai_fallback,
             },
         }
 
@@ -218,7 +235,16 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         wall_ms = int((time.perf_counter() - planning_started) * 1000)
         timings["planning_ms"] = max(int(timings.get("planning_ms") or 0), wall_ms)
         plan = response.plan
-        source = "AI 模型" if plan.ai_used else "本地规则"
+        source = (
+            "AI 模型"
+            if plan.ai_used
+            else (
+                "普通回复"
+                if plan.tool == "ask_clarification"
+                and timings.get("fallback_reason") not in (None, "local_fast_path", "local_rules")
+                else "本地规则"
+            )
+        )
         effective_limit = min(max(plan.limit, 1), 50)
         logger.info(
             "Agent SSE ReAct 完成: tool={} source={} validated=true conditions={} planning_ms={} model_ms={} tool_ms={} fallback_reason={}",

@@ -449,9 +449,9 @@ async function installMockChatSse(cdp) {
           },
           resultEvent(stocks, 0, bankConditions, 'score', null, null, {
             planning_ms: 4,
-            model_ms: 8018,
+            model_ms: 1200,
             tool_ms: 18,
-            fallback_reason: '模型 ReAct 步骤超过 8 秒，已使用本地规则兜底。',
+            fallback_reason: null,
           }),
           { type: 'done' },
         ];
@@ -568,7 +568,7 @@ async function chatSnapshot(cdp) {
       detailButtons: [...document.querySelectorAll('.agent-detail-button')]
         .map((el) => el.textContent.replace(/\\s+/g, ' ').trim()),
       hasFullResults: text.includes('完整列表'),
-      hasFallbackReason: text.includes('兜底原因') || text.includes('本地快速路径'),
+      hasFallbackReason: text.includes('未执行原因') || text.includes('本地快速路径'),
       calls: window.__chatSmokeCalls || [],
     };
   })()`)
@@ -621,7 +621,6 @@ async function run() {
     calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false))
     calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', 'ask_clarification', false))
     calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true))
-    await waitForExpression(cdp, 'document.body.innerText.includes("模型超时，已用本地规则")', 'slow model fallback runtime row')
     calls.push(await sendChat(cdp, '为什么这些股票排在前面', '招商银行排在前面', 'explain_result', false))
     calls.push(await sendChat(cdp, '按股息率排序', '南京银行', 'result_sort', true))
     calls.push(await sendChat(cdp, '换一批', '兴业银行', 'result_sort', true))

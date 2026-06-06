@@ -36,8 +36,9 @@ def run_chat_react_agent(
     """Run one bounded ReAct chat turn and return the final response.
 
     Model-capable stock screening requests go through the ReAct planner first.
-    Local deterministic planning is reserved for unsupported/preflight cases,
-    explicit non-execution turns, and model-unavailable fallback.
+    The backend executes only a validated model action. If the model cannot
+    produce a valid action, this returns a non-executing chat response instead
+    of silently screening with local rules.
     """
     context = context or {}
     ai_configured = strategy_selector.is_ai_configured()
@@ -65,18 +66,11 @@ def run_chat_react_agent(
 
     ai_status = strategy_selector._ai_status()
     if not ai_status.get("configured") or not ai_status.get("ok"):
-        reason = None
+        reason = "AI 服务未配置"
         if ai_status.get("configured"):
             reason = ai_status.get("reason") or "AI 服务不可用"
             reason = f"AI 服务已配置但当前不可用：{reason}"
-        response = strategy_selector.plan_chat_agent(
-            query,
-            context=context,
-            limit=limit,
-            allow_model=False,
-            model_failure_reason=reason,
-        )
-        return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
+        return _non_executing_model_failure_response(query, reason, ai_configured=ai_configured)
 
     started = time.perf_counter()
     observations: list[dict[str, Any]] = []
@@ -451,24 +445,53 @@ def _finish_or_fallback(
         current_response.react_steps = [*react_events]
         return current_response
 
-    response = strategy_selector.plan_chat_agent(
+    response = _non_executing_model_failure_response(
         query,
-        context=context,
-        limit=limit,
-        allow_model=False,
-        model_failure_reason=reason,
+        reason,
+        ai_configured=strategy_selector.is_ai_configured(),
     )
-    response = _execute_prepared_response(db, response, limit, react_events, event_sink=event_sink)
+    response.react_steps = react_events
     _append_event(response.react_steps, _event(
         "final",
         1,
         tool=response.plan.tool,
         model_ms=model_ms,
         fallback_reason=reason,
-        timing_phase="model_action_fallback",
-        public_summary=f"{reason}，已使用本地规则兜底。",
+        timing_phase="model_action_stopped",
+        public_summary=f"{reason}，未调用选股工具。",
     ), event_sink)
     return response
+
+
+def _non_executing_model_failure_response(
+    query: str,
+    reason: str,
+    *,
+    ai_configured: bool,
+) -> StrategyAgentResponse:
+    plan = StrategyAgentPlan(
+        tool="ask_clarification",
+        tool_label="普通回复",
+        reasoning="模型没有产生可执行工具调用；后端不自动执行本地筛选。",
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    answer = "\n".join([
+        "我现在没有拿到可靠的工具调用结果，所以不执行筛选。",
+        f"原因：{reason}。",
+        "你可以稍后重试，或者直接用结构化筛选条件执行。",
+    ])
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=answer,
+        warnings=[reason],
+        tool_trace=[
+            "ReAct 未产生可执行工具调用",
+            "未调用 screener_engine.screen：没有通过模型 schema 校验的工具 action",
+        ],
+        tool_calls=[],
+    )
 
 
 def _observation_from_response(response: StrategyAgentResponse) -> dict[str, Any]:

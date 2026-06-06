@@ -268,7 +268,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 ---
 
 ### POST `/screener/nl/stream` ⚡
-自然语言筛选 **SSE 流式版本**。Chat Agent 是 bounded ReAct：普通支持字段筛选会先让模型选择一个白名单工具，后端执行本地工具并生成 observation，模型或安全兜底再给出最终回答。纯问候/缺少条件的澄清请求、明确“先别执行”的策略设计请求，以及 unsupported metric 会在模型前本地处理；模型慢、超时或上游不可达时，后端会回到本地安全规则兜底并保留计时和原因。
+自然语言筛选 **SSE 流式版本**。Chat Agent 是 bounded ReAct：普通支持字段筛选会先让模型选择一个白名单工具；只有模型返回通过 schema 校验的工具 action，后端才执行本地工具并生成 observation。纯问候/缺少条件的澄清请求、明确“先别执行”的策略设计请求，以及 unsupported metric 会在模型前本地处理；模型慢、超时、上游不可达或没有给出合法 action 时，后端返回普通回复，不自动筛选，并保留计时和原因。
 
 **协议**：每帧 `data: {json}\n\n`，`payload.type` ∈
 | type | 含义 | 字段 |
@@ -289,7 +289,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 | `error` | 出错 | `message` |
 | `done` | 流结束 | — |
 
-`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时，`fallback_reason` 会说明模型超时、上游不可达、本地快速路径或安全拦截原因。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
+`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时，`fallback_reason` 会说明模型超时、上游不可达、本地快速路径或安全拦截原因；当没有合法工具 action 时，SSE 不会出现 `screening/result`。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
 
 **示例**
 ```bash
@@ -623,7 +623,7 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 }
 ```
 
-若已有过期探测结果，接口会带 `stale=true` 返回旧状态，同时后台刷新真实结果。AI 上游不可达时，Chat / Strategy 仍会走本地规则兜底，UI 应展示 `reason`，不要把失败隐藏成模型可用。
+若已有过期探测结果，接口会带 `stale=true` 返回旧状态，同时后台刷新真实结果。AI 上游不可达时，Chat Agent 不会自动执行筛选工具；UI 应展示 `reason`，不要把失败隐藏成模型可用。
 
 ---
 

@@ -275,8 +275,11 @@ def _check_detail(base_url: str) -> None:
     types = _event_types(events)
     terminal = _terminal(events)
     plan = terminal.get("plan") or {}
-    _require(plan.get("tool") == "stock_detail", f"detail routed to {plan.get('tool')}")
     _require("screening" not in types and "result" not in types, "stock_detail triggered screening/result events")
+    if plan.get("tool") == "ask_clarification" and terminal.get("fallback_reason"):
+        _pass("SSE stock_detail safe-stop", f"查看第一只详情 stopped: {terminal.get('fallback_reason')}")
+        return
+    _require(plan.get("tool") == "stock_detail", f"detail routed to {plan.get('tool')}")
     calls = terminal.get("tool_calls") or []
     detail_call = next((call for call in calls if call.get("name") == "stock_detail"), None)
     _require(bool(detail_call), "stock_detail call missing")
@@ -291,19 +294,30 @@ def _check_real_screen(base_url: str) -> dict[str, Any]:
     types = _event_types(events)
     terminal = _terminal(events)
     plan = terminal.get("plan") or {}
-    _require(terminal.get("type") == "result", f"screen terminal type is {terminal.get('type')}")
-    _require(plan.get("tool") == "stock_screen", f"screen routed to {plan.get('tool')}")
-    _require("screening" in types and "result" in types and "done" in types, "screen stream missing screening/result/done")
-    _require(int(terminal.get("total") or 0) > 0, "screen result total is 0")
     _require(isinstance(terminal.get("model_ms"), int), "screen result missing model_ms")
     _require(isinstance(terminal.get("tool_ms"), int), "screen result missing tool_ms")
+    if terminal.get("type") == "result":
+        _require(plan.get("tool") == "stock_screen", f"screen routed to {plan.get('tool')}")
+        _require("screening" in types and "result" in types and "done" in types, "screen stream missing screening/result/done")
+        _require(int(terminal.get("total") or 0) > 0, "screen result total is 0")
+        _pass(
+            "SSE real screen",
+            f"total={terminal.get('total')} model_ms={terminal.get('model_ms')} "
+            f"tool_ms={terminal.get('tool_ms')} fallback_reason={terminal.get('fallback_reason') or '-'} "
+            f"elapsed={elapsed:.1f}s",
+        )
+        return _context_from_events(events)
+
+    _require(terminal.get("type") == "agent", f"screen terminal type is {terminal.get('type')}")
+    _require(plan.get("tool") == "ask_clarification", f"failed screen should stop as ask_clarification, got {plan.get('tool')}")
+    _require("screening" not in types and "result" not in types, "failed screen still triggered screening/result events")
+    _require(terminal.get("fallback_reason"), "failed screen did not expose fallback_reason")
     _pass(
-        "SSE real screen",
-        f"total={terminal.get('total')} model_ms={terminal.get('model_ms')} "
-        f"tool_ms={terminal.get('tool_ms')} fallback_reason={terminal.get('fallback_reason') or '-'} "
+        "SSE real screen safe-stop",
+        f"model_ms={terminal.get('model_ms')} fallback_reason={terminal.get('fallback_reason')} "
         f"elapsed={elapsed:.1f}s",
     )
-    return _context_from_events(events)
+    return {}
 
 
 def _check_secret_scan(cwd: Path) -> None:

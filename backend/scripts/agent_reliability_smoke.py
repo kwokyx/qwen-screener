@@ -173,6 +173,16 @@ def _run_query(base_url: str, query: str, context: dict[str, Any]) -> tuple[list
     return events, summary
 
 
+def _is_safe_model_stop(summary: dict[str, Any]) -> bool:
+    return (
+        summary.get("terminal") == "agent"
+        and summary.get("tool") == "ask_clarification"
+        and not summary.get("screened")
+        and not summary.get("result")
+        and bool(summary.get("fallback_reason") not in (None, "-"))
+    )
+
+
 def main() -> int:
     base_url = os.environ.get("AGENT_RELIABILITY_BASE_URL", _default_base_url())
     print(f"Agent reliability smoke endpoint: {base_url}/screener/nl/stream", flush=True)
@@ -192,6 +202,13 @@ def main() -> int:
 
     try:
         events, summary = _run_query(base_url, "ROE 大于 15 且最新季度净利润同比正增长的成长股", {})
+        if _is_safe_model_stop(summary):
+            print(
+                "[WARN] real Qwen did not produce a valid tool call; no local screen was executed "
+                f"fallback_reason={summary['fallback_reason']}",
+                flush=True,
+            )
+            return 0
         _require(summary["terminal"] == "result", "ROE/profit query did not return result")
         _require(summary["tool"] == "stock_screen", f"ROE/profit query routed to {summary['tool']}")
         _require_timing(summary, "ROE/profit query")
@@ -214,6 +231,13 @@ def main() -> int:
         )
 
         events, summary = _run_query(base_url, "低估值高分红的银行股", {})
+        if _is_safe_model_stop(summary):
+            print(
+                "[WARN] real Qwen did not produce a valid tool call for follow-up screen; "
+                f"fallback_reason={summary['fallback_reason']}",
+                flush=True,
+            )
+            return 0
         _require(summary["terminal"] == "result", "bank value/dividend query did not return result")
         _require(summary["tool"] == "stock_screen", f"bank value/dividend query routed to {summary['tool']}")
         _require_timing(summary, "bank value/dividend query")

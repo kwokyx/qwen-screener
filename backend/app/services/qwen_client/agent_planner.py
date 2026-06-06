@@ -1,7 +1,7 @@
 """模型 Function Calling / ReAct Agent 规划适配器。
 
 向模型暴露一组白名单工具，由模型自主选择并生成结构化参数；
-后端校验通过后才使用，否则使用本地规则兜底。
+后端校验通过后才使用，否则由调用方安全停止或走兼容处理。
 """
 
 from __future__ import annotations

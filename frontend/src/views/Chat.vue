@@ -117,10 +117,11 @@ const turnAgentTitle = (turn) => turn?.agentPlan?.tool_label || 'Agent 结论'
 const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '股票筛选' : '待判断')
 function agentSourceLabel(plan, aiRuntime = null) {
   if (aiRuntime?.source === 'ai_agent' || aiRuntime?.used === true) return 'AI Agent'
-  if (aiRuntime?.source === 'local_fallback' || aiRuntime?.fallback) return '本地规则兜底'
+  if (aiRuntime?.source === 'chat_only') return '普通回复'
+  if (aiRuntime?.source === 'local_fallback' || aiRuntime?.fallback) return '本地处理'
   if (aiRuntime?.source === 'local_rules' || aiRuntime?.configured === false) return '本地规则'
   if (aiRuntime?.label) return aiRuntime.label
-  if (plan?.ai_configured) return '本地规则兜底'
+  if (plan?.ai_configured) return '本地处理'
   return '本地规则'
 }
 const turnSourceLabel = (turn) => agentSourceLabel(turn?.agentPlan, turn?.screenMeta?.ai_status || turn?.aiStatus)
@@ -179,7 +180,7 @@ const runtimeRows = computed(() => {
       value: usedModel
         ? `ReAct 模型 ${fmtRuntimeMs(modelMs)}`
         : (fallbackByTimeout
-            ? `模型超时，已用本地规则 ${fmtRuntimeMs(modelMs)}`
+            ? `模型未给出工具调用 ${fmtRuntimeMs(modelMs)}`
             : (modelAttempted ? `模型未完成 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`)),
       state: usedModel ? 'model' : (modelAttempted ? 'skip' : 'local'),
     },
@@ -203,20 +204,20 @@ const runtimeRows = computed(() => {
     rows.push(
       timings.fallback_reason === 'local_fast_path'
         ? { label: '执行路径', value: reason, state: 'local' }
-        : { label: '兜底原因', value: reason, state: 'skip' },
+        : { label: '未执行原因', value: reason, state: 'skip' },
     )
   }
   return rows
 })
 const aiStatusLine = computed(() => {
   if (!aiStatus.lastChecked) return 'AI 检测中…'
-  if (aiStatus.pending) return 'AI 检测中 · 本地规则可用'
+  if (aiStatus.pending) return 'AI 检测中 · 暂不自动筛选'
   if (aiStatus.stale) return 'AI 状态刷新中 · 使用上次结果'
   if (!aiStatus.configured && aiStatus.reason && !aiStatus.reason.includes('未配置')) {
-    return 'AI 探测失败 · 本地规则兜底'
+    return 'AI 探测失败 · 暂不自动筛选'
   }
-  if (!aiStatus.configured) return 'AI 未配置 · 本地规则'
-  if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 本地规则兜底`
+  if (!aiStatus.configured) return 'AI 未配置 · 普通对话'
+  if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 不自动筛选`
   return `AI Agent 就绪 · ${[aiStatus.backend, aiStatus.model].filter(Boolean).join(' / ')}`
 })
 const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
@@ -570,7 +571,7 @@ const stageColor = (s) => ({
               </button>
               <button v-else @click="send"
                       :disabled="!canSubmit"
-                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}），将使用本地规则兜底` : ''"
+                      :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}），不会自动调用筛选工具` : ''"
                       :style="{ padding: '7px 14px', background: canSubmit ? A2.qwenGrad : '#B8B4A8', color: '#fff', border: 'none', fontSize: '12px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '5px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(14,14,12,0.12)', opacity: canSubmit ? 1 : 0.7 }">
                 发送 <Icon name="send" :size="12" />
               </button>
@@ -583,7 +584,7 @@ const stageColor = (s) => ({
           <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
             <Icon name="alert" :size="13" />
             <span style="flex:1">
-              <strong>本地规则兜底</strong>
+              <strong>AI 暂不可用</strong>
               <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || 'AI 服务暂时不可达' }}</span>
             </span>
             <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">

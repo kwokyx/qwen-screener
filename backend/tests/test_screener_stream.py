@@ -57,6 +57,21 @@ def _event_types(events: list[dict]) -> list[str]:
     return [event["type"] for event in events]
 
 
+def _assert_safe_stop(events: list[dict], expected_reason: str | None = None) -> dict:
+    event_types = _event_types(events)
+    assert "agent" in event_types
+    assert "parsed" not in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    terminal = next(event for event in events if event["type"] == "agent")
+    assert terminal["plan"]["tool"] == "ask_clarification"
+    assert terminal["plan"]["ai_used"] is False
+    assert terminal["fallback_reason"]
+    if expected_reason:
+        assert expected_reason in terminal["fallback_reason"]
+    return terminal
+
+
 def _patch_react_from_single_plan(monkeypatch, planner):
     """Adapt existing single-tool fake planners to the ReAct step API."""
 
@@ -346,9 +361,12 @@ def test_nl_stream_model_failure_preserves_attempted_model_ms(db, seed_stocks, m
 
     client = TestClient(app)
     events = _stream_events(client, "找最近强势突破的股票", context={})
+    event_types = _event_types(events)
     result = next(event for event in events if event["type"] == "agent")
 
-    assert result["plan"]["tool"] == "strategy_select"
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    assert result["plan"]["tool"] == "ask_clarification"
     assert result["plan"]["ai_used"] is False
     assert result["model_ms"] > 0
     assert result["fallback_reason"]
@@ -409,15 +427,8 @@ def test_nl_stream_design_request_skips_ai_and_screening(db, seed_stocks, monkey
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert "design" in event_types
-    assert "screening" not in event_types
-    assert "result" not in event_types
-
-    design = next(event for event in events if event["type"] == "design")
-    assert design["plan"]["tool"] == "strategy_design"
-    assert len(design["conditions"]) == 7
-    assert "先不执行筛选" in design["answer"]
+    terminal = _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    assert "不执行筛选" in terminal["answer"]
 
 
 def test_nl_stream_clarification_request_skips_screening(db, seed_stocks, monkeypatch):
@@ -469,7 +480,7 @@ def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks,
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "ask_clarification"
-    assert "还没有可以直接执行的上一轮条件" in agent["answer"]
+    assert "不执行筛选" in agent["answer"]
 
 
 def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks, monkeypatch):
@@ -502,13 +513,7 @@ def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stock
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
-    assert "tool_call" in event_types
-    result = next(event for event in events if event["type"] == "result")
-    assert result["total"] == 2
-    assert {item["code"] for item in result["items"]} == {"000333.SZ", "000596.SZ"}
-    assert any(call["name"] == "stock_screen" for call in result["tool_calls"])
+    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
 
 
 def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch):
@@ -537,14 +542,8 @@ def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch)
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 2
-    assert {item["code"] for item in data["items"]} == {"000333.SZ", "000596.SZ"}
-    assert data["parsed_conditions"] == [
-        {"field": "pe", "op": "lt", "value": 20},
-        {"field": "roe", "op": "gt", "value": 20},
-    ]
+    assert response.status_code == 400
+    assert "不执行筛选" in response.text
 
 
 def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
@@ -572,14 +571,7 @@ def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
-    parsed = next(event for event in events if event["type"] == "parsed")
-    assert parsed["conditions"] == [
-        {"field": "pe", "op": "lt", "value": 16},
-        {"field": "roe", "op": "gt", "value": 23},
-    ]
-    assert any(event.get("tool_call", {}).get("name") == "condition_parser" for event in events)
+    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
 
 
 def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, monkeypatch):
@@ -604,7 +596,7 @@ def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, m
     assert "result" not in event_types
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "ask_clarification"
-    assert "没有上一轮条件" in agent["answer"]
+    assert "不执行筛选" in agent["answer"]
 
 
 def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
@@ -649,10 +641,7 @@ def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks,
     assert "screening" not in event_types
     assert "result" not in event_types
 
-    agent = next(event for event in events if event["type"] == "agent")
-    assert agent["plan"]["tool"] == "explain_result"
-    assert "招商银行" in agent["answer"]
-    assert "不重新筛选" in agent["answer"]
+    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
 
 
 def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
@@ -691,12 +680,7 @@ def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, m
     assert "agent" in event_types
     assert "screening" not in event_types
     assert "result" not in event_types
-    thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在整理响应：详情页定位" in t for t in thinking_texts)
-    agent = next(event for event in events if event["type"] == "agent")
-    assert agent["plan"]["tool"] == "stock_detail"
-    detail_call = next(call for call in agent["tool_calls"] if call["name"] == "stock_detail")
-    assert detail_call["result"]["url"] == "/detail/600036.SH"
+    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
 
 
 def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):
@@ -716,11 +700,7 @@ def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert event_types.index("planned") < event_types.index("screening") < event_types.index("agent")
-    agent = next(event for event in events if event["type"] == "agent")
-    assert agent["plan"]["tool"] == "strategy_select"
-    assert agent["result"]["total"] >= 0
+    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
 
 
 def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch):
@@ -1026,8 +1006,8 @@ def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
     assert agent["plan"]["ai_used"] is True
 
 
-def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypatch):
-    """Verify truthful SSE stage text even with local fallback."""
+def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks, monkeypatch):
+    """AI unavailable must not silently execute a local stock screen."""
     monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
@@ -1044,19 +1024,21 @@ def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypa
         body = "".join(response.iter_text())
 
     events = _events(body)
+    event_types = [event["type"] for event in events]
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
     assert any("正在选择下一步" in t for t in thinking_texts)
     assert any("已选择工具" in t for t in thinking_texts)
     assert any("参数校验已完成" in t for t in thinking_texts)
-    assert any("正在执行本地工具：股票筛选" in t for t in thinking_texts)
     assert any("已生成结果" in t for t in thinking_texts)
-    # Should mention local rule source
-    assert any("本地规则" in t for t in thinking_texts)
-    parsed = next(event for event in events if event["type"] == "parsed")
-    assert parsed["ai_status"] == {
+    assert "parsed" not in event_types
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    agent = next(event for event in events if event["type"] == "agent")
+    assert agent["plan"]["tool"] == "ask_clarification"
+    assert agent["ai_status"] == {
         "configured": True,
         "used": False,
-        "source": "local_fallback",
-        "label": "本地规则兜底",
-        "fallback": True,
+        "source": "chat_only",
+        "label": "普通回复",
+        "fallback": False,
     }
