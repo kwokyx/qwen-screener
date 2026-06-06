@@ -160,6 +160,22 @@ def test_named_stock_detail_uses_local_tool_without_ai(db, seed_stocks, monkeypa
     assert detail_call.result["url"] == "/detail/600036.SH"
 
 
+def test_chat_react_deterministic_screen_uses_local_tool_without_ai(db, seed_stocks, monkeypatch):
+    _patch_no_ai(monkeypatch)
+
+    response = agent_react.run_chat_react_agent(db, "股息率超过 5% 的大蓝筹", context={}, limit=10)
+
+    assert response.plan.tool == "stock_screen"
+    assert response.plan.ai_used is False
+    assert response.screen_result is not None
+    assert _condition_tuples(response) == [("dividend_yield", "gt", 5), ("market_cap", "gt", 500)]
+    assert response.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert response.react_steps
+    assert all(step["model_ms"] == 0 for step in response.react_steps)
+    assert response.react_steps[-1]["type"] == "final"
+    assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
+
+
 @pytest.mark.parametrize(
     ("query", "tool", "offset"),
     [

@@ -35,10 +35,11 @@ def run_chat_react_agent(
 ) -> StrategyAgentResponse:
     """Run one bounded ReAct chat turn and return the final response.
 
-    Model-capable stock screening requests go through the ReAct planner first.
-    The backend executes only a validated model action. If the model cannot
-    produce a valid action, this returns a non-executing chat response instead
-    of silently screening with local rules.
+    High-confidence local intents are handled before remote model calls. Other
+    stock screening requests go through the ReAct planner first. The backend
+    executes only a validated model action. If the model cannot produce a valid
+    action, this returns a non-executing chat response instead of silently
+    screening with broad local rules.
     """
     context = context or {}
     ai_configured = strategy_selector.is_ai_configured()
@@ -73,6 +74,14 @@ def run_chat_react_agent(
     if detail_fast_path is not None:
         detail_fast_path.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *detail_fast_path.tool_trace]
         return _execute_prepared_response(db, detail_fast_path, limit, [], event_sink=event_sink)
+
+    deterministic_screen = strategy_selector.build_deterministic_stock_screen_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured,
+    )
+    if deterministic_screen is not None:
+        return _execute_prepared_response(db, deterministic_screen, limit, [], event_sink=event_sink)
 
     ai_status = strategy_selector._ai_status()
     if not ai_status.get("configured") or not ai_status.get("ok"):

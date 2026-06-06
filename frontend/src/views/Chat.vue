@@ -118,6 +118,7 @@ const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '
 function agentSourceLabel(plan, aiRuntime = null) {
   if (aiRuntime?.source === 'ai_agent' || aiRuntime?.used === true) return 'AI Agent'
   if (aiRuntime?.source === 'chat_only') return '普通回复'
+  if (aiRuntime?.source === 'local_deterministic') return '本地处理'
   if (aiRuntime?.source === 'local_fallback' || aiRuntime?.fallback) return '本地处理'
   if (aiRuntime?.source === 'local_rules' || aiRuntime?.configured === false) return '本地规则'
   if (aiRuntime?.label) return aiRuntime.label

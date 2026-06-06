@@ -268,7 +268,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 ---
 
 ### POST `/screener/nl/stream` ⚡
-自然语言筛选 **SSE 流式版本**。Chat Agent 是 bounded ReAct：普通支持字段筛选会先让模型选择一个白名单工具；只有模型返回通过 schema 校验的工具 action，后端才执行本地工具并生成 observation。纯问候/缺少条件的澄清请求、明确“先别执行”的策略设计请求，以及 unsupported metric 会在模型前本地处理；模型慢、超时、上游不可达或没有给出合法 action 时，后端返回普通回复，不自动筛选，并保留计时和原因。
+自然语言筛选 **SSE 流式版本**。Chat Agent 是 bounded ReAct：明确指标阈值、行业、板块等高置信支持字段筛选会先由本地确定性解析并执行工具；其他需要模型理解、工具路由或策略判断的请求才让模型选择一个白名单工具。只有模型返回通过 schema 校验的工具 action，后端才执行本地工具并生成 observation。纯问候/缺少条件的澄清请求、明确“先别执行”的策略设计请求，以及 unsupported metric 会在模型前本地处理；模型慢、超时、上游不可达或没有给出合法 action 时，后端返回普通回复，不自动筛选，并保留计时和原因。
 
 **协议**：每帧 `data: {json}\n\n`，`payload.type` ∈
 | type | 含义 | 字段 |

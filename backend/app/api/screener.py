@@ -106,6 +106,10 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             ai_source = "chat_only"
             ai_label = "普通回复"
             ai_fallback = False
+        elif timing_payload["fallback_reason"] == "local_fast_path":
+            ai_source = "local_deterministic" if plan.ai_configured else "local_rules"
+            ai_label = "本地处理" if plan.ai_configured else "本地规则"
+            ai_fallback = False
         else:
             ai_source = "local_fallback" if plan.ai_configured else "local_rules"
             ai_label = "本地处理" if plan.ai_configured else "本地规则"

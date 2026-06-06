@@ -191,7 +191,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     client = TestClient(app)
     context = {}
     cases = [
-        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", True, 1),
+        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", False, 1),
         ("为什么这些股票排在前面", "explain_result", False, "agent", True, 0),
         ("按股息率排序", "sort_results", False, "result", True, 1),
         ("换一批", "paginate_results", False, "result", True, 1),
@@ -296,38 +296,18 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
 
 
-def test_nl_stream_screen_query_uses_model_before_local_fallback(db, seed_stocks, monkeypatch):
+def test_nl_stream_deterministic_screen_query_skips_ai_before_tool(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": True, "reason": None},
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
     )
     calls = {"planner": 0}
 
-    def plan_react_step(_query, context=None, observations=None, step_index=1):
+    def plan_react_step(*_args, **_kwargs):
         calls["planner"] += 1
-        if observations:
-            return AgentReactDecision(
-                kind="final",
-                public_reason="模型基于工具 observation 生成最终回答。",
-                final_answer="已根据工具结果生成回答。",
-            )
-        return AgentReactDecision(
-            kind="action",
-            public_reason="模型解析低估值银行筛选",
-            plan=AgentPlanResult(
-                tool="stock_screen",
-                tool_label="结构化股票筛选",
-                reasoning="模型解析低估值银行筛选",
-                conditions=[
-                    FilterCondition(field="industry", op="in", value=["银行"]),
-                    FilterCondition(field="pe", op="lt", value=15),
-                    FilterCondition(field="pb", op="lt", value=2),
-                ],
-                sort_by="market_cap",
-                sort_desc=True,
-            ),
-        )
+        raise AssertionError("deterministic screen should not call ReAct planner")
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
@@ -337,25 +317,60 @@ def test_nl_stream_screen_query_uses_model_before_local_fallback(db, seed_stocks
 
     assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
     assert event_types[-1] == "done"
-    assert calls["planner"] >= 1
-    assert "react_step" in event_types
+    assert calls["planner"] == 0
+    assert "react_step" not in event_types
+    assert {"tool_start", "tool_observation", "tool_done", "final"} <= set(event_types)
     result = next(event for event in events if event["type"] == "result")
     assert result["plan"]["tool"] == "stock_screen"
-    assert result["plan"]["ai_used"] is True
+    assert result["plan"]["ai_used"] is False
     assert result["ai_status"] == {
         "configured": True,
-        "used": True,
-        "source": "ai_agent",
-        "label": "AI Agent",
+        "used": False,
+        "source": "local_deterministic",
+        "label": "本地处理",
         "fallback": False,
     }
-    assert result["model_ms"] >= 0
-    assert result["fallback_reason"] is None
+    assert result["model_ms"] == 0
+    assert result["fallback_reason"] == "local_fast_path"
     assert result["parsed_conditions"]
+    assert [(condition["field"], condition["op"], condition["value"]) for condition in result["parsed_conditions"]] == [
+        ("pe", "lt", 15),
+        ("pb", "lt", 2),
+        ("industry", "in", ["银行"]),
+    ]
     assert any(
         call["name"] == "stock_screen" and call["result"]["total"] == result["total"]
         for call in result["tool_calls"]
     )
+
+
+def test_nl_stream_blue_chip_dividend_query_uses_local_screen(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("deterministic screen should not call model")),
+    )
+
+    client = TestClient(app)
+    events = _stream_events(client, "股息率超过 5% 的大蓝筹", context={})
+    event_types = _event_types(events)
+    result = next(event for event in events if event["type"] == "result")
+
+    assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
+    assert result["plan"]["tool"] == "stock_screen"
+    assert result["plan"]["ai_used"] is False
+    assert result["model_ms"] == 0
+    assert result["fallback_reason"] == "local_fast_path"
+    assert [(condition["field"], condition["op"], condition["value"]) for condition in result["parsed_conditions"]] == [
+        ("dividend_yield", "gt", 5),
+        ("market_cap", "gt", 500),
+    ]
 
 
 def test_nl_stream_model_failure_preserves_attempted_model_ms(db, seed_stocks, monkeypatch):
@@ -1112,7 +1127,7 @@ def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
 
 
 def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks, monkeypatch):
-    """AI unavailable must not silently execute a local stock screen."""
+    """AI unavailable must not silently execute model-routed stock tools."""
     monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
@@ -1123,7 +1138,7 @@ def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks
     with client.stream(
         "POST",
         "/api/v1/screener/nl/stream",
-        json={"query": "低估值银行"},
+        json={"query": "找最近强势突破的股票"},
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
