@@ -298,18 +298,18 @@ async function installMockChatSse(cdp) {
         { field: 'dividend_yield', op: 'gte', value: 4.5 },
       ];
       const aiStatus = {
-        source: 'local_rules',
-        used: false,
-        fallback: true,
-        configured: false,
-        reason: 'smoke mock',
-      };
-      const chatOnlyStatus = {
-        source: 'chat_only',
-        used: false,
+        source: 'ai_agent',
+        used: true,
         fallback: false,
         configured: true,
-        label: '普通回复',
+        label: 'AI Agent',
+      };
+      const chatOnlyStatus = {
+        source: 'ai_agent',
+        used: true,
+        fallback: false,
+        configured: true,
+        label: 'AI Agent',
       };
       function plan(tool, label, conditions = []) {
         return {
@@ -319,7 +319,8 @@ async function installMockChatSse(cdp) {
           conditions,
           sort_by: tool === 'result_sort' ? 'dividend_yield' : 'score',
           sort_desc: true,
-          ai_configured: false,
+          ai_configured: true,
+          ai_used: true,
         };
       }
       function toolCall(name, label, status = 'done', result = {}, message = '') {
@@ -342,23 +343,23 @@ async function installMockChatSse(cdp) {
           parsed_conditions: conditions,
           items,
           ai_status: aiStatus,
-          tool_trace: ['tool_router -> ' + tool, '调用 screener_engine.screen'],
+          tool_trace: ['ReAct step 1: 模型选择 ' + tool, '调用 screener_engine.screen'],
           tool_calls: [toolCall(tool, label, 'done', { total: 3 })],
-          timings: timings || { planning_ms: 4, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
+          timings: timings || { planning_ms: 940, model_ms: 920, tool_ms: 18, fallback_reason: null },
         };
       }
       function textEvents(query, tool, label, answer, conditions = [], status = aiStatus) {
         return [
-          { type: 'thinking', text: '本地快速判断工具。' },
+          { type: 'thinking', text: '模型判断下一步。' },
           {
             type: 'planning',
             plan: plan(tool, label, conditions),
             answer,
             conditions,
             ai_status: status,
-            tool_trace: ['tool_router -> ' + tool, '未调用 screener_engine.screen：非筛选工具'],
+            tool_trace: ['ReAct final：模型未调用工具，直接回答'],
             tool_calls: [toolCall(tool, label, 'done', {}, '未执行股票筛选')],
-            timings: { planning_ms: 3, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+            timings: { planning_ms: 860, model_ms: 860, tool_ms: 0, fallback_reason: null },
           },
           {
             type: 'agent',
@@ -366,9 +367,9 @@ async function installMockChatSse(cdp) {
             answer,
             conditions,
             ai_status: status,
-            tool_trace: ['tool_router -> ' + tool, '未调用 screener_engine.screen：非筛选工具'],
+            tool_trace: ['ReAct final：模型未调用工具，直接回答'],
             tool_calls: [toolCall(tool, label, 'done', {}, '未执行股票筛选')],
-            timings: { planning_ms: 3, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+            timings: { planning_ms: 860, model_ms: 860, tool_ms: 0, fallback_reason: null },
           },
           { type: 'done' },
         ];
@@ -394,25 +395,25 @@ async function installMockChatSse(cdp) {
           const strategyPlan = {
             ...plan('strategy_select', '策略选股', []),
             strategy_id: 'turtle_breakout',
-            ai_used: false,
+            ai_used: true,
           };
           return [
-            { type: 'thinking', text: '本地策略白名单命中。' },
+            { type: 'thinking', text: '模型选择内置策略。' },
             {
               type: 'planned',
               plan: strategyPlan,
               conditions: [],
               ai_status: aiStatus,
-              tool_trace: ['tool_router -> strategy_select', '内置策略白名单：海龟突破'],
+              tool_trace: ['ReAct step 1: 模型选择 strategy_select', '策略：海龟突破'],
               tool_calls: [toolCall('strategy_select', '策略选股', 'running', {}, '执行海龟突破')],
-              timings: { planning_ms: 2, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 920, model_ms: 920, tool_ms: 0, fallback_reason: null },
             },
             {
               type: 'screening',
               tool: 'strategy_select',
               tool_label: '策略选股',
               tool_call: toolCall('strategy_select', '策略选股', 'running', {}, '执行海龟突破'),
-              timings: { planning_ms: 2, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 920, model_ms: 920, tool_ms: 18, fallback_reason: null },
             },
             {
               type: 'agent',
@@ -429,9 +430,9 @@ async function installMockChatSse(cdp) {
                 strategy: { id: 'turtle_breakout', name: '海龟突破' },
                 items: strategyStocks,
               },
-              tool_trace: ['tool_router -> strategy_select', '调用 strategy_selector.run_strategy_selection'],
+              tool_trace: ['ReAct step 1: 模型选择 strategy_select', '调用 strategy_selector.run_strategy_selection'],
               tool_calls: [toolCall('strategy_select', '策略选股', 'done', { total: 2, strategy_id: 'turtle_breakout' }, '策略选股完成')],
-              timings: { planning_ms: 2, model_ms: 0, tool_ms: 18, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 920, model_ms: 920, tool_ms: 18, fallback_reason: null },
             },
             { type: 'done' },
           ];
@@ -447,9 +448,9 @@ async function installMockChatSse(cdp) {
               plan: plan('result_sort', '结果排序', bankConditions),
               conditions: bankConditions,
               ai_status: aiStatus,
-              tool_trace: ['tool_router -> result_sort'],
+              tool_trace: ['ReAct step 1: 模型选择 result_sort'],
               tool_calls: [toolCall('result_sort', '结果排序', 'running', {}, '按股息率排序')],
-              timings: { planning_ms: 3, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 780, model_ms: 780, tool_ms: 0, fallback_reason: null },
             },
             resultEvent([...stocks].reverse(), 0, bankConditions, 'dividend_yield'),
             { type: 'done' },
@@ -463,9 +464,9 @@ async function installMockChatSse(cdp) {
               plan: { ...plan('result_sort', '结果分页', bankConditions), offset: 2 },
               conditions: bankConditions,
               ai_status: aiStatus,
-              tool_trace: ['tool_router -> result_sort'],
+              tool_trace: ['ReAct step 1: 模型选择 result_sort'],
               tool_calls: [toolCall('result_sort', '结果分页', 'running', {}, '下一批结果')],
-              timings: { planning_ms: 2, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 760, model_ms: 760, tool_ms: 0, fallback_reason: null },
             },
             resultEvent(secondPageStocks, 2, bankConditions, 'score', 'result_sort', '结果分页'),
             { type: 'done' },
@@ -481,9 +482,9 @@ async function installMockChatSse(cdp) {
               answer: '已定位第一只股票：招商银行，可以打开详情页查看本地行情和 K 线。',
               conditions: [],
               ai_status: aiStatus,
-              tool_trace: ['tool_router -> stock_detail', '未调用 screener_engine.screen：详情工具'],
+              tool_trace: ['ReAct step 1: 模型选择 stock_detail', '未调用 screener_engine.screen：详情工具'],
               tool_calls: [detailCall],
-              timings: { planning_ms: 2, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 720, model_ms: 720, tool_ms: 0, fallback_reason: null },
             },
             { type: 'done' },
           ];
@@ -497,9 +498,9 @@ async function installMockChatSse(cdp) {
               answer: '策略设计：优先选择 ROE 稳定、股息率不低、资产负债率可控的公司；先不执行筛选。',
               conditions: designConditions,
               ai_status: aiStatus,
-              tool_trace: ['tool_router -> strategy_design', '不调用 screener_engine：仅设计策略'],
+              tool_trace: ['ReAct step 1: 模型选择 strategy_design', '不调用 screener_engine：仅设计策略'],
               tool_calls: [toolCall('strategy_design', '策略设计', 'done', {}, '仅生成条件')],
-              timings: { planning_ms: 4, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 900, model_ms: 900, tool_ms: 0, fallback_reason: null },
             },
             { type: 'done' },
           ];
@@ -512,9 +513,9 @@ async function installMockChatSse(cdp) {
               plan: plan('stock_screen', '股票筛选', designConditions),
               conditions: designConditions,
               ai_status: aiStatus,
-              tool_trace: ['tool_router -> stock_screen'],
+              tool_trace: ['ReAct step 1: 模型选择 stock_screen'],
               tool_calls: [toolCall('stock_screen', '股票筛选', 'running')],
-              timings: { planning_ms: 3, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+              timings: { planning_ms: 820, model_ms: 820, tool_ms: 0, fallback_reason: null },
             },
             resultEvent(stocks, 0, designConditions),
             { type: 'done' },
@@ -527,16 +528,16 @@ async function installMockChatSse(cdp) {
             plan: plan('stock_screen', '股票筛选', bankConditions),
             conditions: bankConditions,
             ai_status: aiStatus,
-            tool_trace: ['tool_router -> stock_screen'],
+            tool_trace: ['ReAct step 1: 模型选择 stock_screen'],
             tool_calls: [toolCall('stock_screen', '股票筛选', 'running')],
-            timings: { planning_ms: 4, model_ms: 0, tool_ms: 0, fallback_reason: 'local_fast_path' },
+            timings: { planning_ms: 1200, model_ms: 1200, tool_ms: 0, fallback_reason: null },
           },
           {
             type: 'screening',
             tool: 'stock_screen',
             tool_label: '股票筛选',
             tool_call: toolCall('stock_screen', '股票筛选', 'running'),
-            timings: { planning_ms: 4, model_ms: 0, tool_ms: 12, fallback_reason: 'local_fast_path' },
+            timings: { planning_ms: 1200, model_ms: 1200, tool_ms: 12, fallback_reason: null },
           },
           resultEvent(stocks, 0, bankConditions, 'score', null, null, {
             planning_ms: 4,
@@ -660,7 +661,7 @@ async function chatSnapshot(cdp) {
       detailButtons: [...document.querySelectorAll('.agent-detail-button')]
         .map((el) => el.textContent.replace(/\\s+/g, ' ').trim()),
       hasFullResults: text.includes('完整列表'),
-      hasFallbackReason: text.includes('未执行原因') || text.includes('本地快速路径'),
+      hasFallbackReason: text.includes('未执行原因') || text.includes('本地快速路径') || text.includes('模型耗时') || text.includes('ReAct 模型'),
       calls: window.__chatSmokeCalls || [],
     };
   })()`)
@@ -741,10 +742,10 @@ async function run() {
     if (!desktop.hasFullResults) fail('Chat result preview did not expose full results.', desktop)
     if (!desktop.hasFallbackReason) fail('Chat runtime panel did not expose fallback/timing details.', desktop)
     if (!calls.some((call) => call.query === '这个 Agent 是什么' && call.terminal?.plan?.tool_label === '普通回复')) {
-      fail('Chat smoke did not preserve the plain-chat local route.', calls)
+      fail('Chat smoke did not preserve the plain-chat model-final route.', calls)
     }
     if (!calls.some((call) => call.query === '找最近强势突破的股票' && call.hasEmbeddedResult && call.terminal?.plan?.tool === 'strategy_select')) {
-      fail('Chat smoke did not preserve the strategy_select embedded result route.', calls)
+      fail('Chat smoke did not preserve the strategy_select model-action route.', calls)
     }
 
     await setViewport(cdp, 390, 844, true)

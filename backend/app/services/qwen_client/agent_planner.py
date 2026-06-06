@@ -826,6 +826,8 @@ def _build_react_messages(
     system = (
         "你是 bounded ReAct 工具路由器。每步只做一个 action 工具调用，或基于 observation 给中文 final。"
         "不要私有思考链。\n"
+        "普通寒暄、能力说明、使用方式询问或非选股开放对话，直接给 final 普通回答，不要调用 ask_clarification。"
+        "只有用户想筛股票但缺少必要条件时，才使用 ask_clarification。\n"
         "支持字段：pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。\n"
         "不支持：三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；必须 ask_clarification 或 final 说明，不能近似改写后筛选。\n"
         "stock_detail 只定位详情。explain_result/sort_results/paginate_results 必须有上一轮结果，否则 ask_clarification。"

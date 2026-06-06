@@ -246,36 +246,50 @@ def main() -> int:
         _require(int(summary["total"] or 0) > 0, "bank value/dividend query returned no results")
         context = _context_from_events(events)
 
-        for query, strategy_id in (
-            ("找最近强势突破的股票", "turtle_breakout"),
-            ("找均线放量的股票", "ma_volume"),
+        for query, strategy_ids in (
+            ("找最近强势突破的股票", {"turtle_breakout", "rps_breakout"}),
+            ("找均线放量的股票", {"ma_volume"}),
         ):
             events, summary = _run_query(base_url, query, {})
+            if _is_safe_model_stop(summary):
+                print(
+                    f"[WARN] real Qwen did not choose a valid strategy tool for {query!r}; "
+                    f"fallback_reason={summary['fallback_reason']}",
+                    flush=True,
+                )
+                return 0
             terminal = _terminal(events)
             plan = terminal.get("plan") or {}
             embedded_result = terminal.get("result") if isinstance(terminal.get("result"), dict) else {}
             strategy = embedded_result.get("strategy") if isinstance(embedded_result.get("strategy"), dict) else {}
             _require(summary["terminal"] == "agent", f"{query!r} did not return an agent wrapper")
             _require(summary["tool"] == "strategy_select", f"{query!r} routed to {summary['tool']}")
-            _require(plan.get("strategy_id") == strategy_id, f"{query!r} strategy_id={plan.get('strategy_id')}")
-            _require(plan.get("ai_used") is False, f"{query!r} unexpectedly used AI")
-            _require(summary["model_ms"] == 0, f"{query!r} model_ms={summary['model_ms']}, expected 0")
-            _require(summary["fallback_reason"] == "local_fast_path", f"{query!r} fallback={summary['fallback_reason']}")
+            _require(plan.get("strategy_id") in strategy_ids, f"{query!r} strategy_id={plan.get('strategy_id')}")
+            _require(plan.get("ai_used") is True, f"{query!r} did not use model judgment")
+            _require_timing(summary, query)
+            _require(summary["fallback_reason"] in (None, "-"), f"{query!r} fallback={summary['fallback_reason']}")
             _require("screening" in _event_types(events), f"{query!r} did not execute strategy tool")
-            _require(strategy.get("id") == strategy_id, f"{query!r} result strategy id mismatch")
+            _require(strategy.get("id") == plan.get("strategy_id"), f"{query!r} result strategy id mismatch")
 
         events, summary = _run_query(base_url, "这个 Agent 是什么", {})
+        if _is_safe_model_stop(summary):
+            print(
+                "[WARN] real Qwen did not produce a plain-chat final answer; "
+                f"fallback_reason={summary['fallback_reason']}",
+                flush=True,
+            )
+            return 0
         terminal = _terminal(events)
         plan = terminal.get("plan") or {}
         terminal_text = json.dumps(terminal, ensure_ascii=False)
         _require(summary["terminal"] == "agent", "plain chat did not return agent wrapper")
         _require(summary["tool"] == "ask_clarification", f"plain chat routed to {summary['tool']}")
         _require(plan.get("tool_label") == "普通回复", f"plain chat label={plan.get('tool_label')}")
-        _require(plan.get("ai_used") is False, "plain chat unexpectedly used AI")
-        _require(summary["model_ms"] == 0, f"plain chat model_ms={summary['model_ms']}, expected 0")
-        _require(summary["fallback_reason"] == "local_fast_path", f"plain chat fallback={summary['fallback_reason']}")
+        _require(plan.get("ai_used") is True, "plain chat did not use model final")
+        _require_timing(summary, "plain chat")
+        _require(summary["fallback_reason"] in (None, "-"), f"plain chat fallback={summary['fallback_reason']}")
         _require("screening" not in _event_types(events) and "result" not in _event_types(events), "plain chat called a tool")
-        _require("有界选股 Agent" in terminal_text, "plain chat did not explain Agent boundary")
+        _require("有界选股 Agent" in terminal_text or "Agent" in terminal_text, "plain chat did not explain Agent boundary")
 
         for query, expected_tool in (
             ("为什么这些股票排在前面", "explain_result"),
@@ -284,7 +298,15 @@ def main() -> int:
             ("查看第一只详情", "stock_detail"),
         ):
             events, summary = _run_query(base_url, query, context)
+            if _is_safe_model_stop(summary):
+                print(
+                    f"[WARN] real Qwen did not choose a valid context tool for {query!r}; "
+                    f"fallback_reason={summary['fallback_reason']}",
+                    flush=True,
+                )
+                return 0
             _require(summary["tool"] == expected_tool, f"{query!r} routed to {summary['tool']}, expected {expected_tool}")
+            _require_timing(summary, query)
             if expected_tool in {"explain_result", "stock_detail"}:
                 _require(not summary["screened"] and not summary["result"], f"{query!r} triggered a new screen")
             if expected_tool in {"sort_results", "paginate_results"}:

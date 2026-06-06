@@ -58,6 +58,12 @@ def _patch_no_ai(monkeypatch):
     )
 
 
+def _patch_react_decision(monkeypatch, decision):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(strategy_selector, "_ai_status", lambda: {"configured": True, "ok": True, "reason": None})
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", decision)
+
+
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
@@ -142,8 +148,20 @@ def test_text_only_chat_operations_do_not_rescreen(db, seed_stocks, monkeypatch,
         assert detail_call.result["url"] == "/detail/600036.SH"
 
 
-def test_named_stock_detail_uses_local_tool_without_ai(db, seed_stocks, monkeypatch):
-    _patch_no_ai(monkeypatch)
+def test_named_stock_detail_uses_model_judgment_without_screen(db, seed_stocks, monkeypatch):
+    def model_detail(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要看个股详情。",
+            plan=AgentPlanResult(
+                tool="stock_detail",
+                tool_label="个股详情",
+                reasoning="查看招商银行详情",
+                extra={"name": "招商银行"},
+            ),
+        )
+
+    _patch_react_decision(monkeypatch, model_detail)
     monkeypatch.setattr(
         strategy_selector.screener_engine,
         "screen",
@@ -153,27 +171,72 @@ def test_named_stock_detail_uses_local_tool_without_ai(db, seed_stocks, monkeypa
     response = agent_react.run_chat_react_agent(db, "我想看一下招商银行的详情", context={}, limit=2)
 
     assert response.plan.tool == "stock_detail"
-    assert response.plan.ai_used is False
+    assert response.plan.ai_used is True
     assert response.screen_result is None
-    assert response.tool_trace[0] == "本地快速路径命中，跳过 ReAct 模型规划"
+    assert response.tool_trace[0].startswith("ReAct step 1: 模型选择")
     detail_call = next(call for call in response.tool_calls if call.name == "stock_detail")
     assert detail_call.result["url"] == "/detail/600036.SH"
 
 
-def test_chat_react_deterministic_screen_uses_local_tool_without_ai(db, seed_stocks, monkeypatch):
-    _patch_no_ai(monkeypatch)
+def test_model_stock_detail_unknown_extra_does_not_open_hallucinated_code(db, seed_stocks, monkeypatch):
+    def model_detail(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要看个股详情。",
+            plan=AgentPlanResult(
+                tool="stock_detail",
+                tool_label="个股详情",
+                reasoning="查看模型抽取的股票详情",
+                extra={"code": "999999.SH", "name": "不存在公司"},
+            ),
+        )
+
+    _patch_react_decision(monkeypatch, model_detail)
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unknown stock_detail must not screen")),
+    )
+
+    response = agent_react.run_chat_react_agent(db, "看看这个", context={}, limit=2)
+
+    assert response.plan.tool == "ask_clarification"
+    assert response.plan.tool_label == "补充追问"
+    assert response.plan.ai_used is True
+    assert response.screen_result is None
+    assert not any(call.name == "stock_detail" for call in response.tool_calls)
+    assert "还没有定位到要查看的股票" in response.answer
+    assert "未定位到有效详情目标" in response.tool_trace[0]
+
+
+def test_chat_react_screen_uses_model_judgment(db, seed_stocks, monkeypatch):
+    def model_screen(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要执行股票筛选。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="股息率和大盘股筛选",
+                conditions=[
+                    FilterCondition(field="dividend_yield", op="gt", value=5),
+                    FilterCondition(field="market_cap", op="gt", value=500),
+                ],
+            ),
+        )
+
+    _patch_react_decision(monkeypatch, model_screen)
 
     response = agent_react.run_chat_react_agent(db, "股息率超过 5% 的大蓝筹", context={}, limit=10)
 
     assert response.plan.tool == "stock_screen"
-    assert response.plan.ai_used is False
+    assert response.plan.ai_used is True
     assert response.screen_result is not None
     assert _condition_tuples(response) == [("dividend_yield", "gt", 5), ("market_cap", "gt", 500)]
-    assert response.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert response.tool_trace[0].startswith("ReAct step 1: 模型选择")
     assert response.react_steps
-    assert all(step["model_ms"] == 0 for step in response.react_steps)
     assert response.react_steps[-1]["type"] == "final"
-    assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
+    assert response.react_steps[-1]["fallback_reason"] is None
 
 
 @pytest.mark.parametrize(
@@ -184,22 +247,39 @@ def test_chat_react_deterministic_screen_uses_local_tool_without_ai(db, seed_sto
         ("换一批", "paginate_results"),
     ],
 )
-def test_chat_react_context_operations_use_local_path_without_ai(db, seed_stocks, monkeypatch, query, tool):
-    _patch_no_ai(monkeypatch)
+def test_chat_react_context_operations_use_model_judgment(db, seed_stocks, monkeypatch, query, tool):
+    def model_context(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason=f"模型判断使用 {tool}。",
+            plan=AgentPlanResult(
+                tool=tool,
+                tool_label={
+                    "explain_result": "结果解释",
+                    "sort_results": "结果排序",
+                    "paginate_results": "结果分页",
+                }[tool],
+                reasoning="基于上一轮结果处理",
+                sort_by="dividend_yield" if tool == "sort_results" else None,
+                offset=2 if tool == "paginate_results" else 0,
+                limit=2,
+            ),
+        )
+
+    _patch_react_decision(monkeypatch, model_context)
 
     response = agent_react.run_chat_react_agent(db, query, context=LAST_RESULT_CONTEXT, limit=2)
 
     assert response.plan.tool == tool
-    assert response.plan.ai_used is False
-    assert response.tool_trace[0] == "本地快速路径命中，跳过 ReAct 模型规划"
+    assert response.plan.ai_used is True
+    assert response.tool_trace[0].startswith("ReAct step 1: 模型选择")
     assert response.react_steps
-    assert all(step["model_ms"] == 0 for step in response.react_steps)
     if tool == "explain_result":
         assert response.screen_result is None
         assert "不重新筛选" in response.answer
     else:
         assert response.screen_result is not None
-        assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
+        assert response.react_steps[-1]["fallback_reason"] is None
 
 
 @pytest.mark.parametrize(
@@ -209,8 +289,21 @@ def test_chat_react_context_operations_use_local_path_without_ai(db, seed_stocks
         ("找均线放量的股票", "ma_volume"),
     ],
 )
-def test_chat_react_known_strategy_intents_use_local_strategy_without_ai(db, seed_stocks, monkeypatch, query, strategy_id):
-    _patch_no_ai(monkeypatch)
+def test_chat_react_known_strategy_intents_use_model_judgment(db, seed_stocks, monkeypatch, query, strategy_id):
+    def model_strategy(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要执行内置策略。",
+            plan=AgentPlanResult(
+                tool="strategy_select",
+                tool_label="策略选股",
+                reasoning="选择内置策略",
+                strategy_id=strategy_id,
+                limit=5,
+            ),
+        )
+
+    _patch_react_decision(monkeypatch, model_strategy)
     monkeypatch.setattr(
         strategy_selector.screener_engine,
         "screen",
@@ -221,13 +314,12 @@ def test_chat_react_known_strategy_intents_use_local_strategy_without_ai(db, see
 
     assert response.plan.tool == "strategy_select"
     assert response.plan.strategy_id == strategy_id
-    assert response.plan.ai_used is False
+    assert response.plan.ai_used is True
     assert response.strategy_result is not None
     assert response.strategy_result.strategy.id == strategy_id
     assert response.screen_result is None
-    assert response.tool_trace[0] == "本地快速路径命中，跳过模型规划"
-    assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
-    assert all(step["model_ms"] == 0 for step in response.react_steps)
+    assert response.tool_trace[0].startswith("ReAct step 1: 模型选择")
+    assert response.react_steps[-1]["fallback_reason"] is None
 
 
 @pytest.mark.parametrize("query", ["找一个我没定义过的神奇策略", "找短线强势机会"])
@@ -266,7 +358,14 @@ def test_chat_react_unknown_strategy_does_not_use_local_strategy(db, seed_stocks
     ],
 )
 def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch, query, expected_text):
-    _patch_no_ai(monkeypatch)
+    def model_final(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="final",
+            public_reason="模型判断这是普通对话。",
+            final_answer=expected_text,
+        )
+
+    _patch_react_decision(monkeypatch, model_final)
     monkeypatch.setattr(
         strategy_selector.screener_engine,
         "screen",
@@ -282,12 +381,12 @@ def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks
 
     assert response.plan.tool == "ask_clarification"
     assert response.plan.tool_label == "普通回复"
-    assert response.plan.ai_used is False
+    assert response.plan.ai_used is True
     assert expected_text in response.answer
     assert response.screen_result is None
     assert response.strategy_result is None
-    assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
-    assert all(step["model_ms"] == 0 for step in response.react_steps)
+    assert response.react_steps[-1]["timing_phase"] == "model_final"
+    assert response.react_steps[-1]["fallback_reason"] is None
 
 
 @pytest.mark.parametrize(

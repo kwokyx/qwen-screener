@@ -84,6 +84,8 @@ def _patch_react_from_single_plan(monkeypatch, planner):
                 final_answer="已根据工具结果生成回答。",
             )
         plan = planner(query, context)
+        if isinstance(plan, AgentReactDecision):
+            return plan
         if plan is None:
             return None
         return AgentReactDecision(
@@ -172,11 +174,10 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
                 sort_desc=True,
             )
         if query == "你好":
-            return AgentPlanResult(
-                tool="ask_clarification",
-                tool_label="补充追问",
-                reasoning="闲聊问候不应筛选",
-                extra={"question": "你好。请补充行业、风格或指标后我再筛选。"},
+            return AgentReactDecision(
+                kind="final",
+                public_reason="模型判断这是普通问候。",
+                final_answer="你好，我可以帮你做 A 股筛选、内置策略选股和结果解释。",
             )
         if query == "可以，做吧":
             return AgentPlanResult(
@@ -192,15 +193,15 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     client = TestClient(app)
     context = {}
     cases = [
-        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", False, 1),
-        ("为什么这些股票排在前面", "explain_result", False, "agent", False, 0),
-        ("按股息率排序", "sort_results", False, "result", False, 1),
-        ("换一批", "paginate_results", False, "result", False, 1),
-        ("查看第一只详情", "stock_detail", False, "agent", False, 0),
-        ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
-        ("现在执行", "stock_screen", True, "result", False, 0),
-        ("你好", "ask_clarification", False, "agent", False, 0),
-        ("可以，做吧", "ask_clarification", False, "agent", False, 0),
+        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", True, 1),
+        ("为什么这些股票排在前面", "explain_result", False, "agent", True, 0),
+        ("按股息率排序", "sort_results", False, "result", True, 1),
+        ("换一批", "paginate_results", False, "result", True, 1),
+        ("查看第一只详情", "stock_detail", False, "agent", True, 0),
+        ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", True, 0),
+        ("现在执行", "stock_screen", True, "result", True, 0),
+        ("你好", "ask_clarification", False, "agent", True, 0),
+        ("可以，做吧", "ask_clarification", False, "agent", True, 0),
     ]
 
     for query, expected_tool, should_screen, terminal_type, expected_ai_used, min_total in cases:
@@ -216,8 +217,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
         if expected_ai_used:
             assert terminal["fallback_reason"] is None
         else:
-            assert terminal["model_ms"] == 0
-            assert terminal["fallback_reason"] == "local_fast_path"
+            assert terminal["fallback_reason"] is not None
         assert event_types[-1] == "done"
         assert ("screening" in event_types) is should_screen
         assert ("result" in event_types) is (terminal_type == "result")
@@ -268,7 +268,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     assert terminal["plan"]["tool_label"] == "普通回复"
     assert terminal["plan"]["ai_used"] is False
     assert terminal["model_ms"] == 0
-    assert terminal["fallback_reason"] == "local_fast_path"
+    assert terminal["fallback_reason"] == "模型 ReAct 异常"
 
     for query in ("可以，做吧", "为什么这些股票排在前面"):
         events = _stream_events(client, query, context={})
@@ -282,7 +282,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
         assert terminal["plan"]["tool"] == "ask_clarification"
         assert terminal["plan"]["ai_used"] is False
         assert terminal["model_ms"] == 0
-        assert terminal["fallback_reason"] == "local_fast_path"
+        assert terminal["fallback_reason"] == "模型 ReAct 异常"
 
     events = _stream_events(client, "查看第一只详情", context={})
     event_types = _event_types(events)
@@ -294,22 +294,34 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     assert terminal["plan"]["tool"] == "ask_clarification"
     assert terminal["plan"]["ai_used"] is False
     assert terminal["model_ms"] == 0
-    assert terminal["fallback_reason"] == "local_fast_path"
+    assert terminal["fallback_reason"] == "模型 ReAct 异常"
     assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
 
 
-def test_nl_stream_deterministic_screen_query_skips_ai_before_tool(db, seed_stocks, monkeypatch):
-    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+def test_nl_stream_explicit_screen_query_uses_model_judgment_before_tool(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
     calls = {"planner": 0}
 
-    def plan_react_step(*_args, **_kwargs):
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
         calls["planner"] += 1
-        raise AssertionError("deterministic screen should not call ReAct planner")
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断需要股票筛选。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="模型解析低估值银行",
+                conditions=[
+                    FilterCondition(field="pe", op="lt", value=15),
+                    FilterCondition(field="pb", op="lt", value=2),
+                    FilterCondition(field="industry", op="in", value=["银行"]),
+                ],
+            ),
+        )
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
@@ -319,21 +331,14 @@ def test_nl_stream_deterministic_screen_query_skips_ai_before_tool(db, seed_stoc
 
     assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
     assert event_types[-1] == "done"
-    assert calls["planner"] == 0
-    assert "react_step" not in event_types
+    assert calls["planner"] == 1
+    assert "react_step" in event_types
     assert {"tool_start", "tool_observation", "tool_done", "final"} <= set(event_types)
     result = next(event for event in events if event["type"] == "result")
     assert result["plan"]["tool"] == "stock_screen"
-    assert result["plan"]["ai_used"] is False
-    assert result["ai_status"] == {
-        "configured": True,
-        "used": False,
-        "source": "local_deterministic",
-        "label": "本地处理",
-        "fallback": False,
-    }
-    assert result["model_ms"] == 0
-    assert result["fallback_reason"] == "local_fast_path"
+    assert result["plan"]["ai_used"] is True
+    assert result["ai_status"]["source"] == "ai_agent"
+    assert result["fallback_reason"] is None
     assert result["parsed_conditions"]
     assert [(condition["field"], condition["op"], condition["value"]) for condition in result["parsed_conditions"]] == [
         ("pe", "lt", 15),
@@ -346,18 +351,29 @@ def test_nl_stream_deterministic_screen_query_skips_ai_before_tool(db, seed_stoc
     )
 
 
-def test_nl_stream_blue_chip_dividend_query_uses_local_screen(db, seed_stocks, monkeypatch):
-    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+def test_nl_stream_blue_chip_dividend_query_uses_model_screen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_react_step",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("deterministic screen should not call model")),
-    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断需要股息率和市值筛选。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="模型解析高分红大蓝筹",
+                conditions=[
+                    FilterCondition(field="dividend_yield", op="gt", value=5),
+                    FilterCondition(field="market_cap", op="gt", value=500),
+                ],
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
     client = TestClient(app)
     events = _stream_events(client, "股息率超过 5% 的大蓝筹", context={})
@@ -366,9 +382,8 @@ def test_nl_stream_blue_chip_dividend_query_uses_local_screen(db, seed_stocks, m
 
     assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
     assert result["plan"]["tool"] == "stock_screen"
-    assert result["plan"]["ai_used"] is False
-    assert result["model_ms"] == 0
-    assert result["fallback_reason"] == "local_fast_path"
+    assert result["plan"]["ai_used"] is True
+    assert result["fallback_reason"] is None
     assert [(condition["field"], condition["op"], condition["value"]) for condition in result["parsed_conditions"]] == [
         ("dividend_yield", "gt", 5),
         ("market_cap", "gt", 500),
@@ -476,14 +491,8 @@ def test_nl_stream_clarification_request_skips_screening(db, seed_stocks, monkey
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert "agent" in event_types
-    assert "screening" not in event_types
-    assert "result" not in event_types
-
-    agent = next(event for event in events if event["type"] == "agent")
-    assert agent["plan"]["tool"] == "ask_clarification"
-    assert "我先不筛股票" in agent["answer"]
+    agent = _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    assert "不执行筛选" in agent["answer"]
 
 
 def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks, monkeypatch):
@@ -502,22 +511,34 @@ def test_nl_stream_confirmation_without_context_skips_screening(db, seed_stocks,
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert "agent" in event_types
-    assert "screening" not in event_types
-    assert "result" not in event_types
-
-    agent = next(event for event in events if event["type"] == "agent")
-    assert agent["plan"]["tool"] == "ask_clarification"
-    assert "还没有可以直接执行" in agent["answer"]
+    agent = _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    assert "不执行筛选" in agent["answer"]
 
 
 def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        conditions = [FilterCondition(**item) for item in (context or {}).get("last_conditions", [])]
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户确认执行上一轮策略。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="执行上一轮策略条件",
+                conditions=conditions,
+                sort_by="roe",
+                sort_desc=True,
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -547,9 +568,8 @@ def test_nl_stream_confirmation_reuses_previous_design_conditions(db, seed_stock
     assert "screening" in event_types
     result = next(event for event in events if event["type"] == "result")
     assert result["plan"]["tool"] == "stock_screen"
-    assert result["plan"]["ai_used"] is False
-    assert result["model_ms"] == 0
-    assert result["fallback_reason"] == "local_fast_path"
+    assert result["plan"]["ai_used"] is True
+    assert result["fallback_reason"] is None
     assert result["parsed_conditions"] == [
         {"field": "pe", "op": "lt", "value": 20},
         {"field": "roe", "op": "gt", "value": 20},
@@ -560,8 +580,26 @@ def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        conditions = [FilterCondition(**item) for item in (context or {}).get("last_conditions", [])]
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户确认执行上一轮策略。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="执行上一轮策略条件",
+                conditions=conditions,
+                sort_by="roe",
+                sort_desc=True,
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
     client = TestClient(app)
     response = client.post(
         "/api/v1/screener/nl",
@@ -595,8 +633,28 @@ def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "测试强制使用本地规则"},
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要收紧上一轮条件。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="收紧上一轮条件",
+                conditions=[
+                    FilterCondition(field="pe", op="lt", value=20),
+                    FilterCondition(field="roe", op="gt", value=20),
+                ],
+                sort_by="roe",
+                sort_desc=True,
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -621,9 +679,8 @@ def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
     assert "screening" in event_types
     result = next(event for event in events if event["type"] == "result")
     assert result["plan"]["tool"] == "stock_screen"
-    assert result["plan"]["ai_used"] is False
-    assert result["model_ms"] == 0
-    assert result["fallback_reason"] == "local_fast_path"
+    assert result["plan"]["ai_used"] is True
+    assert result["fallback_reason"] is None
 
 
 def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, monkeypatch):
@@ -642,26 +699,30 @@ def test_nl_stream_adjustment_without_context_skips_screening(db, seed_stocks, m
         body = "".join(response.iter_text())
 
     events = _events(body)
-    event_types = [event["type"] for event in events]
-    assert "agent" in event_types
-    assert "screening" not in event_types
-    assert "result" not in event_types
-    agent = next(event for event in events if event["type"] == "agent")
-    assert agent["plan"]["tool"] == "ask_clarification"
-    assert "还没有上一轮条件" in agent["answer"]
+    agent = _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    assert "不执行筛选" in agent["answer"]
 
 
 def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("explain fast path should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_react_step",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("explain fast path should not call model")),
-    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要解释上一轮结果。",
+            plan=AgentPlanResult(
+                tool="explain_result",
+                tool_label="结果解释",
+                reasoning="解释上一轮结果",
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -700,9 +761,8 @@ def test_nl_stream_explain_result_uses_context_without_rescreen(db, seed_stocks,
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "explain_result"
-    assert agent["plan"]["ai_used"] is False
-    assert agent["model_ms"] == 0
-    assert agent["fallback_reason"] == "local_fast_path"
+    assert agent["plan"]["ai_used"] is True
+    assert agent["fallback_reason"] is None
     assert "不重新筛选" in agent["answer"]
 
 
@@ -714,8 +774,22 @@ def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, m
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("stock detail fast path should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要查看上一轮第一只详情。",
+            plan=AgentPlanResult(
+                tool="stock_detail",
+                tool_label="个股详情",
+                reasoning="查看第一只详情",
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
     client = TestClient(app)
     with client.stream(
         "POST",
@@ -744,12 +818,13 @@ def test_nl_stream_stock_detail_uses_context_without_rescreen(db, seed_stocks, m
     assert "result" not in event_types
     terminal = next(event for event in reversed(events) if event["type"] == "agent")
     assert terminal["plan"]["tool"] == "stock_detail"
-    assert terminal["fallback_reason"] == "local_fast_path"
+    assert terminal["plan"]["ai_used"] is True
+    assert terminal["fallback_reason"] is None
     detail_call = next(call for call in terminal["tool_calls"] if call["name"] == "stock_detail")
     assert detail_call["result"]["url"] == "/detail/600036.SH"
 
 
-def test_nl_stream_named_stock_detail_uses_local_lookup_without_ai(db, seed_stocks, monkeypatch):
+def test_nl_stream_named_stock_detail_uses_model_judgment_without_screen(db, seed_stocks, monkeypatch):
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("stock_detail should not execute screening")
 
@@ -757,13 +832,22 @@ def test_nl_stream_named_stock_detail_uses_local_lookup_without_ai(db, seed_stoc
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("stock detail lookup should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_react_step",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stock detail lookup should not call model")),
-    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要看个股详情。",
+            plan=AgentPlanResult(
+                tool="stock_detail",
+                tool_label="个股详情",
+                reasoning="查看招商银行详情",
+                extra={"name": "招商银行"},
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
     client = TestClient(app)
     with client.stream(
@@ -781,7 +865,8 @@ def test_nl_stream_named_stock_detail_uses_local_lookup_without_ai(db, seed_stoc
     assert "result" not in event_types
     terminal = next(event for event in reversed(events) if event["type"] == "agent")
     assert terminal["plan"]["tool"] == "stock_detail"
-    assert terminal["fallback_reason"] == "local_fast_path"
+    assert terminal["plan"]["ai_used"] is True
+    assert terminal["fallback_reason"] is None
     detail_call = next(call for call in terminal["tool_calls"] if call["name"] == "stock_detail")
     assert detail_call["result"]["url"] == "/detail/600036.SH"
 
@@ -793,22 +878,31 @@ def test_nl_stream_named_stock_detail_uses_local_lookup_without_ai(db, seed_stoc
         ("找均线放量的股票", "ma_volume"),
     ],
 )
-def test_nl_stream_known_strategy_intent_uses_local_strategy(db, seed_stocks, monkeypatch, query, strategy_id):
-    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+def test_nl_stream_known_strategy_intent_uses_model_strategy(db, seed_stocks, monkeypatch, query, strategy_id):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("known strategy should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_react_step",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("known strategy should not call model")),
-    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要执行内置策略。",
+            plan=AgentPlanResult(
+                tool="strategy_select",
+                tool_label="策略选股",
+                reasoning="选择内置策略",
+                strategy_id=strategy_id,
+                limit=5,
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
     monkeypatch.setattr(
         strategy_selector.screener_engine,
         "screen",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("known strategy should not call stock_screen")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("strategy_select should not call stock_screen")),
     )
 
     client = TestClient(app)
@@ -822,9 +916,8 @@ def test_nl_stream_known_strategy_intent_uses_local_strategy(db, seed_stocks, mo
     assert "result" not in event_types
     assert agent["plan"]["tool"] == "strategy_select"
     assert agent["plan"]["strategy_id"] == strategy_id
-    assert agent["plan"]["ai_used"] is False
-    assert agent["model_ms"] == 0
-    assert agent["fallback_reason"] == "local_fast_path"
+    assert agent["plan"]["ai_used"] is True
+    assert agent["fallback_reason"] is None
     assert agent["result"]["strategy"]["id"] == strategy_id
 
 
@@ -860,18 +953,21 @@ def test_nl_stream_unknown_strategy_does_not_use_local_strategy(db, seed_stocks,
     assert agent["ai_status"]["source"] == "chat_only"
 
 
-def test_nl_stream_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch):
-    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+def test_nl_stream_plain_chat_uses_model_final_without_tools(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("plain chat should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_react_step",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat should not call model")),
-    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="final",
+            public_reason="模型判断这是普通对话。",
+            final_answer="我是这个项目里的有界选股 Agent，可以对话，也可以在需要时调用筛选、策略和详情工具。",
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
     monkeypatch.setattr(
         strategy_selector.screener_engine,
         "screen",
@@ -893,9 +989,8 @@ def test_nl_stream_plain_chat_uses_local_response_without_tools(db, seed_stocks,
     assert "planned" not in event_types
     assert agent["plan"]["tool"] == "ask_clarification"
     assert agent["plan"]["tool_label"] == "普通回复"
-    assert agent["plan"]["ai_used"] is False
-    assert agent["model_ms"] == 0
-    assert agent["fallback_reason"] == "local_fast_path"
+    assert agent["plan"]["ai_used"] is True
+    assert agent["fallback_reason"] is None
     assert "有界选股 Agent" in agent["answer"]
 
 
@@ -1167,17 +1262,25 @@ def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks
     assert design["plan"]["ai_used"] is True
 
 
-def test_nl_stream_local_explain_result_preempts_model(db, seed_stocks, monkeypatch):
+def test_nl_stream_model_explain_result_does_not_rescreen(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("local explain should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
-    monkeypatch.setattr(
-        strategy_selector.qwen_client,
-        "plan_react_step",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local explain should not call model")),
-    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断用户要解释上一轮结果。",
+            plan=AgentPlanResult(
+                tool="explain_result",
+                tool_label="结果解释",
+                reasoning="解释上一轮结果",
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
     client = TestClient(app)
     with client.stream(
@@ -1208,9 +1311,8 @@ def test_nl_stream_local_explain_result_preempts_model(db, seed_stocks, monkeypa
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "explain_result"
-    assert agent["plan"]["ai_used"] is False
-    assert agent["model_ms"] == 0
-    assert agent["fallback_reason"] == "local_fast_path"
+    assert agent["plan"]["ai_used"] is True
+    assert agent["fallback_reason"] is None
 
 
 def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
@@ -1280,6 +1382,8 @@ def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks
     assert "result" not in event_types
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "ask_clarification"
+    assert agent["plan"]["tool_label"] == "普通回复"
+    assert agent["fallback_reason"] == "AI 服务已配置但当前不可用：test unavailable"
     assert agent["ai_status"] == {
         "configured": True,
         "used": False,

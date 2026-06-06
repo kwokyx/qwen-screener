@@ -35,11 +35,11 @@ def run_chat_react_agent(
 ) -> StrategyAgentResponse:
     """Run one bounded ReAct chat turn and return the final response.
 
-    High-confidence local intents are handled before remote model calls. Other
-    stock screening requests go through the ReAct planner first. The backend
-    executes only a validated model action. If the model cannot produce a valid
-    action, this returns a non-executing chat response instead of silently
-    screening with broad local rules.
+    The model owns intent judgment for chat turns. The backend keeps hard
+    safety boundaries: unsupported fields are stopped before execution, and
+    project-owned tools only run after schema validation. If the model is
+    unavailable or cannot produce a valid action/final answer, this returns a
+    non-executing chat response instead of silently screening with local rules.
     """
     context = context or {}
     ai_configured = strategy_selector.is_ai_configured()
@@ -49,61 +49,6 @@ def run_chat_react_agent(
     )
     if unsupported_preflight is not None:
         return _execute_prepared_response(db, unsupported_preflight, limit, [], event_sink=event_sink)
-
-    plain_chat = strategy_selector.build_plain_chat_response(query, ai_configured=ai_configured)
-    if plain_chat is not None:
-        return _execute_prepared_response(db, plain_chat, limit, [], event_sink=event_sink)
-
-    if strategy_selector.is_clarification_query(query) and not strategy_selector.is_confirmation_query(query):
-        response = strategy_selector.build_clarification_response(query, ai_configured=ai_configured)
-        response.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *response.tool_trace]
-        return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
-
-    if strategy_selector.is_explicit_non_execution_design_query(query):
-        response = strategy_selector.plan_chat_agent(
-            query,
-            context=context,
-            limit=limit,
-            allow_model=False,
-        )
-        response.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *response.tool_trace]
-        return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
-
-    detail_fast_path = strategy_selector.build_stock_detail_response_from_db(
-        db,
-        query,
-        context,
-        ai_configured=ai_configured,
-    )
-    if detail_fast_path is not None:
-        detail_fast_path.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *detail_fast_path.tool_trace]
-        return _execute_prepared_response(db, detail_fast_path, limit, [], event_sink=event_sink)
-
-    chat_operation = strategy_selector.build_deterministic_chat_operation_response(
-        query,
-        context,
-        limit=limit,
-        ai_configured=ai_configured,
-    )
-    if chat_operation is not None:
-        chat_operation.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *chat_operation.tool_trace]
-        return _execute_prepared_response(db, chat_operation, limit, [], event_sink=event_sink)
-
-    strategy_select = strategy_selector.build_deterministic_strategy_select_response(
-        query,
-        limit=limit,
-        ai_configured=ai_configured,
-    )
-    if strategy_select is not None:
-        return _execute_prepared_response(db, strategy_select, limit, [], event_sink=event_sink)
-
-    deterministic_screen = strategy_selector.build_deterministic_stock_screen_response(
-        query,
-        limit=limit,
-        ai_configured=ai_configured,
-    )
-    if deterministic_screen is not None:
-        return _execute_prepared_response(db, deterministic_screen, limit, [], event_sink=event_sink)
 
     ai_status = strategy_selector._ai_status()
     if not ai_status.get("configured") or not ai_status.get("ok"):
@@ -217,6 +162,7 @@ def run_chat_react_agent(
         seen_actions.add(action_key)
 
         response = _response_from_model_plan(
+            db,
             query,
             context,
             plan,
@@ -365,12 +311,48 @@ def _execute_prepared_response(
 
 
 def _response_from_model_plan(
+    db: Session,
     query: str,
     context: dict[str, Any],
     model_plan: qwen_client.AgentPlanResult,
     *,
     step_index: int,
 ) -> StrategyAgentResponse:
+    if model_plan.tool == "stock_detail":
+        detail_response = strategy_selector.build_stock_detail_response_from_db(
+            db,
+            query,
+            context,
+            ai_configured=True,
+        )
+        if detail_response is None:
+            target = strategy_selector._resolve_stock_detail_target_from_db(
+                db,
+                " ".join([
+                    str(model_plan.extra.get("code") or ""),
+                    str(model_plan.extra.get("name") or ""),
+                ]).strip(),
+            )
+            detail_response = strategy_selector.build_stock_detail_response(
+                query,
+                context,
+                ai_configured=True,
+                code=target["code"] if target else "",
+                name=str(target.get("name") or "") if target else "",
+            )
+        detail_response.plan.ai_used = True
+        detail_response.plan.reasoning = model_plan.reasoning
+        trace_summary = (
+            f"ReAct step {step_index}: 模型选择 stock_detail 并通过校验"
+            if detail_response.plan.tool == "stock_detail"
+            else f"ReAct step {step_index}: 模型选择 stock_detail，但未定位到有效详情目标"
+        )
+        detail_response.tool_trace = [
+            trace_summary,
+            *detail_response.tool_trace[1:],
+        ]
+        return detail_response
+
     non_executing = strategy_selector._build_non_executing_model_response(
         query,
         context,
@@ -454,7 +436,7 @@ def _apply_final_answer(
 
     plan = StrategyAgentPlan(
         tool="ask_clarification",
-        tool_label="补充追问",
+        tool_label="普通回复",
         reasoning=public_reason or "模型未调用工具，直接生成最终回答。",
         ai_configured=ai_configured,
         ai_used=True,

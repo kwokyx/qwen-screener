@@ -223,7 +223,7 @@ python3 backend/scripts/agent_smoke.py
 docker compose exec -T backend python scripts/agent_reliability_smoke.py
 ```
 
-普通自动化测试不依赖真实 AI；后端用 fake model / 本地确定性规则锁定路由语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`；明确指标阈值、行业、板块等高置信支持字段筛选会先由本地确定性解析并执行本地工具，解释、排序、分页、确认执行和条件调严/放宽等多轮上下文操作也会在模型前本地处理。强势突破、均线放量、涨停后承接、高位旗形等明确命中内置策略的表达会走本地策略白名单路由；非白名单策略名或短线模糊请求仍需模型路由或安全停止，不能随便映射到某个策略。普通帮助类对话只返回说明，不自动调用筛选或策略工具。其他需要模型理解或路由的请求才进入 bounded ReAct 模型规划。模型慢、超时或不可达时会安全停止并保留 `model_ms` / `fallback_reason`，不会把不完整或不支持字段伪装成完整命中。工具执行成功后使用后端确定性总结返回，不再等待第二次模型总结。纯问候/缺少条件的澄清请求、名称/代码明确的个股详情请求和 unsupported metric 仍在模型前本地拦截。完整本地浏览器 smoke：
+普通自动化测试不依赖真实 AI；后端用 fake model 锁定模型 action/final、schema 校验和工具执行语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`。Chat Agent 除 unsupported metric 字段能力边界会在模型前硬拦截外，意图判断交给 bounded ReAct 模型：普通问候和帮助类问题由模型直接 final，筛选、策略、解释、排序、分页和详情由模型选择白名单工具 action。后端只执行通过 schema 校验的 action；模型慢、超时、不可达或没有给出合法 action/final 时会安全停止并保留 `model_ms` / `fallback_reason`，不会把不完整条件或不支持字段伪装成命中。工具执行成功后使用后端确定性总结返回，不再等待第二次模型总结。完整本地浏览器 smoke：
 
 Agent query regression 是 RC 门禁的一部分，使用普通 pytest 固化真实中文语料，不依赖真实 AI：
 
@@ -247,13 +247,13 @@ python3 backend/scripts/release_smoke.py
 docker compose exec -T backend python scripts/release_smoke.py
 ```
 
-`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE fast-path、普通对话本地回复、内置策略 fast-path、`stock_detail` 不筛选、真实筛选返回结果或安全停止，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN；外层 `docker compose ps` 是单独验证项，容器内脚本继续使用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`；Chat Agent 只会执行模型前已完整命中的本地确定性工具，其他需要模型路由的请求会返回普通回复并显示 `fallback_reason`。存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖真实支持字段筛选、策略白名单、普通对话分流、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
+`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE 普通对话模型 final、策略/详情模型 action、真实筛选返回结果或安全停止，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN；外层 `docker compose ps` 是单独验证项，容器内脚本继续使用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`；Chat Agent 不会私自本地筛选，模型不可用或没有合法 action/final 时会返回普通回复并显示 `fallback_reason`。存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖真实支持字段筛选、内置策略、普通对话 final、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
 
-Chat Agent 采用 bounded ReAct，不是无限自主 Agent。明确、可校验的支持字段筛选会先走本地确定性解析，例如 PE/PB/ROE/股息率/市值/行业等阈值组合；解释上一轮、按字段排序、换一批、确认执行上一轮条件、调严或放宽上一轮条件等上下文操作也先走本地确定性路径。内置策略白名单只匹配明确策略表达：强势突破/最近强势/突破映射海龟突破，均线放量/放量上攻映射均线放量，涨停后承接/涨停回踩/涨停洗盘映射涨停后承接，高位旗形/高紧旗形映射高位窄幅整理。非白名单策略请求仍进入模型或安全停止，不宽泛兜底。普通帮助类对话，例如“这个 Agent 是什么”“怎么用”“智能选股和 AI 对话有什么区别”，只返回能力边界说明，不自动调用工具。其他需要模型理解、工具路由或策略判断的请求才进入模型规划。模型每步只能选择一个白名单工具或给出最终回答；只有模型返回通过 schema 校验的工具 action，后端才会执行工具。工具执行成功后直接使用后端确定性总结结束本轮，不再请求第二次模型总结。模型慢、超时、上游不可达或没有给出合法 action 时，后端返回普通回复，不调用筛选工具，并在 SSE 中保留 `model_ms` 与 `fallback_reason`。纯问候、缺少条件的澄清请求、名称/代码明确的个股详情请求、明确“先别执行”的策略设计请求，以及 unsupported metric 会在模型前本地处理。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答；这些 ReAct step 事件带有 `timing_phase`，可区分 `model_action`、`local_final`、`model_action_stopped` 和 `tool_execution`。前端只展示公开步骤摘要，不展示模型私有思考链。
+Chat Agent 采用 bounded ReAct，不是无限自主 Agent。模型每步只能选择一个白名单工具或给出最终回答：普通帮助类对话和问候应直接 final，不调用筛选或策略工具；筛选、内置策略、解释上一轮、排序、分页、确认执行、调严/放宽和个股详情都必须由模型 action 明确选择。只有模型返回通过 schema 校验的工具 action，后端才会执行工具；后端安全层仍会拦截 unsupported metric、空条件全市场筛选和非法参数。工具执行成功后直接使用后端确定性总结结束本轮，不再请求第二次模型总结。模型慢、超时、上游不可达或没有给出合法 action/final 时，后端返回普通回复，不调用筛选工具，并在 SSE 中保留 `model_ms` 与 `fallback_reason`。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答；这些 ReAct step 事件带有 `timing_phase`，可区分 `model_action`、`model_final`、`local_final`、`model_action_stopped` 和 `tool_execution`。前端只展示公开步骤摘要，不展示模型私有思考链。
 
 Unsupported metric 是进入模型前的本地快速路径。命中三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价等字段时，后端直接返回不支持说明，不调用 Qwen，不调用筛选引擎，SSE 不会出现 `screening/result`，`model_ms=0` 且 `fallback_reason=local_fast_path`。
 
-`/health/ai` 在运行时不会为首次上游探测阻塞页面：缓存未命中时先返回 `pending=true`，后台短超时刷新真实状态；已有过期状态时返回 `stale=true` 并继续刷新。AI 上游不可达属于预期降级路径；Chat UI 对非确定性模型请求会提示暂不自动筛选，高置信支持字段请求仍可由本地确定性工具执行。结构化筛选页始终可手动使用。
+`/health/ai` 在运行时不会为首次上游探测阻塞页面：缓存未命中时先返回 `pending=true`，后台短超时刷新真实状态；已有过期状态时返回 `stale=true` 并继续刷新。AI 上游不可达属于预期降级路径；Chat UI 会提示暂不自动筛选且不调用本地兜底工具。结构化筛选页始终可手动使用。
 
 个股详情的实时行情只在短预算内等待外部 provider。超时、DNS 失败或熔断时，`/stock/{code}/quote` 会使用本地最新日线返回 `source=local`；页面仍应展示详情、K 线和本地指标，并明确不是实时行情。
 `npm run smoke:detail` 会打开 `/detail/600036.SH`，检查本地详情、K 线 canvas / 容器、阻塞性加载错误和移动端横向溢出。

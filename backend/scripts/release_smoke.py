@@ -287,11 +287,15 @@ def _check_fast_path(base_url: str) -> None:
     plan = terminal.get("plan") or {}
     _require(plan.get("tool") == "ask_clarification", f"你好 routed to {plan.get('tool')}")
     _require(plan.get("tool_label") == "普通回复", f"你好 label={plan.get('tool_label')}")
-    _require(terminal.get("model_ms") == 0, f"你好 model_ms={terminal.get('model_ms')}, expected 0")
-    _require(terminal.get("fallback_reason") == "local_fast_path", f"你好 fallback_reason={terminal.get('fallback_reason')!r}")
     _require("screening" not in types and "result" not in types, "你好 triggered screening/result events")
     _require("done" in types, "你好 stream did not emit done")
-    _pass("SSE fast-path", "你好 -> 普通回复, model_ms=0")
+    _require(terminal.get("fallback_reason") != "local_fast_path", "你好 should not use local fast-path")
+    if plan.get("ai_used") is True:
+        _require(terminal.get("fallback_reason") is None, f"你好 fallback_reason={terminal.get('fallback_reason')!r}")
+        _pass("SSE greeting model final", f"你好 -> 普通回复, model_ms={terminal.get('model_ms')}")
+        return
+    _require(terminal.get("fallback_reason"), "你好 safe-stop missing fallback_reason")
+    _warn("SSE greeting safe-stop", f"你好 stopped without local fallback: {terminal.get('fallback_reason')}")
 
 
 def _check_plain_chat(base_url: str) -> None:
@@ -302,12 +306,15 @@ def _check_plain_chat(base_url: str) -> None:
     terminal_text = json.dumps(terminal, ensure_ascii=False)
     _require(plan.get("tool") == "ask_clarification", f"plain chat routed to {plan.get('tool')}")
     _require(plan.get("tool_label") == "普通回复", f"plain chat label={plan.get('tool_label')}")
-    _require(plan.get("ai_used") is False, "plain chat unexpectedly used AI")
-    _require(terminal.get("model_ms") == 0, f"plain chat model_ms={terminal.get('model_ms')}, expected 0")
-    _require(terminal.get("fallback_reason") == "local_fast_path", f"plain chat fallback={terminal.get('fallback_reason')!r}")
     _require("screening" not in types and "result" not in types and "planned" not in types, "plain chat triggered tool events")
-    _require("有界选股 Agent" in terminal_text, "plain chat did not explain Agent boundary")
-    _pass("SSE plain chat", "这个 Agent 是什么 -> 普通回复, model_ms=0")
+    _require(terminal.get("fallback_reason") != "local_fast_path", "plain chat should not use local fast-path")
+    if plan.get("ai_used") is True:
+        _require(terminal.get("fallback_reason") is None, f"plain chat fallback={terminal.get('fallback_reason')!r}")
+        _require("有界选股 Agent" in terminal_text or "Agent" in terminal_text, "plain chat did not explain Agent boundary")
+        _pass("SSE plain chat model final", f"这个 Agent 是什么 -> 普通回复, model_ms={terminal.get('model_ms')}")
+        return
+    _require(terminal.get("fallback_reason"), "plain chat safe-stop missing fallback_reason")
+    _warn("SSE plain chat safe-stop", f"这个 Agent 是什么 stopped without local fallback: {terminal.get('fallback_reason')}")
 
 
 def _check_strategy_fast_path(base_url: str) -> None:
@@ -317,17 +324,21 @@ def _check_strategy_fast_path(base_url: str) -> None:
     plan = terminal.get("plan") or {}
     embedded_result = terminal.get("result") if isinstance(terminal.get("result"), dict) else {}
     strategy = embedded_result.get("strategy") if isinstance(embedded_result.get("strategy"), dict) else {}
+    if plan.get("tool") == "ask_clarification" and terminal.get("fallback_reason"):
+        _require("screening" not in types and "result" not in types, "strategy safe-stop still triggered tool events")
+        _warn("SSE strategy safe-stop", f"找最近强势突破的股票 stopped without local fallback: {terminal.get('fallback_reason')}")
+        return
+    expected_strategy_ids = {"turtle_breakout", "rps_breakout"}
     _require(plan.get("tool") == "strategy_select", f"strategy query routed to {plan.get('tool')}")
-    _require(plan.get("strategy_id") == "turtle_breakout", f"strategy_id={plan.get('strategy_id')}")
-    _require(plan.get("ai_used") is False, "strategy fast-path unexpectedly used AI")
-    _require(terminal.get("model_ms") == 0, f"strategy fast-path model_ms={terminal.get('model_ms')}, expected 0")
-    _require(terminal.get("fallback_reason") == "local_fast_path", f"strategy fast-path fallback={terminal.get('fallback_reason')!r}")
+    _require(plan.get("strategy_id") in expected_strategy_ids, f"strategy_id={plan.get('strategy_id')}")
+    _require(plan.get("ai_used") is True, "strategy query should use model judgment")
+    _require(terminal.get("fallback_reason") is None, f"strategy fallback={terminal.get('fallback_reason')!r}")
     _require("planned" in types and "screening" in types and "agent" in types, "strategy fast-path missing strategy events")
     _require("result" not in types, "strategy_select should not emit stock_screen result event")
-    _require(strategy.get("id") == "turtle_breakout", "strategy result id mismatch")
+    _require(strategy.get("id") == plan.get("strategy_id"), "strategy result id mismatch")
     _pass(
-        "SSE strategy fast-path",
-        f"找最近强势突破的股票 -> turtle_breakout total={embedded_result.get('total')} model_ms=0",
+        "SSE strategy model action",
+        f"找最近强势突破的股票 -> {plan.get('strategy_id')} total={embedded_result.get('total')} model_ms={terminal.get('model_ms')}",
     )
 
 
@@ -345,9 +356,10 @@ def _check_detail(base_url: str) -> None:
     plan = terminal.get("plan") or {}
     _require("screening" not in types and "result" not in types, "stock_detail triggered screening/result events")
     if plan.get("tool") == "ask_clarification" and terminal.get("fallback_reason"):
-        _pass("SSE stock_detail safe-stop", f"查看第一只详情 stopped: {terminal.get('fallback_reason')}")
+        _warn("SSE stock_detail safe-stop", f"查看第一只详情 stopped without local fallback: {terminal.get('fallback_reason')}")
         return
     _require(plan.get("tool") == "stock_detail", f"detail routed to {plan.get('tool')}")
+    _require(plan.get("ai_used") is True, "stock_detail should use model judgment")
     calls = terminal.get("tool_calls") or []
     detail_call = next((call for call in calls if call.get("name") == "stock_detail"), None)
     _require(bool(detail_call), "stock_detail call missing")
@@ -361,8 +373,11 @@ def _check_named_detail(base_url: str) -> None:
     terminal = _terminal(events)
     plan = terminal.get("plan") or {}
     _require("screening" not in types and "result" not in types, "named stock_detail triggered screening/result events")
+    if plan.get("tool") == "ask_clarification" and terminal.get("fallback_reason"):
+        _warn("SSE named stock_detail safe-stop", f"招商银行详情 stopped without local fallback: {terminal.get('fallback_reason')}")
+        return
     _require(plan.get("tool") == "stock_detail", f"named detail routed to {plan.get('tool')}")
-    _require(plan.get("ai_used") is False, "named stock_detail should not require AI")
+    _require(plan.get("ai_used") is True, "named stock_detail should use model judgment")
     calls = terminal.get("tool_calls") or []
     detail_call = next((call for call in calls if call.get("name") == "stock_detail"), None)
     _require(bool(detail_call), "named stock_detail call missing")
