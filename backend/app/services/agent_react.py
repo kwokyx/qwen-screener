@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 from sqlalchemy.orm import Session
@@ -31,12 +31,13 @@ def run_chat_react_agent(
     *,
     max_steps: int = MAX_REACT_STEPS,
     total_timeout_seconds: float = MAX_REACT_SECONDS,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> StrategyAgentResponse:
     """Run one bounded ReAct chat turn and return the final response.
 
-    This function is intentionally additive: local deterministic fast paths and
-    the old single-plan fallback remain available, but model-capable requests can
-    now execute tool -> observation -> final within one turn.
+    Model-capable stock screening requests go through the ReAct planner first.
+    Local deterministic planning is reserved for unsupported/preflight cases,
+    explicit non-execution turns, and model-unavailable fallback.
     """
     context = context or {}
     ai_configured = strategy_selector.is_ai_configured()
@@ -45,29 +46,7 @@ def run_chat_react_agent(
         ai_configured=ai_configured,
     )
     if unsupported_preflight is not None:
-        return _execute_prepared_response(db, unsupported_preflight, limit, [])
-
-    fast_path = strategy_selector._plan_chat_fast_path(
-        query,
-        context,
-        limit=limit,
-        ai_configured=ai_configured,
-    )
-    if fast_path is not None:
-        fast_path.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *fast_path.tool_trace]
-        return _execute_prepared_response(db, fast_path, limit, [])
-
-    local_screen = strategy_selector.build_deterministic_stock_screen_response(
-        query,
-        limit=limit,
-        ai_configured=ai_configured,
-    )
-    if local_screen is not None:
-        local_screen.tool_trace = [
-            "本地快速路径命中，跳过 ReAct 模型规划",
-            *local_screen.tool_trace[1:],
-        ]
-        return _execute_prepared_response(db, local_screen, limit, [])
+        return _execute_prepared_response(db, unsupported_preflight, limit, [], event_sink=event_sink)
 
     if strategy_selector.is_explicit_non_execution_design_query(query):
         response = strategy_selector.plan_chat_agent(
@@ -77,7 +56,7 @@ def run_chat_react_agent(
             allow_model=False,
         )
         response.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *response.tool_trace]
-        return _execute_prepared_response(db, response, limit, [])
+        return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
 
     ai_status = strategy_selector._ai_status()
     if not ai_status.get("configured") or not ai_status.get("ok"):
@@ -92,7 +71,7 @@ def run_chat_react_agent(
             allow_model=False,
             model_failure_reason=reason,
         )
-        return _execute_prepared_response(db, response, limit, [])
+        return _execute_prepared_response(db, response, limit, [], event_sink=event_sink)
 
     started = time.perf_counter()
     observations: list[dict[str, Any]] = []
@@ -110,6 +89,7 @@ def run_chat_react_agent(
                 current_response,
                 react_events,
                 "ReAct 总耗时超过 20 秒",
+                event_sink=event_sink,
             )
 
         model_started = time.perf_counter()
@@ -137,6 +117,7 @@ def run_chat_react_agent(
                 react_events,
                 reason,
                 model_ms=model_ms,
+                event_sink=event_sink,
             )
 
         if decision.kind == "final":
@@ -147,14 +128,14 @@ def run_chat_react_agent(
                 decision.public_reason,
                 ai_configured=True,
             )
-            react_events.append(_event(
+            _append_event(react_events, _event(
                 "final",
                 step_index,
                 tool=final.plan.tool,
                 model_ms=model_ms,
                 timing_phase="model_final",
                 public_summary=decision.public_reason or "模型基于 observation 生成最终回答。",
-            ))
+            ), event_sink)
             final.react_steps = [*react_events]
             return final
 
@@ -169,17 +150,18 @@ def run_chat_react_agent(
                 react_events,
                 "模型 ReAct action 缺少工具计划",
                 model_ms=model_ms,
+                event_sink=event_sink,
             )
 
         action_key = _action_key(plan)
-        react_events.append(_event(
+        _append_event(react_events, _event(
             "react_step",
             step_index,
             tool=plan.tool,
             model_ms=model_ms,
             timing_phase="model_action",
             public_summary=decision.public_reason or plan.reasoning,
-        ))
+        ), event_sink)
         if action_key in seen_actions:
             reason = "模型重复调用相同工具参数，已停止以避免重复执行"
             return _finish_or_fallback(
@@ -190,6 +172,7 @@ def run_chat_react_agent(
                 current_response,
                 react_events,
                 reason,
+                event_sink=event_sink,
             )
         seen_actions.add(action_key)
 
@@ -200,25 +183,23 @@ def run_chat_react_agent(
             step_index=step_index,
         )
         if response.plan.tool not in EXECUTABLE_TOOLS:
-            response.react_steps = [
-                *react_events,
-                _event(
-                    "final",
-                    step_index,
-                    tool=response.plan.tool,
-                    timing_phase="local_final",
-                    public_summary="该工具不需要执行本地筛选，已直接生成回答。",
-                ),
-            ]
+            _append_event(react_events, _event(
+                "final",
+                step_index,
+                tool=response.plan.tool,
+                timing_phase="local_final",
+                public_summary="该工具不需要执行本地筛选，已直接生成回答。",
+            ), event_sink)
+            response.react_steps = [*react_events]
             return response
 
-        react_events.append(_event(
+        _append_event(react_events, _event(
             "tool_start",
             step_index,
             tool=response.plan.tool,
             timing_phase="tool_start",
             public_summary=f"正在调用：{response.plan.tool_label}",
-        ))
+        ), event_sink)
         tool_started = time.perf_counter()
         try:
             response = strategy_selector.execute_agent_plan(db, response, limit=limit)
@@ -230,7 +211,7 @@ def run_chat_react_agent(
                 "summary": "工具执行失败，已停止本轮 ReAct。",
             }
             observations.append(observation)
-            react_events.append(_event(
+            _append_event(react_events, _event(
                 "tool_observation",
                 step_index,
                 tool=response.plan.tool,
@@ -238,7 +219,7 @@ def run_chat_react_agent(
                 timing_phase="tool_execution",
                 public_summary=observation["summary"],
                 observation=observation,
-            ))
+            ), event_sink)
             return _finish_or_fallback(
                 db,
                 query,
@@ -247,6 +228,7 @@ def run_chat_react_agent(
                 current_response,
                 react_events,
                 "工具执行失败",
+                event_sink=event_sink,
             )
 
         tool_ms = int((time.perf_counter() - tool_started) * 1000)
@@ -254,7 +236,7 @@ def run_chat_react_agent(
         observations.append(observation)
         response.react_steps = [*react_events]
         current_response = response
-        react_events.append(_event(
+        _append_event(react_events, _event(
             "tool_observation",
             step_index,
             tool=response.plan.tool,
@@ -262,8 +244,8 @@ def run_chat_react_agent(
             timing_phase="tool_execution",
             public_summary=observation["summary"],
             observation=observation,
-        ))
-        react_events.append(_event(
+        ), event_sink)
+        _append_event(react_events, _event(
             "tool_done",
             step_index,
             tool=response.plan.tool,
@@ -271,7 +253,7 @@ def run_chat_react_agent(
             timing_phase="tool_execution",
             public_summary="工具执行完成。",
             observation=observation,
-        ))
+        ), event_sink)
 
     return _finish_or_fallback(
         db,
@@ -281,6 +263,7 @@ def run_chat_react_agent(
         current_response,
         react_events,
         "ReAct 达到最大步数，已使用当前观察结果结束",
+        event_sink=event_sink,
     )
 
 
@@ -289,24 +272,26 @@ def _execute_prepared_response(
     response: StrategyAgentResponse,
     limit: int,
     react_events: list[dict[str, Any]],
+    *,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> StrategyAgentResponse:
     if response.plan.tool not in EXECUTABLE_TOOLS:
         response.react_steps = react_events
         return response
     step_index = len([event for event in react_events if event["type"] == "react_step"]) + 1
-    react_events.append(_event(
+    _append_event(react_events, _event(
         "tool_start",
         step_index,
         tool=response.plan.tool,
         timing_phase="tool_start",
         public_summary=f"正在调用：{response.plan.tool_label}",
         fallback_reason=_fallback_from_response(response),
-    ))
+    ), event_sink)
     tool_started = time.perf_counter()
     response = strategy_selector.execute_agent_plan(db, response, limit=limit)
     tool_ms = int((time.perf_counter() - tool_started) * 1000)
     observation = _observation_from_response(response)
-    react_events.append(_event(
+    _append_event(react_events, _event(
         "tool_observation",
         step_index,
         tool=response.plan.tool,
@@ -315,8 +300,8 @@ def _execute_prepared_response(
         fallback_reason=_fallback_from_response(response),
         public_summary=observation["summary"],
         observation=observation,
-    ))
-    react_events.append(_event(
+    ), event_sink)
+    _append_event(react_events, _event(
         "tool_done",
         step_index,
         tool=response.plan.tool,
@@ -325,7 +310,7 @@ def _execute_prepared_response(
         fallback_reason=_fallback_from_response(response),
         public_summary="工具执行完成。",
         observation=observation,
-    ))
+    ), event_sink)
     response.react_steps = react_events
     return response
 
@@ -444,11 +429,12 @@ def _finish_or_fallback(
     reason: str,
     *,
     model_ms: int = 0,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> StrategyAgentResponse:
     if current_response is not None:
         current_response.warnings = [*current_response.warnings, reason]
         current_response.tool_trace = [*current_response.tool_trace, f"ReAct 结束：{reason}"]
-        react_events.append(_event(
+        _append_event(react_events, _event(
             "final",
             len([event for event in react_events if event["type"] == "react_step"]) + 1,
             tool=current_response.plan.tool,
@@ -456,7 +442,7 @@ def _finish_or_fallback(
             fallback_reason=reason,
             timing_phase="model_final_fallback",
             public_summary=reason,
-        ))
+        ), event_sink)
         current_response.react_steps = [*react_events]
         return current_response
 
@@ -467,19 +453,16 @@ def _finish_or_fallback(
         allow_model=False,
         model_failure_reason=reason,
     )
-    response = _execute_prepared_response(db, response, limit, react_events)
-    response.react_steps = [
-        *response.react_steps,
-        _event(
-            "final",
-            1,
-            tool=response.plan.tool,
-            model_ms=model_ms,
-            fallback_reason=reason,
-            timing_phase="model_action_fallback",
-            public_summary=f"{reason}，已使用本地规则兜底。",
-        ),
-    ]
+    response = _execute_prepared_response(db, response, limit, react_events, event_sink=event_sink)
+    _append_event(response.react_steps, _event(
+        "final",
+        1,
+        tool=response.plan.tool,
+        model_ms=model_ms,
+        fallback_reason=reason,
+        timing_phase="model_action_fallback",
+        public_summary=f"{reason}，已使用本地规则兜底。",
+    ), event_sink)
     return response
 
 
@@ -549,6 +532,16 @@ def _fallback_from_response(response: StrategyAgentResponse) -> str | None:
     if response.plan.ai_configured:
         return "local_rules"
     return None
+
+
+def _append_event(
+    react_events: list[dict[str, Any]],
+    payload: dict[str, Any],
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    react_events.append(payload)
+    if event_sink is not None:
+        event_sink(payload)
 
 
 def _event(

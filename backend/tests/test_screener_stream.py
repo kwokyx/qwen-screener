@@ -103,7 +103,7 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
                 tool_label="结构化股票筛选",
                 reasoning="AI 解析低估值银行筛选",
                 conditions=reusable_conditions,
-                sort_by="score",
+                sort_by="market_cap",
                 sort_desc=True,
             )
         if query == "为什么这些股票排在前面":
@@ -114,21 +114,17 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
             )
         if query == "按股息率排序":
             return AgentPlanResult(
-                tool="stock_screen",
-                tool_label="结构化股票筛选",
+                tool="sort_results",
+                tool_label="结果排序",
                 reasoning="沿用上一轮条件并按股息率排序",
-                conditions=reusable_conditions,
                 sort_by="dividend_yield",
                 sort_desc=True,
             )
         if query == "换一批":
             return AgentPlanResult(
-                tool="stock_screen",
-                tool_label="结构化股票筛选",
+                tool="paginate_results",
+                tool_label="结果分页",
                 reasoning="沿用上一轮条件查看下一批",
-                conditions=reusable_conditions,
-                sort_by="score",
-                sort_desc=True,
                 offset=0,
             )
         if query == "查看第一只详情":
@@ -180,15 +176,15 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
     client = TestClient(app)
     context = {}
     cases = [
-        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", False, 1),
-        ("为什么这些股票排在前面", "explain_result", False, "agent", False, 0),
-        ("按股息率排序", "sort_results", False, "result", False, 1),
-        ("换一批", "paginate_results", False, "result", False, 1),
-        ("查看第一只详情", "stock_detail", False, "agent", False, 0),
+        ("PE 低于 15 且 PB 小于 2 的银行股", "stock_screen", True, "result", True, 1),
+        ("为什么这些股票排在前面", "explain_result", False, "agent", True, 0),
+        ("按股息率排序", "sort_results", False, "result", True, 1),
+        ("换一批", "paginate_results", False, "result", True, 1),
+        ("查看第一只详情", "stock_detail", False, "agent", True, 0),
         ("帮我设计一个稳健的选股策略，先别执行", "strategy_design", False, "design", False, 0),
-        ("现在执行", "stock_screen", True, "result", False, 0),
-        ("你好", "ask_clarification", False, "agent", False, 0),
-        ("可以，做吧", "ask_clarification", False, "agent", False, 0),
+        ("现在执行", "stock_screen", True, "result", True, 0),
+        ("你好", "ask_clarification", False, "agent", True, 0),
+        ("可以，做吧", "ask_clarification", False, "agent", True, 0),
     ]
 
     for query, expected_tool, should_screen, terminal_type, expected_ai_used, min_total in cases:
@@ -232,16 +228,16 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
         context = _context_from_events(events)
 
 
-def test_nl_stream_no_context_fast_paths_never_screen_or_call_model(db, seed_stocks, monkeypatch):
-    """Obvious local intents must not wait for the model or screen all stocks."""
+def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monkeypatch):
+    """If the model fails on context-light turns, fallback must not screen all stocks."""
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
         lambda: {"configured": True, "ok": True, "reason": None},
     )
 
-    def fail_plan(_query, _context=None):
-        raise AssertionError("local fast-path should not call the model planner")
+    def fail_plan(*_args, **_kwargs):
+        raise RuntimeError("planner failure")
 
     def fail_screen(*_args, **_kwargs):
         raise AssertionError("no-context local fast-path should not execute screening")
@@ -261,23 +257,45 @@ def test_nl_stream_no_context_fast_paths_never_screen_or_call_model(db, seed_sto
         assert "parsed" not in event_types
         assert terminal["plan"]["tool"] == "ask_clarification"
         assert terminal["plan"]["ai_used"] is False
-        assert terminal["model_ms"] == 0
-        assert terminal["fallback_reason"] == "local_fast_path"
+        assert terminal["model_ms"] >= 0
+        assert terminal["fallback_reason"] == "模型 ReAct 异常"
         assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
 
 
-def test_nl_stream_deterministic_screen_skips_model_planning(db, seed_stocks, monkeypatch):
-    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+def test_nl_stream_screen_query_uses_model_before_local_fallback(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
+        lambda: {"configured": True, "ok": True, "reason": None},
     )
+    calls = {"planner": 0}
 
-    def fail_plan(*_args, **_kwargs):
-        raise AssertionError("deterministic screen should not call ReAct planner")
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        calls["planner"] += 1
+        if observations:
+            return AgentReactDecision(
+                kind="final",
+                public_reason="模型基于工具 observation 生成最终回答。",
+                final_answer="已根据工具结果生成回答。",
+            )
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型解析低估值银行筛选",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="模型解析低估值银行筛选",
+                conditions=[
+                    FilterCondition(field="industry", op="in", value=["银行"]),
+                    FilterCondition(field="pe", op="lt", value=15),
+                    FilterCondition(field="pb", op="lt", value=2),
+                ],
+                sort_by="market_cap",
+                sort_desc=True,
+            ),
+        )
 
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", fail_plan)
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
 
     client = TestClient(app)
     events = _stream_events(client, "PE 低于 15 且 PB 小于 2 的银行股", context={})
@@ -285,18 +303,20 @@ def test_nl_stream_deterministic_screen_skips_model_planning(db, seed_stocks, mo
 
     assert event_types.index("parsed") < event_types.index("screening") < event_types.index("result")
     assert event_types[-1] == "done"
+    assert calls["planner"] >= 1
+    assert "react_step" in event_types
     result = next(event for event in events if event["type"] == "result")
     assert result["plan"]["tool"] == "stock_screen"
-    assert result["plan"]["ai_used"] is False
+    assert result["plan"]["ai_used"] is True
     assert result["ai_status"] == {
         "configured": True,
-        "used": False,
-        "source": "local_fallback",
-        "label": "本地规则兜底",
-        "fallback": True,
+        "used": True,
+        "source": "ai_agent",
+        "label": "AI Agent",
+        "fallback": False,
     }
-    assert result["model_ms"] == 0
-    assert result["fallback_reason"] == "local_fast_path"
+    assert result["model_ms"] >= 0
+    assert result["fallback_reason"] is None
     assert result["parsed_conditions"]
     assert any(
         call["name"] == "stock_screen" and call["result"]["total"] == result["total"]
@@ -912,7 +932,7 @@ def test_nl_stream_model_chooses_strategy_design_skips_screening(db, seed_stocks
     assert design["plan"]["ai_used"] is True
 
 
-def test_nl_stream_fast_path_explain_result_skips_screening(db, seed_stocks, monkeypatch):
+def test_nl_stream_model_explain_result_skips_screening(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -956,9 +976,9 @@ def test_nl_stream_fast_path_explain_result_skips_screening(db, seed_stocks, mon
 
     agent = next(event for event in events if event["type"] == "agent")
     assert agent["plan"]["tool"] == "explain_result"
-    assert agent["plan"]["ai_used"] is False
-    assert agent["model_ms"] == 0
-    assert agent["fallback_reason"] == "local_fast_path"
+    assert agent["plan"]["ai_used"] is True
+    assert agent["model_ms"] >= 0
+    assert agent["fallback_reason"] is None
 
 
 def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
@@ -1005,7 +1025,7 @@ def test_nl_stream_truthful_stages_when_local_fallback(db, seed_stocks, monkeypa
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: (_ for _ in ()).throw(AssertionError("deterministic screen should not probe AI health")),
+        lambda: {"configured": True, "ok": False, "reason": "test unavailable"},
     )
     client = TestClient(app)
     with client.stream(

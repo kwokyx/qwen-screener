@@ -1,4 +1,6 @@
 import json
+from queue import Queue
+from threading import Thread
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.schemas.screener import NLScreenRequest, ScreenRequest, ScreenResponse
 from app.services import agent_react, qwen_client, screener_engine, strategy_selector
 
@@ -151,7 +153,17 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             for step in steps
             if step.get("type") == "tool_done"
         )
-        fallback_reason = next(
+        model_fallback_reason = next(
+            (
+                step.get("fallback_reason")
+                for step in reversed(steps)
+                if step.get("type") == "final"
+                and step.get("fallback_reason")
+                and str(step.get("timing_phase") or "").startswith("model_")
+            ),
+            None,
+        )
+        fallback_reason = model_fallback_reason or next(
             (
                 step.get("fallback_reason")
                 for step in steps
@@ -168,18 +180,39 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
 
     def gen():
         yield event({"type": "thinking", "text": "正在选择下一步（bounded ReAct，必要时调用模型）…\n"})
-        try:
-            planning_started = time.perf_counter()
-            response = agent_react.run_chat_react_agent(
-                db,
-                req.query,
-                context=req.context or {},
-                limit=50,
-            )
-        except Exception as e:
-            logger.exception("Agent 规划失败")
-            yield event({"type": "error", "message": f"智能筛选规划失败: {e}"})
-            return
+        planning_started = time.perf_counter()
+        stream_queue = Queue()
+
+        def push_step(payload: dict):
+            stream_queue.put(("step", payload))
+
+        def run_agent_worker():
+            try:
+                with SessionLocal() as worker_db:
+                    response = agent_react.run_chat_react_agent(
+                        worker_db,
+                        req.query,
+                        context=req.context or {},
+                        limit=50,
+                        event_sink=push_step,
+                    )
+                stream_queue.put(("response", response))
+            except Exception as exc:
+                logger.exception("Agent 规划失败")
+                stream_queue.put(("error", exc))
+
+        Thread(target=run_agent_worker, daemon=True).start()
+
+        response = None
+        while response is None:
+            kind, payload = stream_queue.get()
+            if kind == "step":
+                yield event(payload)
+            elif kind == "response":
+                response = payload
+            elif kind == "error":
+                yield event({"type": "error", "message": f"智能筛选规划失败: {payload}"})
+                return
 
         timings = _react_timings(response)
         wall_ms = int((time.perf_counter() - planning_started) * 1000)
@@ -204,8 +237,6 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         pre_tool_timings = {**timings, "tool_ms": 0}
         pre_tool_common = response_payload(response, pre_tool_timings)
         yield event({"type": "planning", **common})
-        for step in response.react_steps:
-            yield event(step)
         for call in response.tool_calls:
             yield event({"type": "tool_call", "tool_call": call.model_dump()})
 
