@@ -263,6 +263,7 @@ def run_chat_react_agent(
             public_summary="工具执行完成。",
             observation=observation,
         ), event_sink)
+        return _finalize_tool_response(response, react_events, step_index, event_sink=event_sink)
 
     return _finish_or_fallback(
         db,
@@ -320,8 +321,7 @@ def _execute_prepared_response(
         public_summary="工具执行完成。",
         observation=observation,
     ), event_sink)
-    response.react_steps = react_events
-    return response
+    return _finalize_tool_response(response, react_events, step_index, event_sink=event_sink)
 
 
 def _response_from_model_plan(
@@ -426,6 +426,29 @@ def _apply_final_answer(
         tool_trace=["ReAct final：模型未调用工具，直接回答"],
         tool_calls=strategy_selector._planned_tool_calls(plan),
     )
+
+
+def _finalize_tool_response(
+    response: StrategyAgentResponse,
+    react_events: list[dict[str, Any]],
+    step_index: int,
+    *,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> StrategyAgentResponse:
+    response.tool_trace = [
+        *response.tool_trace,
+        "ReAct 工具已执行，使用后端确定性总结结束",
+    ]
+    _append_event(react_events, _event(
+        "final",
+        step_index,
+        tool=response.plan.tool,
+        timing_phase="local_final",
+        public_summary="工具结果已返回，已使用后端确定性总结。",
+        fallback_reason=_fallback_from_response(response),
+    ), event_sink)
+    response.react_steps = [*react_events]
+    return response
 
 
 def _finish_or_fallback(

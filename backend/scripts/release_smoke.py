@@ -317,6 +317,21 @@ def _check_detail(base_url: str) -> None:
     _pass("SSE stock_detail", "查看第一只详情 -> /detail/600036.SH")
 
 
+def _check_named_detail(base_url: str) -> None:
+    events = _post_sse(base_url, "我想看一下招商银行的详情", {})
+    types = _event_types(events)
+    terminal = _terminal(events)
+    plan = terminal.get("plan") or {}
+    _require("screening" not in types and "result" not in types, "named stock_detail triggered screening/result events")
+    _require(plan.get("tool") == "stock_detail", f"named detail routed to {plan.get('tool')}")
+    _require(plan.get("ai_used") is False, "named stock_detail should not require AI")
+    calls = terminal.get("tool_calls") or []
+    detail_call = next((call for call in calls if call.get("name") == "stock_detail"), None)
+    _require(bool(detail_call), "named stock_detail call missing")
+    _require(detail_call.get("result", {}).get("url") == "/detail/600036.SH", "named stock_detail url mismatch")
+    _pass("SSE named stock_detail", "我想看一下招商银行的详情 -> /detail/600036.SH")
+
+
 def _check_real_screen(base_url: str) -> dict[str, Any]:
     started = time.time()
     events = _post_sse(base_url, "低估值高分红的银行股", {})
@@ -402,6 +417,7 @@ def main() -> int:
         lambda: _check_health(base_url),
         lambda: _check_fast_path(base_url),
         lambda: _check_detail(base_url),
+        lambda: _check_named_detail(base_url),
         lambda: _check_real_screen(base_url),
         lambda: _check_secret_scan(cwd),
     ]

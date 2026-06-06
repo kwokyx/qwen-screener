@@ -235,10 +235,12 @@ def test_non_deterministic_query_can_use_model_planner(db, seed_stocks, monkeypa
 
 def test_bounded_react_model_path_and_timeout_metadata(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(strategy_selector, "_ai_status", lambda: {"configured": True, "ok": True, "reason": None})
+    calls = []
 
     def model_step(query, context=None, observations=None, step_index=1):
+        calls.append({"step_index": step_index, "observation_count": len(observations or [])})
         if observations:
-            return AgentReactDecision(kind="final", public_reason="模型基于 observation 总结。", final_answer="模型已总结。")
+            raise AssertionError("successful tool result should not request model final summary")
         return AgentReactDecision(
             kind="action",
             public_reason="模型选择银行筛选。",
@@ -254,7 +256,8 @@ def test_bounded_react_model_path_and_timeout_metadata(db, seed_stocks, monkeypa
     response = agent_react.run_chat_react_agent(db, "请模型做一次观察", context={}, limit=10)
     assert response.plan.ai_used is True
     assert any(step["type"] == "react_step" for step in response.react_steps)
-    assert any(step["type"] == "final" for step in response.react_steps)
+    assert any(step["type"] == "final" and step["timing_phase"] == "local_final" for step in response.react_steps)
+    assert calls == [{"step_index": 1, "observation_count": 0}]
 
     def slow_timeout(*_args, **_kwargs):
         time.sleep(0.02)

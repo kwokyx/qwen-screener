@@ -822,41 +822,39 @@ def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch)
     assert any(call["name"] == "stock_screen" and call["result"]["total"] == 1 for call in result["tool_calls"])
 
 
-def test_nl_stream_react_final_uses_tool_observation(db, seed_stocks, monkeypatch):
+def test_nl_stream_react_tool_result_uses_deterministic_final(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
         lambda: {"configured": True, "ok": True, "reason": None},
     )
 
-    observed = {}
+    calls = []
 
     def plan_react_step(query, context=None, observations=None, step_index=1):
-        if step_index == 1:
-            return AgentReactDecision(
-                kind="action",
-                public_reason="先筛选低估值银行股。",
-                plan=AgentPlanResult(
-                    tool="stock_screen",
-                    tool_label="结构化股票筛选",
-                    reasoning="AI 解析低估值银行筛选",
-                    conditions=[
-                        FilterCondition(field="industry", op="in", value=["银行"]),
-                        FilterCondition(field="pe", op="lt", value=15),
-                    ],
-                    sort_by="dividend_yield",
-                    sort_desc=True,
-                ),
-            )
-        observed["payload"] = observations
-        assert observations and observations[0]["total"] == 1
         return AgentReactDecision(
-            kind="final",
-            public_reason="模型基于筛选 observation 生成最终回答。",
-            final_answer="观察到命中 1 只，前排是招商银行。",
+            kind="action",
+            public_reason="先筛选低估值银行股。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="AI 解析低估值银行筛选",
+                conditions=[
+                    FilterCondition(field="industry", op="in", value=["银行"]),
+                    FilterCondition(field="pe", op="lt", value=15),
+                ],
+                sort_by="dividend_yield",
+                sort_desc=True,
+            ),
         )
 
-    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+    def spy_plan_react_step(query, context=None, observations=None, step_index=1):
+        calls.append({"step_index": step_index, "observation_count": len(observations or [])})
+        if observations:
+            raise AssertionError("successful tool result should not request a model final summary")
+        return plan_react_step(query, context=context, observations=observations, step_index=step_index)
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", spy_plan_react_step)
 
     client = TestClient(app)
     events = _stream_events(client, "请根据模型判断做一次筛选观察", context={})
@@ -865,38 +863,43 @@ def test_nl_stream_react_final_uses_tool_observation(db, seed_stocks, monkeypatc
     assert {"react_step", "tool_start", "tool_observation", "tool_done", "final"} <= set(event_types)
     assert next(event for event in events if event["type"] == "react_step")["timing_phase"] == "model_action"
     assert next(event for event in events if event["type"] == "tool_done")["timing_phase"] == "tool_execution"
-    assert next(event for event in events if event["type"] == "final")["timing_phase"] == "model_final"
+    assert next(event for event in events if event["type"] == "final")["timing_phase"] == "local_final"
     result = next(event for event in events if event["type"] == "result")
-    assert result["answer"] == "观察到命中 1 只，前排是招商银行。"
+    assert "当前命中 1 只" in result["answer"]
+    assert "招商银行" in result["answer"]
+    assert result["completion_reason"] is None
     assert result["react_steps"]
-    assert observed["payload"][0]["items"][0]["code"] == "600036.SH"
+    assert calls == [{"step_index": 1, "observation_count": 0}]
 
 
-def test_nl_stream_react_final_timeout_reports_completion_reason(db, seed_stocks, monkeypatch):
+def test_nl_stream_react_tool_result_skips_final_timeout(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
         lambda: {"configured": True, "ok": True, "reason": None},
     )
 
+    calls = []
+
     def plan_react_step(query, context=None, observations=None, step_index=1):
-        if not observations:
-            return AgentReactDecision(
-                kind="action",
-                public_reason="先筛选低估值银行股。",
-                plan=AgentPlanResult(
-                    tool="stock_screen",
-                    tool_label="结构化股票筛选",
-                    reasoning="AI 解析低估值银行筛选",
-                    conditions=[
-                        FilterCondition(field="industry", op="in", value=["银行"]),
-                        FilterCondition(field="pe", op="lt", value=15),
-                    ],
-                    sort_by="dividend_yield",
-                    sort_desc=True,
-                ),
-            )
-        return None
+        calls.append({"step_index": step_index, "observation_count": len(observations or [])})
+        if observations:
+            raise AssertionError("successful tool result should not wait for a final model call")
+        return AgentReactDecision(
+            kind="action",
+            public_reason="先筛选低估值银行股。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="AI 解析低估值银行筛选",
+                conditions=[
+                    FilterCondition(field="industry", op="in", value=["银行"]),
+                    FilterCondition(field="pe", op="lt", value=15),
+                ],
+                sort_by="dividend_yield",
+                sort_desc=True,
+            ),
+        )
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
     monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 12 秒")
@@ -908,11 +911,13 @@ def test_nl_stream_react_final_timeout_reports_completion_reason(db, seed_stocks
     assert result["total"] == 1
     assert result["plan"]["ai_used"] is True
     assert result["fallback_reason"] is None
-    assert result["completion_reason"] == "模型 ReAct 步骤超过 12 秒"
-    assert "最终总结未完成" in result["warnings"][-1]
+    assert result["completion_reason"] is None
+    assert not any("最终总结未完成" in warning for warning in result["warnings"])
+    assert next(event for event in events if event["type"] == "final")["timing_phase"] == "local_final"
+    assert calls == [{"step_index": 1, "observation_count": 0}]
 
 
-def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypatch):
+def test_nl_stream_react_stops_after_successful_tool_action(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
@@ -930,7 +935,12 @@ def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypat
         sort_desc=True,
     )
 
+    calls = []
+
     def plan_react_step(query, context=None, observations=None, step_index=1):
+        calls.append({"step_index": step_index, "observation_count": len(observations or [])})
+        if observations:
+            raise AssertionError("successful tool action should finish without duplicate model actions")
         return AgentReactDecision(kind="action", public_reason="重复选择同一工具", plan=plan)
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
@@ -941,8 +951,9 @@ def test_nl_stream_react_blocks_duplicate_tool_action(db, seed_stocks, monkeypat
 
     assert result["total"] == 1
     assert result["fallback_reason"] is None
-    assert "重复调用相同工具参数" in result["completion_reason"]
-    assert any("最终总结未完成" in warning for warning in result["warnings"])
+    assert result["completion_reason"] is None
+    assert next(event for event in events if event["type"] == "final")["timing_phase"] == "local_final"
+    assert calls == [{"step_index": 1, "observation_count": 0}]
 
 
 def test_nl_stream_preflights_unsupported_metric_before_model_action(db, seed_stocks, monkeypatch):
