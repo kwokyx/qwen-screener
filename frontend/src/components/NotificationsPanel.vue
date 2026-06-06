@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNotificationsStore } from '../stores/notifications'
 import { A2 } from '../shared/theme.js'
@@ -11,6 +11,7 @@ const emit = defineEmits(['close'])
 const notif = useNotificationsStore()
 const router = useRouter()
 const permState = ref(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported')
+const panelStyle = ref({})
 
 const items = computed(() => notif.items)
 
@@ -38,6 +39,35 @@ function openItem(n) {
   emit('close')
 }
 
+function updatePanelPosition() {
+  if (typeof window === 'undefined') return
+  const margin = 12
+  const width = Math.min(360, Math.max(280, window.innerWidth - margin * 2))
+  const anchor = document.querySelector('[data-bell]')
+  const header = document.querySelector('.top-nav, .topbar-header')
+  const anchorBox = anchor?.getBoundingClientRect()
+  const headerBox = header?.getBoundingClientRect()
+  const fallbackTop = headerBox ? headerBox.bottom + 4 : 64
+  const top = Math.max(anchorBox ? anchorBox.bottom + 8 : fallbackTop, fallbackTop)
+  const fallbackLeft = window.innerWidth - width - margin
+  const desiredLeft = anchorBox ? anchorBox.right - width : fallbackLeft
+  const left = Math.min(Math.max(desiredLeft, margin), window.innerWidth - width - margin)
+  const maxHeight = Math.max(160, window.innerHeight - top - margin)
+  panelStyle.value = {
+    position: 'fixed',
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(left)}px`,
+    width: `${Math.round(width)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+  }
+}
+
+watch(() => props.open, async (open) => {
+  if (!open) return
+  await nextTick()
+  updatePanelPosition()
+})
+
 // click-outside to close
 const panelRef = ref(null)
 function onDocClick(e) {
@@ -46,14 +76,22 @@ function onDocClick(e) {
     emit('close')
   }
 }
-onMounted(() => document.addEventListener('mousedown', onDocClick))
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
+onMounted(() => {
+  document.addEventListener('mousedown', onDocClick)
+  window.addEventListener('resize', updatePanelPosition)
+  window.addEventListener('scroll', updatePanelPosition, true)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocClick)
+  window.removeEventListener('resize', updatePanelPosition)
+  window.removeEventListener('scroll', updatePanelPosition, true)
+})
 </script>
 
 <template>
   <Transition name="page-fade">
     <div v-if="open" ref="panelRef"
-         :style="{ position: 'absolute', top: '46px', right: '12px', width: '360px', maxHeight: '70vh', background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowLg, border: `1px solid ${A2.borderHair}`, zIndex: 50, display: 'flex', flexDirection: 'column', overflow: 'hidden' }">
+         :style="{ ...panelStyle, background: A2.surface, borderRadius: '10px', boxShadow: A2.shadowLg, border: `1px solid ${A2.borderHair}`, zIndex: 1000, display: 'flex', flexDirection: 'column', overflow: 'hidden' }">
 
       <div :style="{ padding: '12px 14px', borderBottom: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', gap: '8px' }">
         <Icon name="bell" :size="14" :color="A2.text" />

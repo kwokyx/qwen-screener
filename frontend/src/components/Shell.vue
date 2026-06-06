@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NAvatar,
+  NBadge,
   NButton,
   NDropdown,
   NInput,
@@ -14,12 +15,15 @@ import {
 } from 'naive-ui'
 import Icon from './Icon.vue'
 import DataFreshness from './DataFreshness.vue'
+import NotificationsPanel from './NotificationsPanel.vue'
 import { useAuthStore } from '../stores/auth'
+import { useNotificationsStore } from '../stores/notifications'
 import * as stockApi from '../api/stock'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const notif = useNotificationsStore()
 
 const menuOptions = [
   { label: '行情', key: 'dashboard' },
@@ -45,6 +49,7 @@ function handleMenuSelect(key) {
 }
 
 const searchQuery = ref('')
+const bellOpen = ref(false)
 const searchItems = ref([])
 const searchOpen = ref(false)
 const searchLoading = ref(false)
@@ -211,6 +216,11 @@ function handleUserMenu(key) {
         <div class="nav-actions">
           <n-space align="center" size="small">
             <DataFreshness />
+            <n-badge :value="notif.unreadCount" :max="99" :show="notif.unreadCount > 0">
+              <n-button quaternary circle size="small" title="通知" data-bell @click="bellOpen = !bellOpen">
+                <template #icon><Icon name="bell" :size="15" /></template>
+              </n-button>
+            </n-badge>
             <div class="nav-search-wrap" data-shell-search>
               <n-input
                 class="nav-search"
@@ -268,6 +278,8 @@ function handleUserMenu(key) {
         </div>
       </div>
     </n-layout-header>
+
+    <NotificationsPanel :open="bellOpen" @close="bellOpen = false" />
 
     <n-layout-content class="app-content">
       <div class="content-container">
