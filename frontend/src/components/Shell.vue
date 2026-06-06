@@ -216,11 +216,6 @@ function handleUserMenu(key) {
         <div class="nav-actions">
           <n-space align="center" size="small">
             <DataFreshness />
-            <n-badge :value="notif.unreadCount" :max="99" :show="notif.unreadCount > 0">
-              <n-button quaternary circle size="small" title="通知" data-bell @click="bellOpen = !bellOpen">
-                <template #icon><Icon name="bell" :size="15" /></template>
-              </n-button>
-            </n-badge>
             <div class="nav-search-wrap" data-shell-search>
               <n-input
                 class="nav-search"
@@ -262,6 +257,11 @@ function handleUserMenu(key) {
             <n-button size="small" @click="handleSearch">
               <template #icon><Icon name="search" :size="12" /></template>
             </n-button>
+            <n-badge :value="notif.unreadCount" :max="99" :show="notif.unreadCount > 0">
+              <n-button quaternary circle size="small" title="通知" data-bell @click="bellOpen = !bellOpen">
+                <template #icon><Icon name="bell" :size="15" /></template>
+              </n-button>
+            </n-badge>
             <template v-if="isLoggedIn">
               <n-dropdown trigger="click" :options="userMenuOptions" @select="handleUserMenu">
                 <button class="user-chip" type="button" :title="username">

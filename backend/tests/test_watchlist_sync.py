@@ -33,6 +33,7 @@ def test_watchlist_upsert_persists_alerts(db):
         body = r.json()
         assert body["alerts"] == alerts
         assert body["ref_price"] == 1742.5
+        assert body["created_at"]
 
         # 第二次 POST 同 code → 更新 alerts，不是创建新行
         alerts2 = alerts + [{"id": "a2", "type": "price_lt", "threshold": 1500, "enabled": True, "lastTriggered": None}]
@@ -53,6 +54,7 @@ def test_watchlist_upsert_persists_alerts(db):
         assert len(items) == 1
         assert items[0]["alerts"] == alerts2
         assert items[0]["ref_price"] == 1742.5
+        assert items[0]["created_at"] == body["created_at"]
 
 
 def test_watchlist_delete(db):

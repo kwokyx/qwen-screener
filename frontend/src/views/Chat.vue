@@ -322,7 +322,7 @@ async function openFullResults(turn = latestTurn.value) {
     return
   }
   const turnResult = turn?.result || result.value || null
-  const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'score'
+  const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'market_cap'
   const sortDesc = (turn?.screenMeta?.sort_desc ?? plan?.sort_desc ?? screenMeta.value?.sort_desc) !== false
   const remoteSession = await history.ensureRemote?.(history.activeId)
   const fallbackContextId = [

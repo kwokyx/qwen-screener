@@ -271,7 +271,6 @@ function mapScreenRows(items, labels) {
       .map(([label]) => label)
     return {
       ...item,
-      score: null,
       signals: labels.length ? labels : ['条件筛选'],
       metrics,
       missingMetrics,
@@ -306,7 +305,6 @@ const columns = [
       return h('span', { class: value >= 0 ? 'up' : 'down' }, `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`)
     },
   },
-  { title: '策略得分', key: 'score', width: 100, sorter: 'default', render: (row) => row.score?.toFixed?.(1) || '-' },
   {
     title: '命中原因',
     key: 'signals',
@@ -349,8 +347,7 @@ function gotoDetail(code) {
   router.push(`/detail/${code}`)
 }
 const displayColumns = computed(() => {
-  const isConditionScreen = !!(agentResult.value?.screen_result || structuredResult.value)
-  return isConditionScreen ? columns.filter((column) => column.key !== 'score') : columns
+  return columns
 })
 
 function formatMetric(key, value) {
@@ -718,7 +715,7 @@ watch([
               <div>
                 <strong>{{ displayTitle }}</strong>
                 <span v-if="isAgentDesign">未执行筛选 · 显示策略条件</span>
-                <span v-else-if="hasResult">{{ displayTotal }} 只命中 · 显示 {{ rows.length }} 只</span>
+                <span v-else-if="hasResult">{{ displayTotal }} 只命中</span>
                 <span v-else-if="tableLoading">请稍候，正在计算</span>
                 <span v-else>点击筛选后显示结果</span>
               </div>

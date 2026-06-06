@@ -79,7 +79,7 @@ TOOLS: list[dict] = [
                     "logic": {"type": "string", "enum": ["AND", "OR"], "default": "AND"},
                     "sort_by": {
                         "type": "string",
-                        "enum": sorted(ALLOWED_FIELDS | {"score", "change_pct"}),
+                        "enum": sorted(ALLOWED_FIELDS | {"change_pct"}),
                         "description": "排序字段",
                     },
                     "sort_desc": {"type": "boolean", "default": True},
@@ -181,7 +181,7 @@ TOOLS: list[dict] = [
                 "properties": {
                     "sort_by": {
                         "type": "string",
-                        "enum": sorted(ALLOWED_FIELDS | {"score", "change_pct"}),
+                        "enum": sorted(ALLOWED_FIELDS | {"change_pct"}),
                         "description": "排序字段",
                     },
                     "sort_desc": {"type": "boolean", "default": True},
@@ -262,7 +262,7 @@ TOOLS: list[dict] = [
 
 ALLOWED_TOOLS: frozenset[str] = frozenset(t["function"]["name"] for t in TOOLS)
 
-VALID_SORT_FIELDS: frozenset[str] = ALLOWED_FIELDS | {"score", "change_pct"}
+VALID_SORT_FIELDS: frozenset[str] = ALLOWED_FIELDS | {"change_pct"}
 STRING_FIELDS: frozenset[str] = frozenset({"industry", "market"})
 
 VALID_STRATEGY_IDS: frozenset[str] = frozenset({

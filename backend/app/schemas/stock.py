@@ -87,3 +87,4 @@ class WatchlistOut(BaseModel):
     note: str | None = None
     alerts: list | None = None
     ref_price: float | None = None
+    created_at: datetime

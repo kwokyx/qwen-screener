@@ -102,7 +102,7 @@ function agentContextFromServer(row, contextId) {
     turn_id: meta.agent_turn_id || null,
     query: row?.query || '',
     conditions,
-    sort_by: meta.sort_by || plan?.sort_by || 'score',
+    sort_by: meta.sort_by || plan?.sort_by || 'market_cap',
     sort_desc: meta.sort_desc ?? plan?.sort_desc ?? true,
     page: 1,
     size: 20,
@@ -141,9 +141,9 @@ function routeFilterMode(query = route.query, hasAgent = false) {
 
 const agentContext = ref(readAgentContext())
 const filterMode = ref(routeFilterMode(route.query, Boolean(agentContext.value)))
-const sortableFields = new Set(['score', 'close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover'])
+const DEFAULT_SORT_FIELD = 'market_cap'
+const sortableFields = new Set(['close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover'])
 const sortLabels = {
-  score: '综合分',
   close: '现价',
   change_pct: '涨跌幅',
   pe: 'PE',
@@ -164,7 +164,7 @@ const initialSort = typeof route.query.sort === 'string'
   : agentContext.value?.sort_by
 const page = ref(positiveInt(route.query.page, 1))
 const pageSize = ref([20, 50, 100].includes(positiveInt(route.query.size, 20)) ? positiveInt(route.query.size, 20) : 20)
-const sortBy = ref(sortableFields.has(initialSort) ? initialSort : 'score')
+const sortBy = ref(sortableFields.has(initialSort) ? initialSort : DEFAULT_SORT_FIELD)
 const sortDesc = ref(route.query.order === 'asc'
   ? false
   : (route.query.order === 'desc' ? true : (filterMode.value === 'agent' && agentContext.value?.sort_desc !== false)))
@@ -394,7 +394,6 @@ function conditionReason(row, condition) {
 
 function fallbackReasons(row) {
   return [
-    row.score >= 75 ? `综合分 ${row.score.toFixed(1)}` : null,
     row.pe != null && row.pe > 0 && row.pe < 15 ? `低 PE ${row.pe.toFixed(2)}` : null,
     row.pb != null && row.pb < 1.5 ? `低 PB ${row.pb.toFixed(2)}` : null,
     row.roe != null && row.roe >= 15 ? `ROE ${row.roe.toFixed(2)}%` : null,
@@ -475,17 +474,6 @@ const columns = computed(() => [
         class: 'hit-reason-tag',
       }, { default: () => reason })))
     },
-  },
-  {
-    title: '综合分',
-    key: 'score',
-    align: 'right',
-    width: 82,
-    ...remoteSort('score'),
-    render: (s) => rightMonoCell(s.score != null ? s.score.toFixed(1) : '—', {
-      color: s.score >= 70 ? Preview.positive : Preview.textMuted,
-      fontWeight: s.score >= 70 ? 700 : 600,
-    }),
   },
   {
     title: '现价',
@@ -612,7 +600,7 @@ async function load() {
       agentContext.value = restored
       filterMode.value = 'agent'
       const nextSort = typeof route.query.sort === 'string' ? route.query.sort : restored.sort_by
-      sortBy.value = sortableFields.has(nextSort) ? nextSort : 'score'
+      sortBy.value = sortableFields.has(nextSort) ? nextSort : DEFAULT_SORT_FIELD
       sortDesc.value = route.query.order === 'asc'
         ? false
         : (route.query.order === 'desc' ? true : restored.sort_desc !== false)
@@ -711,7 +699,7 @@ function applyRouteState(query = route.query) {
   const nextSize = positiveInt(query.size, 20)
   pageSize.value = [20, 50, 100].includes(nextSize) ? nextSize : 20
   const nextSort = typeof query.sort === 'string' ? query.sort : nextAgent?.sort_by
-  sortBy.value = sortableFields.has(nextSort) ? nextSort : 'score'
+  sortBy.value = sortableFields.has(nextSort) ? nextSort : DEFAULT_SORT_FIELD
   sortDesc.value = query.order === 'asc'
     ? false
     : (query.order === 'desc' ? true : (filterMode.value === 'agent' && nextAgent?.sort_desc !== false))
@@ -720,7 +708,7 @@ function applyRouteState(query = route.query) {
 function applyMode(mode) {
   filterMode.value = mode
   page.value = 1
-  sortBy.value = mode === 'sized' ? 'market_cap' : 'score'
+  sortBy.value = DEFAULT_SORT_FIELD
   sortDesc.value = true
   syncRouteState()
   load()
@@ -922,7 +910,7 @@ watch(
           :pagination="false"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1520"
+          :scroll-x="1440"
           size="small"
           remote
           @update:sorter="handleSorterChange"

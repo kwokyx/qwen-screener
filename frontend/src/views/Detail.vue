@@ -573,53 +573,6 @@ const finRows = computed(() => {
   ]
 })
 
-const scoreBreakdown = computed(() => {
-  const d = detail.value
-  if (!d) return []
-  const l = d.latest || {}
-  const peScore = l.pe && l.pe > 0
-    ? Math.round(Math.max(20, Math.min(100, 110 - l.pe * 4)))
-    : 60
-  const roeScore = d.roe != null
-    ? Math.round(Math.max(20, Math.min(100, 40 + d.roe * 4)))
-    : 60
-  const growth = ((d.revenue_yoy || 0) + (d.profit_yoy || 0)) / 2
-  const growthScore = Math.round(Math.max(20, Math.min(100, 60 + growth * 1.5)))
-  const divScore = l.dividend_yield != null
-    ? Math.round(Math.max(20, Math.min(100, 50 + l.dividend_yield * 8)))
-    : 50
-  return [
-    { l: '估值', v: peScore, s: peScore > 60 ? 'success' : 'warning' },
-    { l: '盈利', v: roeScore, s: roeScore > 60 ? 'success' : 'warning' },
-    { l: '成长', v: growthScore, s: growthScore > 60 ? 'success' : 'warning' },
-    { l: '分红', v: divScore, s: divScore > 60 ? 'success' : 'warning' },
-  ]
-})
-
-const bullScore = computed(() => {
-  if (!detail.value) return 0
-  const { latest, roe } = detail.value
-  let s = 60
-  if (latest?.pe && latest.pe > 0) s += Math.max(0, Math.min(20, 25 - latest.pe * 0.5))
-  if (latest?.dividend_yield) s += Math.min(15, latest.dividend_yield * 2)
-  if (roe) s += Math.min(15, roe)
-  return Math.round(Math.max(0, Math.min(99, s)))
-})
-
-const scoreLabel = computed(() => {
-  if (bullScore.value >= 80) return '强烈关注'
-  if (bullScore.value >= 60) return '可关注'
-  if (bullScore.value >= 40) return '中性'
-  return '谨慎'
-})
-
-const scoreColor = computed(() => {
-  if (bullScore.value >= 80) return Preview.brand
-  if (bullScore.value >= 60) return '#2563EB'
-  if (bullScore.value >= 40) return '#f0a020'
-  return '#D64545'
-})
-
 const market = computed(() => {
   const c = code.value || ''
   if (c.startsWith('688')) return '科创板'
@@ -917,9 +870,12 @@ function peerRowProps(row) {
               </NDescriptions>
             </div>
           </NCard>
+        </div>
 
+        <!-- Sidebar -->
+        <div class="detail-right">
           <!-- AI Analysis Card -->
-          <NCard title="千问解读" size="small" class="section-card ai-card-wide">
+          <NCard title="千问解读" size="small" class="section-card">
             <template #header-extra>
               <NSpace size="small" align="center">
                 <NTag size="small" :bordered="false">基本面摘要</NTag>
@@ -932,7 +888,7 @@ function peerRowProps(row) {
             </NAlert>
 
             <div v-if="aiLoading && !aiText" class="ai-thinking">
-              <NSpin size="small" /> 正在分析当前行情和财务指标...
+              <NSpin size="small" /> 正在解读估值和财务指标...
             </div>
 
             <NAlert v-if="aiError" type="error" :bordered="false">
@@ -943,37 +899,6 @@ function peerRowProps(row) {
             <div v-if="aiText" class="ai-md">
               <div v-html="aiHtml" />
               <span v-if="aiStreaming" class="caret" />
-            </div>
-          </NCard>
-        </div>
-
-        <!-- Sidebar -->
-        <div class="detail-right">
-          <!-- Score Card -->
-          <NCard title="综合评分" size="small" class="section-card">
-            <div class="score-block">
-              <div class="score-ring" :style="{ color: scoreColor, borderColor: scoreColor }">
-                {{ bullScore }}
-              </div>
-              <div class="score-text">
-                <div class="score-label" :style="{ color: scoreColor }">{{ scoreLabel }}</div>
-                <div class="score-sub">{{ bullScore }}/99</div>
-              </div>
-            </div>
-            <div class="score-bars">
-              <div v-for="d in scoreBreakdown" :key="d.l" class="score-bar-item">
-                <div class="score-bar-head">
-                  <span>{{ d.l }}</span>
-                  <strong>{{ d.v }}</strong>
-                </div>
-                <NProgress
-                  type="line"
-                  :percentage="d.v"
-                  :height="6"
-                  :show-indicator="false"
-                  :status="d.s"
-                />
-              </div>
             </div>
           </NCard>
 
@@ -1324,55 +1249,6 @@ function peerRowProps(row) {
   white-space: nowrap;
 }
 
-/* ---- Score ---- */
-.score-block {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.score-ring {
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
-  border: 2px solid;
-  display: grid;
-  place-items: center;
-  font-size: 20px;
-  font-weight: 800;
-  font-family: 'IBM Plex Mono', monospace;
-  flex-shrink: 0;
-}
-
-.score-text { flex: 1; }
-.score-label { font-size: 14px; font-weight: 800; }
-.score-sub { font-size: 11px; color: #71717A; margin-top: 1px; }
-
-.score-bars {
-  /* inside score card */
-}
-
-.score-bar-item {
-  margin-bottom: 7px;
-}
-
-.score-bar-item:last-child {
-  margin-bottom: 0;
-}
-
-.score-bar-head {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 3px;
-  font-size: 11px;
-}
-
-.score-bar-head strong {
-  font-family: 'IBM Plex Mono', monospace;
-  color: #1F2937;
-}
-
 /* ---- Data Quality ---- */
 .quality-head,
 .quality-meta {
@@ -1422,10 +1298,6 @@ function peerRowProps(row) {
 .ai-empty {
   font-size: 12px;
   background: #FFFFFF;
-}
-
-.ai-card-wide {
-  margin-top: 12px;
 }
 
 .ai-thinking {

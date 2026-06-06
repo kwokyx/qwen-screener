@@ -183,7 +183,7 @@ def list_agent_tools() -> list[StrategyToolInfo]:
             category="策略工具",
             description="执行项目内置选股策略，当前策略已改写为本地日线实时计算。",
             inputs=["strategy_id", "limit"],
-            outputs=["策略得分", "命中信号", "关键指标", "交易日"],
+            outputs=["命中信号", "关键指标", "交易日"],
             examples=[tpl.name for tpl in TEMPLATES],
             data_notes=[
                 "当前策略只做选股，不做收益回测。",
@@ -1392,7 +1392,7 @@ def build_context_sort_response(
     previous_plan = context.get("last_plan") if isinstance(context, dict) else {}
     if not isinstance(previous_plan, dict):
         previous_plan = {}
-    sort_by = _requested_sort_by(query) or previous_plan.get("sort_by") or "score"
+    sort_by = _requested_sort_by(query) or previous_plan.get("sort_by") or "market_cap"
     plan = StrategyAgentPlan(
         tool="sort_results",
         tool_label="结果排序",
@@ -1461,7 +1461,7 @@ def build_context_page_response(
         conditions=conditions,
         condition_labels=_condition_labels(conditions),
         logic=previous_plan.get("logic") if previous_plan.get("logic") in ("AND", "OR") else "AND",
-        sort_by=previous_plan.get("sort_by") or "score",
+        sort_by=previous_plan.get("sort_by") or "market_cap",
         sort_desc=previous_plan.get("sort_desc") is not False,
         offset=next_offset,
         ai_configured=ai_configured,
@@ -1904,7 +1904,6 @@ def _local_sort_by(query: str, conditions: list[FilterCondition]) -> str | None:
 def _requested_sort_by(query: str) -> str | None:
     q = query.strip().lower()
     mapping = [
-        (("综合分", "评分", "得分"), "score"),
         (("股息", "分红"), "dividend_yield"),
         (("roe", "盈利", "质量"), "roe"),
         (("pe", "市盈率", "估值"), "pe"),

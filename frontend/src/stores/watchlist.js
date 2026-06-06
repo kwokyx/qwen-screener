@@ -47,6 +47,19 @@ function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
 
+function toUnixSeconds(value) {
+  if (!value) return null
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null
+    return Math.floor(value > 1e12 ? value / 1000 : value)
+  }
+  const raw = String(value).trim()
+  if (!raw) return null
+  const iso = /Z$|[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null
+}
+
 /** 把 store item 转成 upsert payload。后端用 ref_price，前端 refPrice。 */
 function toPayload(item) {
   return {
@@ -131,7 +144,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
         name: local?.name || '',
         sector: local?.sector || '',
         refPrice: r.ref_price ?? local?.refPrice ?? null,
-        addedAt: local?.addedAt || Math.floor(Date.now() / 1000),
+        addedAt: toUnixSeconds(r.created_at) || local?.addedAt || Math.floor(Date.now() / 1000),
         alerts: Array.isArray(r.alerts) ? r.alerts : [],
       })
     }
