@@ -1,6 +1,7 @@
 import json
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.schemas.screener import FilterCondition, ScreenRequest
@@ -387,7 +388,7 @@ def test_nl_stream_model_failure_preserves_attempted_model_ms(db, seed_stocks, m
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", slow_fail_plan)
 
     client = TestClient(app)
-    events = _stream_events(client, "找最近强势突破的股票", context={})
+    events = _stream_events(client, "找一个我没定义过的神奇策略", context={})
     event_types = _event_types(events)
     result = next(event for event in events if event["type"] == "agent")
 
@@ -784,24 +785,117 @@ def test_nl_stream_named_stock_detail_uses_local_lookup_without_ai(db, seed_stoc
     assert detail_call["result"]["url"] == "/detail/600036.SH"
 
 
-def test_nl_stream_routes_strategy_select(db, seed_stocks, monkeypatch):
+@pytest.mark.parametrize(
+    ("query", "strategy_id"),
+    [
+        ("找最近强势突破的股票", "turtle_breakout"),
+        ("找均线放量的股票", "ma_volume"),
+    ],
+)
+def test_nl_stream_known_strategy_intent_uses_local_strategy(db, seed_stocks, monkeypatch, query, strategy_id):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
     monkeypatch.setattr(
         strategy_selector,
         "_ai_status",
-        lambda: {"configured": True, "ok": False, "reason": "test"},
+        lambda: (_ for _ in ()).throw(AssertionError("known strategy should not probe AI health")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("known strategy should not call model")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("known strategy should not call stock_screen")),
     )
 
     client = TestClient(app)
-    with client.stream(
-        "POST",
-        "/api/v1/screener/nl/stream",
-        json={"query": "找最近强势突破的股票"},
-    ) as response:
-        assert response.status_code == 200
-        body = "".join(response.iter_text())
+    events = _stream_events(client, query, context={})
+    event_types = _event_types(events)
+    agent = next(event for event in events if event["type"] == "agent")
 
-    events = _events(body)
-    _assert_safe_stop(events, "AI 服务已配置但当前不可用")
+    assert "planned" in event_types
+    assert "screening" in event_types
+    assert "parsed" not in event_types
+    assert "result" not in event_types
+    assert agent["plan"]["tool"] == "strategy_select"
+    assert agent["plan"]["strategy_id"] == strategy_id
+    assert agent["plan"]["ai_used"] is False
+    assert agent["model_ms"] == 0
+    assert agent["fallback_reason"] == "local_fast_path"
+    assert agent["result"]["strategy"]["id"] == strategy_id
+
+
+@pytest.mark.parametrize("query", ["找一个我没定义过的神奇策略", "找短线强势机会"])
+def test_nl_stream_unknown_strategy_does_not_use_local_strategy(db, seed_stocks, monkeypatch, query):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "test unavailable"},
+    )
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unknown strategy must not stock_screen")),
+    )
+    monkeypatch.setattr(
+        strategy_selector,
+        "run_strategy_selection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unknown strategy must not strategy_select")),
+    )
+
+    client = TestClient(app)
+    events = _stream_events(client, query, context={})
+    event_types = _event_types(events)
+    agent = next(event for event in events if event["type"] == "agent")
+
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    assert "planned" not in event_types
+    assert agent["plan"]["tool"] == "ask_clarification"
+    assert agent["plan"]["ai_used"] is False
+    assert agent["ai_status"]["source"] == "chat_only"
+
+
+def test_nl_stream_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: (_ for _ in ()).throw(AssertionError("plain chat should not probe AI health")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat should not call model")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not stock_screen")),
+    )
+    monkeypatch.setattr(
+        strategy_selector,
+        "run_strategy_selection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not strategy_select")),
+    )
+
+    client = TestClient(app)
+    events = _stream_events(client, "这个 Agent 是什么", context={})
+    event_types = _event_types(events)
+    agent = next(event for event in events if event["type"] == "agent")
+
+    assert "screening" not in event_types
+    assert "result" not in event_types
+    assert "planned" not in event_types
+    assert agent["plan"]["tool"] == "ask_clarification"
+    assert agent["plan"]["tool_label"] == "普通回复"
+    assert agent["plan"]["ai_used"] is False
+    assert agent["model_ms"] == 0
+    assert agent["fallback_reason"] == "local_fast_path"
+    assert "有界选股 Agent" in agent["answer"]
 
 
 def test_nl_stream_stock_screen_uses_model_planner(db, seed_stocks, monkeypatch):
@@ -1139,7 +1233,7 @@ def test_nl_stream_model_chooses_strategy_select(db, seed_stocks, monkeypatch):
     with client.stream(
         "POST",
         "/api/v1/screener/nl/stream",
-        json={"query": "找最近强势突破的股票"},
+        json={"query": "找一个我没定义过的神奇策略"},
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
@@ -1168,7 +1262,7 @@ def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks
     with client.stream(
         "POST",
         "/api/v1/screener/nl/stream",
-        json={"query": "找最近强势突破的股票"},
+        json={"query": "找一个我没定义过的神奇策略"},
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())

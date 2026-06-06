@@ -203,6 +203,87 @@ def test_chat_react_context_operations_use_local_path_without_ai(db, seed_stocks
 
 
 @pytest.mark.parametrize(
+    ("query", "strategy_id"),
+    [
+        ("找最近强势突破的股票", "turtle_breakout"),
+        ("找均线放量的股票", "ma_volume"),
+    ],
+)
+def test_chat_react_known_strategy_intents_use_local_strategy_without_ai(db, seed_stocks, monkeypatch, query, strategy_id):
+    _patch_no_ai(monkeypatch)
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("strategy intent must not call stock_screen")),
+    )
+
+    response = agent_react.run_chat_react_agent(db, query, context={}, limit=5)
+
+    assert response.plan.tool == "strategy_select"
+    assert response.plan.strategy_id == strategy_id
+    assert response.plan.ai_used is False
+    assert response.strategy_result is not None
+    assert response.strategy_result.strategy.id == strategy_id
+    assert response.screen_result is None
+    assert response.tool_trace[0] == "本地快速路径命中，跳过模型规划"
+    assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
+    assert all(step["model_ms"] == 0 for step in response.react_steps)
+
+
+@pytest.mark.parametrize("query", ["找一个我没定义过的神奇策略", "找短线强势机会"])
+def test_chat_react_unknown_strategy_does_not_use_local_strategy(db, seed_stocks, monkeypatch, query):
+    monkeypatch.setattr(strategy_selector, "_ai_configured", lambda: True)
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": False, "reason": "test unavailable"},
+    )
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unknown strategy must not stock_screen")),
+    )
+    monkeypatch.setattr(
+        strategy_selector,
+        "run_strategy_selection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unknown strategy must not strategy_select")),
+    )
+
+    response = agent_react.run_chat_react_agent(db, query, context={}, limit=5)
+
+    assert response.plan.tool == "ask_clarification"
+    assert response.plan.ai_used is False
+    assert response.plan.tool_label == "普通回复"
+    assert response.screen_result is None
+    assert response.strategy_result is None
+
+
+def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch):
+    _patch_no_ai(monkeypatch)
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not stock_screen")),
+    )
+    monkeypatch.setattr(
+        strategy_selector,
+        "run_strategy_selection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not strategy_select")),
+    )
+
+    response = agent_react.run_chat_react_agent(db, "这个 Agent 是什么", context={}, limit=5)
+
+    assert response.plan.tool == "ask_clarification"
+    assert response.plan.tool_label == "普通回复"
+    assert response.plan.ai_used is False
+    assert "有界选股 Agent" in response.answer
+    assert response.screen_result is None
+    assert response.strategy_result is None
+    assert response.react_steps[-1]["fallback_reason"] == "local_fast_path"
+    assert all(step["model_ms"] == 0 for step in response.react_steps)
+
+
+@pytest.mark.parametrize(
     ("query", "tool", "offset"),
     [
         ("按股息率排序", "sort_results", 0),
@@ -307,7 +388,7 @@ def test_bounded_react_model_path_and_timeout_metadata(db, seed_stocks, monkeypa
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", slow_timeout)
     monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 12 秒")
-    fallback = agent_react.run_chat_react_agent(db, "找最近强势突破的股票", context={}, limit=10)
+    fallback = agent_react.run_chat_react_agent(db, "找一个我没定义过的神奇策略", context={}, limit=10)
     final_event = fallback.react_steps[-1]
     assert fallback.plan.ai_used is False
     assert final_event["model_ms"] > 0

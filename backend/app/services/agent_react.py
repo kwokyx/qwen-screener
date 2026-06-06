@@ -50,6 +50,10 @@ def run_chat_react_agent(
     if unsupported_preflight is not None:
         return _execute_prepared_response(db, unsupported_preflight, limit, [], event_sink=event_sink)
 
+    plain_chat = strategy_selector.build_plain_chat_response(query, ai_configured=ai_configured)
+    if plain_chat is not None:
+        return _execute_prepared_response(db, plain_chat, limit, [], event_sink=event_sink)
+
     if strategy_selector.is_clarification_query(query) and not strategy_selector.is_confirmation_query(query):
         response = strategy_selector.build_clarification_response(query, ai_configured=ai_configured)
         response.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *response.tool_trace]
@@ -84,6 +88,14 @@ def run_chat_react_agent(
     if chat_operation is not None:
         chat_operation.tool_trace = ["本地快速路径命中，跳过 ReAct 模型规划", *chat_operation.tool_trace]
         return _execute_prepared_response(db, chat_operation, limit, [], event_sink=event_sink)
+
+    strategy_select = strategy_selector.build_deterministic_strategy_select_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured,
+    )
+    if strategy_select is not None:
+        return _execute_prepared_response(db, strategy_select, limit, [], event_sink=event_sink)
 
     deterministic_screen = strategy_selector.build_deterministic_stock_screen_response(
         query,

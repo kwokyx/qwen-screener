@@ -571,11 +571,22 @@ def plan_agent_selection(
     if is_explicit_non_execution_design_query(query):
         return build_strategy_design_response(query, ai_configured=ai_configured_hint)
 
+    plain_chat = build_plain_chat_response(query, ai_configured=ai_configured_hint)
+    if plain_chat is not None:
+        return plain_chat
+
     if is_remote_free_fast_path_query(query):
         fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=ai_configured_hint)
         if fast_path is not None:
             fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
             return fast_path
+    strategy_fast_path = build_deterministic_strategy_select_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured_hint,
+    )
+    if strategy_fast_path is not None:
+        return strategy_fast_path
     local_screen = build_deterministic_stock_screen_response(
         query,
         limit=limit,
@@ -894,6 +905,9 @@ def _plan_chat_fast_path(
     ai_configured: bool,
 ) -> StrategyAgentResponse | None:
     """Resolve deterministic chat intents before asking the remote model."""
+    plain_chat = build_plain_chat_response(query, ai_configured=ai_configured)
+    if plain_chat is not None:
+        return plain_chat
     if is_adjustment_query(query):
         return build_adjust_conditions_response(query, context, ai_configured=ai_configured)
     if is_result_page_query(query):
@@ -959,10 +973,20 @@ def plan_chat_agent(
     )
     if unsupported_preflight is not None:
         return unsupported_preflight
+    plain_chat = build_plain_chat_response(query, ai_configured=ai_configured)
+    if plain_chat is not None:
+        return plain_chat
     fast_path = _plan_chat_fast_path(query, context, limit=limit, ai_configured=ai_configured)
     if fast_path is not None:
         fast_path.tool_trace = ["本地快速路径命中，跳过模型规划", *fast_path.tool_trace]
         return fast_path
+    strategy_fast_path = build_deterministic_strategy_select_response(
+        query,
+        limit=limit,
+        ai_configured=ai_configured,
+    )
+    if strategy_fast_path is not None:
+        return strategy_fast_path
     local_screen = build_deterministic_stock_screen_response(
         query,
         limit=limit,
@@ -1053,6 +1077,34 @@ def is_clarification_query(query: str) -> bool:
     has_number = any(ch.isdigit() for ch in q)
     has_concrete_constraint = has_number or any(term in q for term in concrete_terms)
     return not has_concrete_constraint
+
+
+def is_plain_chat_query(query: str) -> bool:
+    """Return True for product/help questions that should not call tools."""
+    q = query.strip().lower()
+    normalized = "".join(ch for ch in q if ch not in " ，。！？!?、,.：:；;“”\"'（）()")
+    exact_queries = {
+        "这个agent是什么",
+        "agent是什么",
+        "这个aiagent是什么",
+        "你是什么",
+        "你是谁",
+        "你能做什么",
+        "能做什么",
+        "怎么用",
+        "如何使用",
+        "使用说明",
+        "智能选股和ai对话有什么区别",
+        "智能选股和直接ai对话有什么区别",
+        "智能选股跟直接ai对话有什么区别",
+    }
+    if normalized in exact_queries:
+        return True
+    if ("agent" in normalized or "智能选股" in normalized) and any(term in normalized for term in (
+        "是什么", "能做什么", "怎么用", "如何使用", "有什么区别", "什么区别",
+    )):
+        return True
+    return False
 
 
 def is_confirmation_query(query: str) -> bool:
@@ -1265,6 +1317,82 @@ def build_unsupported_metric_preflight_response(
         f"当前数据字段不支持：{'、'.join(unsupported_metrics)}。已前置停止筛选，避免等待模型或返回不满足全部条件的股票。",
     ]
     return response
+
+
+def build_plain_chat_response(query: str, ai_configured: bool = False) -> StrategyAgentResponse | None:
+    """Return a local non-tool explanation for product/help questions."""
+    if not is_plain_chat_query(query):
+        return None
+    plan = StrategyAgentPlan(
+        tool="ask_clarification",
+        tool_label="普通回复",
+        reasoning="用户在询问 Agent 能力或使用方式；直接说明边界，不调用筛选或策略工具。",
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    answer = "\n".join([
+        "我是这个项目里的有界选股 Agent，不是无限自主交易 Agent。",
+        "我可以把明确的选股条件转换成本地筛选，执行内置策略，或基于上一轮结果做解释、排序、分页和详情定位。",
+        "智能选股会经过白名单工具、本地数据和字段边界校验；普通 AI 对话更像开放问答，不会自动调用本地筛选工具。",
+        "可以直接说：低估值高分红的银行股、找最近强势突破的股票、按股息率排序，或查看第一只详情。",
+    ])
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=answer,
+        tool_trace=[
+            "本地快速路径命中，跳过模型规划",
+            "tool_router -> ask_clarification",
+            "未调用筛选或策略工具：普通说明请求",
+        ],
+        tool_calls=[
+            _tool_call(
+                "tool_router",
+                "意图判断",
+                result={"tool": "ask_clarification", "label": "普通回复"},
+                message=plan.reasoning,
+            ),
+            _tool_call(
+                "ask_clarification",
+                "普通回复",
+                status="skipped",
+                message="普通说明请求未调用项目工具",
+            ),
+        ],
+    )
+
+
+def build_deterministic_strategy_select_response(
+    query: str,
+    *,
+    limit: int = 50,
+    ai_configured: bool = False,
+) -> StrategyAgentResponse | None:
+    """Return a local strategy_select plan for explicit built-in strategy names."""
+    strategy_id = _known_strategy_id_from_query(query)
+    if not strategy_id:
+        return None
+    template = TEMPLATE_MAP[strategy_id]
+    plan = StrategyAgentPlan(
+        tool="strategy_select",
+        tool_label="策略选股",
+        reasoning=f"用户请求明确命中内置策略「{template.name}」，使用本地白名单路由。",
+        strategy_id=strategy_id,
+        limit=min(max(limit, 1), 200),
+        ai_configured=ai_configured,
+        ai_used=False,
+    )
+    return StrategyAgentResponse(
+        query=query,
+        plan=plan,
+        answer=f"已匹配内置策略「{template.name}」，等待执行。",
+        tool_trace=[
+            "本地快速路径命中，跳过模型规划",
+            "tool_router -> strategy_select",
+            f"内置策略白名单：{template.name} ({strategy_id})",
+        ],
+        tool_calls=_planned_tool_calls(plan),
+    )
 
 
 def build_deterministic_stock_screen_response(
@@ -1729,8 +1857,30 @@ def _ai_status() -> dict:
     return status
 
 
+def _known_strategy_id_from_query(query: str) -> str | None:
+    """Map explicit strategy phrases to built-in strategy ids."""
+    q = query.strip().lower()
+    normalized = "".join(ch for ch in q if ch not in " ，。！？!?、,.：:；;“”\"'（）()")
+    if not normalized:
+        return None
+    if any(term in normalized for term in ("均线放量", "放量上攻", "均线金叉", "金叉放量")):
+        return "ma_volume"
+    if any(term in normalized for term in ("涨停后承接", "涨停回踩", "涨停洗盘", "涨停后洗盘", "涨停承接")):
+        return "limit_up_shakeout"
+    if any(term in normalized for term in ("高位旗形", "高紧旗形", "高位窄幅", "高位缩量整理", "高位整理")):
+        return "high_tight_flag"
+    if any(term in normalized for term in ("趋势急跌修复", "上升趋势急跌", "急跌修复", "趋势急跌")):
+        return "uptrend_limit_down"
+    if any(term in normalized for term in ("rps强势突破", "rps突破", "相对强度突破", "相对强势")):
+        return "rps_breakout"
+    if any(term in normalized for term in ("海龟突破", "强势突破", "最近强势", "创新高突破", "新高突破")):
+        return "turtle_breakout"
+    if "突破" in normalized and any(term in normalized for term in ("股票", "个股", "策略", "选股", "找", "筛")):
+        return "turtle_breakout"
+    return None
+
+
 def _plan_agent_locally(query: str, limit: int, ai_configured: bool) -> StrategyAgentPlan:
-    text = query.lower()
     if is_explicit_all_stocks_query(query):
         return StrategyAgentPlan(
             tool="stock_screen",
@@ -1742,55 +1892,16 @@ def _plan_agent_locally(query: str, limit: int, ai_configured: bool) -> Strategy
             sort_desc=True,
             ai_configured=ai_configured,
         )
-    if any(k in query for k in ("海龟", "突破", "新高")) or "breakout" in text:
+    known_strategy_id = _known_strategy_id_from_query(query)
+    if known_strategy_id:
+        template = TEMPLATE_MAP[known_strategy_id]
         return StrategyAgentPlan(
             tool="strategy_select",
             tool_label="策略选股",
-            reasoning="用户目标偏向突破交易，选择海龟突破策略。",
-            strategy_id="turtle_breakout",
+            reasoning=f"用户目标明确匹配内置策略「{template.name}」。",
+            strategy_id=known_strategy_id,
             ai_configured=ai_configured,
         )
-    if any(k in query for k in ("均线", "放量", "金叉")):
-        return StrategyAgentPlan(
-            tool="strategy_select",
-            tool_label="策略选股",
-            reasoning="用户目标偏向趋势确认，选择均线放量策略。",
-            strategy_id="ma_volume",
-            ai_configured=ai_configured,
-        )
-    if any(k in query for k in ("涨停", "洗盘", "承接", "回踩")):
-        return StrategyAgentPlan(
-            tool="strategy_select",
-            tool_label="策略选股",
-            reasoning="用户目标偏向涨停后的承接确认，选择涨停后承接策略。",
-            strategy_id="limit_up_shakeout",
-            ai_configured=ai_configured,
-        )
-    if any(k in query for k in ("跌停", "急跌", "错杀", "反包")):
-        return StrategyAgentPlan(
-            tool="strategy_select",
-            tool_label="策略选股",
-            reasoning="用户目标偏向上升趋势中的急跌修复，选择趋势急跌修复策略。",
-            strategy_id="uptrend_limit_down",
-            ai_configured=ai_configured,
-        )
-    if any(k in query for k in ("rps", "强势", "相对强度")):
-        return StrategyAgentPlan(
-            tool="strategy_select",
-            tool_label="策略选股",
-            reasoning="用户目标偏向相对强势股票，选择 RPS 强势突破策略。",
-            strategy_id="rps_breakout",
-            ai_configured=ai_configured,
-        )
-    if any(k in query for k in ("高位", "窄幅", "缩量", "旗形", "整理")):
-        return StrategyAgentPlan(
-            tool="strategy_select",
-            tool_label="策略选股",
-            reasoning="用户目标偏向形态整理，选择高位窄幅整理策略。",
-            strategy_id="high_tight_flag",
-            ai_configured=ai_configured,
-        )
-
     conditions = _local_conditions(query)
     return StrategyAgentPlan(
         tool="stock_screen",

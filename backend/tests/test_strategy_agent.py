@@ -627,9 +627,9 @@ def test_agent_fallback_reports_model_timeout_reason(db, seed_stocks, monkeypatc
     monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型规划超过 10 秒")
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", lambda _query, _context=None: None)
 
-    res = strategy_selector.plan_agent_selection("找最近强势突破的股票", limit=10)
+    res = strategy_selector.plan_agent_selection("找一个我没定义过的神奇策略", limit=10)
 
-    assert res.plan.tool == "strategy_select"
+    assert res.plan.tool == "ask_clarification"
     assert res.plan.ai_used is False
     assert "模型规划超过 10 秒，已使用本地规则兜底" in res.warnings[0]
 
@@ -879,7 +879,11 @@ def test_agent_routes_breakout_query_to_strategy_tool(db, seed_stocks, monkeypat
     assert res.plan.strategy_id == "turtle_breakout"
     assert res.strategy_result is not None
     assert res.strategy_result.strategy.id == "turtle_breakout"
+    assert res.plan.ai_used is False
     assert res.tool_trace == [
+        "本地快速路径命中，跳过模型规划",
+        "tool_router -> strategy_select",
+        "内置策略白名单：海龟突破 (turtle_breakout)",
         "调用 strategy_selector.run_strategy_selection(strategy_id=turtle_breakout, limit=5)",
     ]
 
@@ -1072,7 +1076,7 @@ class TestModelPlannerIntegration:
             ),
         )
 
-        res = strategy_selector.run_agent_selection(db, "找最近强势突破的股票", limit=10)
+        res = strategy_selector.run_agent_selection(db, "找一个我没定义过的神奇策略", limit=10)
 
         assert res.plan.tool == "strategy_select"
         assert res.plan.ai_used is True
@@ -1184,12 +1188,12 @@ class TestModelPlannerIntegration:
             lambda _query, _context=None: None,  # simulate failure
         )
 
-        res = strategy_selector.run_agent_selection(db, "找最近强势突破的股票", limit=10)
+        res = strategy_selector.run_agent_selection(db, "找一个我没定义过的神奇策略", limit=10)
 
-        assert res.plan.tool == "strategy_select"
+        assert res.plan.tool == "ask_clarification"
         assert res.plan.ai_used is False
         assert "模型未生成有效规划" in res.warnings[0]
-        assert res.strategy_result is not None
+        assert res.strategy_result is None
 
     def test_model_fallback_when_unavailable(self, db, seed_stocks, monkeypatch):
         monkeypatch.setattr(
@@ -1203,11 +1207,11 @@ class TestModelPlannerIntegration:
 
         monkeypatch.setattr(strategy_selector.qwen_client, "plan_agent_turn", fail_plan)
 
-        res = strategy_selector.run_agent_selection(db, "找最近强势突破的股票", limit=10)
+        res = strategy_selector.run_agent_selection(db, "找一个我没定义过的神奇策略", limit=10)
 
-        assert res.plan.tool == "strategy_select"
+        assert res.plan.tool == "ask_clarification"
         assert res.plan.ai_used is False
-        assert res.strategy_result is not None
+        assert res.strategy_result is None
         assert "AI 服务已配置但当前不可用" in res.warnings[0]
 
     def test_model_allows_explicit_all_stocks_empty_conditions(self, db, seed_stocks, monkeypatch):
