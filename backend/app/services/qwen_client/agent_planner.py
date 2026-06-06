@@ -19,7 +19,7 @@ from app.schemas.screener import ALLOWED_FIELDS, FilterCondition
 from .transport import openai_client
 
 _AGENT_PLAN_TIMEOUT_SECONDS = 10.0
-_AGENT_REACT_STEP_TIMEOUT_SECONDS = 8.0
+_AGENT_REACT_STEP_TIMEOUT_SECONDS = 12.0
 _LAST_PLAN_FAILURE_REASON: ContextVar[str | None] = ContextVar(
     "last_agent_plan_failure_reason",
     default=None,

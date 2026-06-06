@@ -243,9 +243,9 @@ def test_bounded_react_model_path_and_timeout_metadata(db, seed_stocks, monkeypa
         return None
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", slow_timeout)
-    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 8 秒")
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 12 秒")
     fallback = agent_react.run_chat_react_agent(db, "找最近强势突破的股票", context={}, limit=10)
     final_event = fallback.react_steps[-1]
     assert fallback.plan.ai_used is False
     assert final_event["model_ms"] > 0
-    assert "模型 ReAct 步骤超过 8 秒" in final_event["fallback_reason"]
+    assert "模型 ReAct 步骤超过 12 秒" in final_event["fallback_reason"]

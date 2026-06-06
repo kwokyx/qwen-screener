@@ -846,7 +846,7 @@ def test_nl_stream_react_final_timeout_reports_completion_reason(db, seed_stocks
         return None
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
-    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 8 秒")
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 12 秒")
 
     client = TestClient(app)
     events = _stream_events(client, "请根据模型判断做一次筛选观察", context={})
@@ -855,7 +855,7 @@ def test_nl_stream_react_final_timeout_reports_completion_reason(db, seed_stocks
     assert result["total"] == 1
     assert result["plan"]["ai_used"] is True
     assert result["fallback_reason"] is None
-    assert result["completion_reason"] == "模型 ReAct 步骤超过 8 秒"
+    assert result["completion_reason"] == "模型 ReAct 步骤超过 12 秒"
     assert "最终总结未完成" in result["warnings"][-1]
 
 
