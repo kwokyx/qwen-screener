@@ -27,7 +27,7 @@ const notif = useNotificationsStore()
 
 const menuOptions = [
   { label: '行情', key: 'dashboard' },
-  { label: '智能筛选', key: 'chat' },
+  { label: 'AI选股', key: 'chat' },
   { label: '结果', key: 'results' },
   { label: '自选', key: 'portfolio' },
   { label: '策略', key: 'strategy' },
