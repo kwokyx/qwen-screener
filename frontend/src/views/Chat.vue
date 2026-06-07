@@ -283,7 +283,7 @@ function historyBadge(c) {
   if (c.status) return c.status
   const tool = c.agentPlan?.tool
   if (tool === 'strategy_design') return '策略'
-  if (tool === 'ask_clarification') return '追问'
+  if (tool === 'ask_clarification') return c.agentPlan?.tool_label === '普通回复' ? '对话' : '追问'
   if (tool === 'explain_result') return '解释'
   if (tool === 'stock_detail') return '详情'
   return `${c.total} 只`

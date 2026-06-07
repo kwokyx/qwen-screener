@@ -288,7 +288,12 @@ def main() -> int:
         _require(plan.get("ai_used") is True, "plain chat did not use model final")
         _require_timing(summary, "plain chat")
         _require(summary["fallback_reason"] in (None, "-"), f"plain chat fallback={summary['fallback_reason']}")
-        _require("screening" not in _event_types(events) and "result" not in _event_types(events), "plain chat called a tool")
+        event_types = _event_types(events)
+        _require(
+            not {"planning", "tool_call", "screening", "result"} & set(event_types),
+            f"plain chat emitted tool events: {event_types}",
+        )
+        _require(not terminal.get("tool_calls"), "plain chat returned tool calls")
         _require("有界选股 Agent" in terminal_text or "Agent" in terminal_text, "plain chat did not explain Agent boundary")
 
         for query, expected_tool in (

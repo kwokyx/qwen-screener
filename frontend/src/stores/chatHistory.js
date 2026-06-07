@@ -71,7 +71,7 @@ function sessionStatus(session) {
   const turn = latestTurn(session)
   const tool = turn?.agentPlan?.tool
   if (tool === 'strategy_design') return '策略'
-  if (tool === 'ask_clarification') return '追问'
+  if (tool === 'ask_clarification') return turn?.agentPlan?.tool_label === '普通回复' ? '对话' : '追问'
   if (tool === 'explain_result') return '解释'
   if (turn?.result) return `${turn.result.total || 0}只`
   return `${session.turns?.length || 0}轮`

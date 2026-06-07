@@ -274,12 +274,12 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 | type | 含义 | 字段 |
 |---|---|---|
 | `thinking` | 前端可展示的公开进度文本 | `text` |
-| `planning` | Agent 计划元数据 | `plan, conditions, tool_calls, react_steps, timings` |
-| `react_step` | 模型选择下一步 | `step_index, tool, model_ms, public_summary` |
+| `planning` | 工具 action 计划元数据；普通 final 不发送 | `plan, conditions, tool_calls, react_steps, timings` |
+| `react_step` | 模型选择工具 action；普通 final 不发送 | `step_index, tool, model_ms, public_summary` |
 | `tool_start` | 后端开始执行本地工具 | `step_index, tool, public_summary` |
 | `tool_observation` | 工具 observation 摘要 | `step_index, tool, tool_ms, observation` |
 | `tool_done` | 工具执行完成 | `step_index, tool, tool_ms` |
-| `final` | ReAct 本轮最终回答步骤 | `step_index, public_summary, fallback_reason` |
+| `final` | 工具 action 的本轮结束步骤；普通 final 不发送 | `step_index, public_summary, fallback_reason` |
 | `parsed` | 股票筛选参数已校验 | `conditions, logic, sort_by, sort_desc, limit` |
 | `planned` | 策略选股参数已校验 | `plan` |
 | `screening` | 本地筛选或策略工具开始执行 | `tool, tool_call` |
@@ -289,7 +289,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 | `error` | 出错 | `message` |
 | `done` | 流结束 | — |
 
-`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时。`fallback_reason` 只表示没有执行模型工具 action 的安全停止、本地快速路径或本地规则路径；当没有合法工具 action 时，SSE 不会出现 `screening/result`。如果模型已经给出合法 action 且工具已执行，但最终自然语言总结超时或被截断，结果仍返回，原因写入 `completion_reason`，不应展示成“兜底筛选”。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
+`model_ms` 表示模型步骤耗时，`tool_ms` 表示本地工具耗时。`fallback_reason` 只表示没有执行模型工具 action 的安全停止、本地快速路径或本地规则路径；当没有合法工具 action 时，SSE 不会出现 `planning/tool_call/screening/result`，普通对话的 `agent.tool_calls=[]`。如果模型已经给出合法 action 且工具已执行，但最终自然语言总结超时或被截断，结果仍返回，原因写入 `completion_reason`，不应展示成“兜底筛选”。前端不应展示模型私有思考链，只展示 `public_summary` / `thinking`。
 
 **示例**
 ```bash
@@ -537,7 +537,7 @@ Strategy 工作台自然语言入口。该端点复用 bounded ReAct：除 unsup
 }
 ```
 
-**响应** `200`：`StrategyAgentResponse`，可能包含 `screen_result`、`strategy_result`，或仅包含 `answer`/`warnings` 的普通回复。
+**响应** `200`：`StrategyAgentResponse`，可能包含 `screen_result`、`strategy_result`，或仅包含 `answer`/`warnings` 的普通回复。普通回复不返回工具调用，`tool_calls=[]`。
 
 ### POST `/strategy/backtest`
 

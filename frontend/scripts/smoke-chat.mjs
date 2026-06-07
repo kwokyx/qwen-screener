@@ -582,7 +582,6 @@ const CHAT_SSE_MOCK_SOURCE = `(() => {
         window.__chatSmokeCalls.push({
           query,
           tools: [...new Set(events.flatMap((ev) => [
-            ev.plan?.tool,
             ev.tool_call?.name,
             ...(ev.tool_calls || []).map((call) => call.name),
           ]).filter(Boolean))],
@@ -686,7 +685,8 @@ async function sendChat(cdp, query, expectedText, expectedTool, expectsResult, o
     5000,
   )
   const call = await evaluate(cdp, `window.__chatSmokeCalls[window.__chatSmokeCalls.length - 1]`)
-  if (!call?.tools?.includes(expectedTool)) fail(`Unexpected tool for ${query}.`, call)
+  if (expectedTool && !call?.tools?.includes(expectedTool)) fail(`Unexpected tool for ${query}.`, call)
+  if (!expectedTool && call?.tools?.length) fail(`Did not expect a tool call for ${query}.`, call)
   if (expectsResult && call.resultEvents < 1 && !call.hasEmbeddedResult) fail(`Expected result payload for ${query}.`, call)
   if (!expectsResult && call.resultEvents !== 0) fail(`Did not expect result event for ${query}.`, call)
   if (options.expectExecution === false) {
@@ -772,9 +772,9 @@ async function run() {
     await ensureMockChatSse(cdp)
 
     const calls = []
-    calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false, { expectExecution: false }))
-    calls.push(await sendChat(cdp, '这个 Agent 是什么', '有界选股 Agent', 'ask_clarification', false, { expectExecution: false }))
-    calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', 'ask_clarification', false, { expectExecution: false }))
+    calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', null, false, { expectExecution: false }))
+    calls.push(await sendChat(cdp, '这个 Agent 是什么', '有界选股 Agent', null, false, { expectExecution: false }))
+    calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', null, false, { expectExecution: false }))
     calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true, { expectExecution: true }))
     calls.push(await sendChat(cdp, '找最近强势突破的股票', '策略选股结果', 'strategy_select', true))
     calls.push(await sendChat(cdp, '为什么这些股票排在前面', '招商银行排在前面', 'explain_result', false))
