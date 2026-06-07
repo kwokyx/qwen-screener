@@ -1791,7 +1791,7 @@ def build_stock_detail_response_from_db(
 
     context_response = build_stock_detail_response(query, context, ai_configured=ai_configured)
     if context_response.plan.tool == "stock_detail":
-        target_code = (context_response.tool_calls or [{}])[-1].get("result", {}).get("code")
+        target_code = (context_response.tool_calls[-1].result or {}).get("code") if context_response.tool_calls else None
         if target_code:
             basics = _fetch_stock_basics(db, target_code)
             if basics:
