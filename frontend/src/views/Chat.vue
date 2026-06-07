@@ -738,7 +738,7 @@ const stageColor = (s) => ({
                             </span>
                             <span class="result-price">
                               <strong>{{ fmtMetric(s.close) }}</strong>
-                              <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
+                              <small :style="{ color: s.change_pct > 0 ? '#E04F76' : s.change_pct < 0 ? '#16A35C' : '#A1A1AA' }">{{ fmtChange(s.change_pct) }}</small>
                             </span>
                             <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
                           </button>
@@ -1642,13 +1642,6 @@ const stageColor = (s) => ({
   font-size: 12px;
 }
 
-.result-price small.up {
-  color: #C8312A;
-}
-
-.result-price small.down {
-  color: #178A55;
-}
 
 .history-item {
   position: relative;
