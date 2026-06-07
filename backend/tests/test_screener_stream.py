@@ -215,7 +215,11 @@ def test_nl_stream_multiturn_agent_regression_with_fake_qwen(db, seed_stocks, mo
 
         assert terminal["plan"]["tool"] == expected_tool
         assert terminal["plan"]["ai_used"] is expected_ai_used
-        assert "planning" in event_types
+        if expected_tool == "ask_clarification":
+            assert "planning" not in event_types
+            assert "tool_call" not in event_types
+        else:
+            assert "planning" in event_types
         assert isinstance(terminal["model_ms"], int)
         assert isinstance(terminal["tool_ms"], int)
         if expected_ai_used:
@@ -1069,13 +1073,19 @@ def test_nl_stream_plain_chat_uses_model_final_without_tools(db, seed_stocks, mo
     assert "screening" not in event_types
     assert "result" not in event_types
     assert "planned" not in event_types
+    assert "planning" not in event_types
+    assert "tool_call" not in event_types
+    assert "react_step" not in event_types
+    assert "final" not in event_types
     assert agent["plan"]["tool"] == "ask_clarification"
     assert agent["plan"]["tool_label"] == "普通回复"
     assert agent["plan"]["ai_used"] is True
     assert agent["fallback_reason"] is None
-    assert "正在整理响应：普通回复（AI 模型）" in thinking_text
+    assert "正在整理响应" not in thinking_text
+    assert "已选择工具" not in thinking_text
+    assert "参数校验" not in thinking_text
     assert "补充追问" not in thinking_text
-    assert [call["name"] for call in agent["tool_calls"]] == ["tool_router"]
+    assert agent["tool_calls"] == []
     assert "有界选股 Agent" in agent["answer"]
 
 
@@ -1459,10 +1469,14 @@ def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks
     events = _events(body)
     event_types = [event["type"] for event in events]
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在选择下一步" in t for t in thinking_texts)
-    assert any("已选择工具" in t for t in thinking_texts)
-    assert any("参数校验已完成" in t for t in thinking_texts)
-    assert any("已生成结果" in t for t in thinking_texts)
+    assert any("正在处理" in t for t in thinking_texts)
+    assert not any("已选择工具" in t for t in thinking_texts)
+    assert not any("参数校验" in t for t in thinking_texts)
+    assert not any("已生成结果" in t for t in thinking_texts)
+    assert "planning" not in event_types
+    assert "tool_call" not in event_types
+    assert "react_step" not in event_types
+    assert "final" not in event_types
     assert "parsed" not in event_types
     assert "screening" not in event_types
     assert "result" not in event_types

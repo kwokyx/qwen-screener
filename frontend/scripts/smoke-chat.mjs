@@ -349,6 +349,23 @@ const CHAT_SSE_MOCK_SOURCE = `(() => {
         };
       }
       function textEvents(query, tool, label, answer, conditions = [], status = aiStatus) {
+        if (tool === 'ask_clarification') {
+          const simplePlan = plan(tool, label, conditions);
+          return [
+            { type: 'thinking', text: '正在处理。' },
+            {
+              type: 'agent',
+              plan: simplePlan,
+              answer,
+              conditions,
+              ai_status: status,
+              tool_trace: ['ReAct final：模型未调用工具，直接回答'],
+              tool_calls: [],
+              timings: { planning_ms: 860, model_ms: 860, tool_ms: 0, fallback_reason: null },
+            },
+            { type: 'done' },
+          ];
+        }
         const calls = label === '普通回复'
           ? [toolCall('tool_router', '意图判断', 'done', { tool, label }, '模型判断这是普通对话')]
           : [toolCall(tool, label, 'done', {}, '未执行股票筛选')];

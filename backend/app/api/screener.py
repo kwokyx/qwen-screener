@@ -68,6 +68,19 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "trade_date": result.trade_date,
         }
 
+    def is_no_tool_agent_response(response) -> bool:
+        return (
+            response.plan.tool == "ask_clarification"
+            and response.screen_result is None
+            and response.strategy_result is None
+        )
+
+    def is_deferred_no_tool_step(payload: dict) -> bool:
+        return (
+            payload.get("tool") == "ask_clarification"
+            and payload.get("type") in {"react_step", "final"}
+        )
+
     def response_payload(response, timings: dict | None = None) -> dict:
         timings = timings or {}
         plan = response.plan
@@ -107,7 +120,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "answer": response.answer,
             "warnings": response.warnings,
             "tool_trace": response.tool_trace,
-            "tool_calls": [call.model_dump() for call in response.tool_calls],
+            "tool_calls": [] if is_no_tool_agent_response(response) else [call.model_dump() for call in response.tool_calls],
             "react_steps": response.react_steps,
             "timings": timing_payload,
             "planning_ms": timing_payload["planning_ms"],
@@ -203,9 +216,10 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         }
 
     def gen():
-        yield event({"type": "thinking", "text": "正在选择下一步（bounded ReAct，必要时调用模型）…\n"})
+        yield event({"type": "thinking", "text": "正在处理…\n"})
         planning_started = time.perf_counter()
         stream_queue = Queue()
+        deferred_steps: list[dict] = []
 
         def push_step(payload: dict):
             stream_queue.put(("step", payload))
@@ -231,7 +245,10 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         while response is None:
             kind, payload = stream_queue.get()
             if kind == "step":
-                yield event(payload)
+                if is_deferred_no_tool_step(payload):
+                    deferred_steps.append(payload)
+                else:
+                    yield event(payload)
             elif kind == "response":
                 response = payload
             elif kind == "error":
@@ -263,10 +280,19 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             timings["tool_ms"],
             timings["fallback_reason"],
         )
+
+        common = response_payload(response, timings)
+        if is_no_tool_agent_response(response):
+            yield event({"type": "agent", **common})
+            yield event({"type": "done"})
+            return
+
+        for step in deferred_steps:
+            yield event(step)
+
         yield event({"type": "thinking", "text": f"已选择工具：{plan.tool_label}（{source}，模型耗时 {timings['model_ms']}ms）\n"})
         yield event({"type": "thinking", "text": "参数校验已完成\n"})
 
-        common = response_payload(response, timings)
         pre_tool_timings = {**timings, "tool_ms": 0}
         pre_tool_common = response_payload(response, pre_tool_timings)
         yield event({"type": "planning", **common})
