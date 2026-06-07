@@ -1884,6 +1884,13 @@ const stageColor = (s) => ({
 .row-hover { transition: background 0.15s; }
 .row-hover:hover { background: #EFEDE6; }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* 条件 chip 出现动画（stagger 由 inline --delay 控制） */
 .cond-chip {
   opacity: 0;

@@ -46,6 +46,7 @@ const props = defineProps({
     <template v-else-if="name === 'play'"><path :fill="color" d="M5 3l14 9-14 9V3z" /></template>
     <template v-else-if="name === 'bookmark'"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" /></template>
     <template v-else-if="name === 'alert'"><path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0z" /></template>
+    <template v-else-if="name === 'loader'"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></template>
     <template v-else><circle cx="12" cy="12" r="9" /></template>
   </svg>
 </template>
