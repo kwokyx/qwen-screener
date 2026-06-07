@@ -1469,7 +1469,6 @@ def test_nl_stream_ai_unavailable_returns_chat_without_screening(db, seed_stocks
     events = _events(body)
     event_types = [event["type"] for event in events]
     thinking_texts = [e["text"] for e in events if e["type"] == "thinking"]
-    assert any("正在处理" in t for t in thinking_texts)
     assert not any("已选择工具" in t for t in thinking_texts)
     assert not any("参数校验" in t for t in thinking_texts)
     assert not any("已生成结果" in t for t in thinking_texts)

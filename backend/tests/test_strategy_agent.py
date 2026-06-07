@@ -964,11 +964,10 @@ def test_chat_agent_stock_detail_from_previous_result_without_screen(db, seed_st
     assert res.plan.tool == "stock_detail"
     assert res.screen_result is None
     detail_call = next(call for call in res.tool_calls if call.name == "stock_detail")
-    assert detail_call.result == {
-        "code": "600036.SH",
-        "name": "招商银行",
-        "url": "/detail/600036.SH",
-    }
+    assert detail_call.result["code"] == "600036.SH"
+    assert detail_call.result["name"] == "招商银行"
+    assert detail_call.result["url"] == "/detail/600036.SH"
+    assert detail_call.result["basics"]["code"] == "600036.SH"
     assert "未重新筛选" in " ".join(res.tool_trace)
 
 

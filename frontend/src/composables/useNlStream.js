@@ -417,6 +417,12 @@ export function useNlStream(historyStore, hooks = {}) {
     tParsed.value = 0
     tDone.value = 0
     abortCtrl = new AbortController()
+    let committed = false
+    const commitOnce = (turnPhase = 'done') => {
+      if (committed) return
+      committed = true
+      commitCurrentTurn(turnPhase)
+    }
 
     try {
       await streamNL(q, (ev) => {
@@ -493,6 +499,7 @@ export function useNlStream(historyStore, hooks = {}) {
         } else if (ev.type === 'done') {
           phase.value = 'done'
           tDone.value = Date.now()
+          commitOnce()
         } else if (ev.type === 'error') {
           errorMsg.value = friendlyError(ev.message, { context: 'ai' })
           phase.value = 'error'
@@ -505,15 +512,15 @@ export function useNlStream(historyStore, hooks = {}) {
         tDone.value = Date.now()
       }
 
-      if (phase.value === 'done') commitCurrentTurn()
-      else if (phase.value === 'error') commitCurrentTurn('error')
+      if (phase.value === 'done') commitOnce()
+      else if (phase.value === 'error') commitOnce('error')
     } catch (e) {
       if (e.name === 'AbortError') {
         phase.value = 'idle'
       } else {
         errorMsg.value = friendlyError(e, { context: 'ai' })
         phase.value = 'error'
-        commitCurrentTurn('error')
+        commitOnce('error')
       }
     } finally {
       abortCtrl = null

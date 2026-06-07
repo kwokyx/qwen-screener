@@ -690,12 +690,12 @@ async function sendChat(cdp, query, expectedText, expectedTool, expectsResult, o
   if (expectsResult && call.resultEvents < 1 && !call.hasEmbeddedResult) fail(`Expected result payload for ${query}.`, call)
   if (!expectsResult && call.resultEvents !== 0) fail(`Did not expect result event for ${query}.`, call)
   if (options.expectExecution === false) {
-    const executionVisible = await evaluate(cdp, '!!document.querySelector(".execution-strip")')
-    if (executionVisible) fail(`Did not expect execution strip for plain chat: ${query}.`)
+    const toolTraceVisible = await evaluate(cdp, '!!document.querySelector(".chat-tool-trace")')
+    if (toolTraceVisible) fail(`Did not expect tool trace for plain chat: ${query}.`)
   }
   if (options.expectExecution === true) {
-    const executionVisible = await evaluate(cdp, '!!document.querySelector(".execution-strip")')
-    if (!executionVisible) fail(`Expected execution strip for tool call: ${query}.`)
+    const toolTraceVisible = await evaluate(cdp, '!!document.querySelector(".chat-tool-trace .tool-call")')
+    if (!toolTraceVisible) fail(`Expected tool trace for tool call: ${query}.`)
   }
   return call
 }
@@ -707,7 +707,7 @@ async function chatSnapshot(cdp) {
       href: location.href,
       turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
       resultPreviews: document.querySelectorAll('.result-preview').length,
-      toolRows: [...document.querySelectorAll('.tool-call-row')]
+      toolRows: [...document.querySelectorAll('.chat-tool-trace .tool-call')]
         .map((el) => el.textContent.replace(/\\s+/g, ' ').trim())
         .slice(-8),
       runtimeRows: [...document.querySelectorAll('.runtime-row')]
@@ -716,7 +716,7 @@ async function chatSnapshot(cdp) {
       detailButtons: [...document.querySelectorAll('.agent-detail-button')]
         .map((el) => el.textContent.replace(/\\s+/g, ' ').trim()),
       hasFullResults: text.includes('完整列表'),
-      hasFallbackReason: text.includes('未执行原因') || text.includes('本地快速路径') || text.includes('模型耗时') || text.includes('ReAct 模型'),
+      hasToolTrace: !!document.querySelector('.chat-tool-trace .tool-call'),
       markdown: {
         strongCount: document.querySelectorAll('.agent-answer-panel strong').length,
         listItemCount: document.querySelectorAll('.agent-answer-panel li').length,
@@ -801,7 +801,7 @@ async function run() {
     const desktop = await chatSnapshot(cdp)
     if (desktop.turns < 11) fail('Chat did not render the expected multi-turn thread.', desktop)
     if (!desktop.hasFullResults) fail('Chat result preview did not expose full results.', desktop)
-    if (!desktop.hasFallbackReason) fail('Chat runtime panel did not expose fallback/timing details.', desktop)
+    if (!desktop.hasToolTrace) fail('Chat did not render tool calls inside assistant messages.', desktop)
     if (desktop.markdown.strongCount < 1 || desktop.markdown.listItemCount < 2 || desktop.markdown.leakedBoldMarkers) {
       fail('Chat AI Markdown did not render structured content.', desktop.markdown)
     }

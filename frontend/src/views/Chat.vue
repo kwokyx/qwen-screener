@@ -200,7 +200,7 @@ function traceDisplay(trace) {
     .replace(/^未调用 screener_engine\.screen：/, '未执行股票筛选：')
 }
 
-const toolCallRows = computed(() => visibleToolCalls(latestTurn.value?.toolCalls || toolCalls.value || []))
+const turnToolCallRows = (turn) => visibleToolCalls(turn?.toolCalls || [])
 
 function detailTargetFromToolCalls(calls = []) {
   return (calls || []).find((call) => call?.name === 'stock_detail' && call?.result?.code)?.result || null
@@ -539,18 +539,18 @@ const stageColor = (s) => ({
 
                       </div>
 
-                      <div v-if="!toolCallRows.length && turn.phase !== 'done' && turn.phase !== 'idle'" class="thinking-line">
+                      <div v-if="!turnToolCallRows(turn).length && turn.phase !== 'done' && turn.phase !== 'idle'" class="thinking-line">
                         <Icon name="loader" :size="13" class="spin" />
                         <span>正在分析…</span>
                       </div>
 
-                      <div v-if="toolCallRows.length" class="chat-tool-trace">
+                      <div v-if="turnToolCallRows(turn).length" class="chat-tool-trace">
                         <div class="tool-trace-head">
                           <Icon name="tools" :size="13" />
                           <span>工具调用</span>
                         </div>
                         <div class="tool-call-list">
-                          <div v-for="(call, i) in toolCallRows" :key="call.id" class="tool-call" :class="{ pending: call.status === 'running' }">
+                          <div v-for="(call, i) in turnToolCallRows(turn)" :key="call.id" class="tool-call" :class="{ pending: call.status === 'running' }">
                             <span class="tool-call-index">
                               <Icon v-if="call.status === 'running'" name="loader" :size="12" class="spin" />
                               <template v-else>{{ i + 1 }}</template>
@@ -590,8 +590,9 @@ const stageColor = (s) => ({
                           :compact="isTextOnlyTurn(turn)"
                           :streaming="isStreamingAnswerTurn(turn)"
                         />
-                        <div
+                        <button
                           v-if="turnDetailTarget(turn)"
+                          type="button"
                           class="agent-detail-card"
                           @click="openDetailTarget(turnDetailTarget(turn))"
                         >
@@ -626,7 +627,7 @@ const stageColor = (s) => ({
                           <div class="detail-card-action">
                             打开详情页 <Icon name="arrowRight" :size="12" />
                           </div>
-                        </div>
+                        </button>
                       </div>
 
 
@@ -1320,11 +1321,16 @@ const stageColor = (s) => ({
 }
 
 .agent-detail-card {
+  display: block;
+  width: 100%;
   margin-top: 10px;
   border: 1px solid #E4E4E7;
   border-radius: 6px;
   background: #FFFFFF;
+  color: inherit;
   cursor: pointer;
+  font: inherit;
+  text-align: left;
   transition: border-color 0.18s, box-shadow 0.18s;
   overflow: hidden;
 }

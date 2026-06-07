@@ -223,6 +223,19 @@ def test_plan_react_step_uses_configured_timeout(monkeypatch):
     assert captured["timeout"] == agent_planner._AGENT_REACT_STEP_TIMEOUT_SECONDS
 
 
+def test_react_prompt_keeps_known_strategy_routes():
+    messages = agent_planner._build_react_messages("找最近强势突破的股票", {}, [], 1)
+    system_prompt = messages[0]["content"]
+    tools_json = json.dumps(agent_planner.TOOLS, ensure_ascii=False)
+
+    assert "内置策略请求必须用 strategy_select" in system_prompt
+    assert "最近强势/强势突破/突破股票" in system_prompt
+    assert "turtle_breakout" in system_prompt
+    assert "rps_breakout" in system_prompt
+    assert "均线放量/放量上攻" in system_prompt
+    assert "最近强势/强势突破/突破股票" in tools_json
+
+
 def test_plan_agent_turn_supports_dashscope_compatible_function_call(monkeypatch):
     captured = {}
     monkeypatch.setattr(agent_planner.settings, "ai_backend", "dashscope")
