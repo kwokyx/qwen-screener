@@ -5,6 +5,7 @@ import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
 import Sparkline from '../components/charts/Sparkline.vue'
 import EmptyState from '../components/EmptyState.vue'
+import AiMarkdown from '../components/AiMarkdown.vue'
 import { A2 } from '../shared/theme.js'
 import { useKlineCache } from '../composables/useKlineCache.js'
 import { useNlStream } from '../composables/useNlStream.js'
@@ -106,13 +107,14 @@ const thinkingPreview = computed(() => {
 })
 const textOnlyTools = ['strategy_design', 'ask_clarification', 'explain_result', 'stock_detail']
 const turnResultItems = (turn) => (turn?.result?.items || []).slice(0, 6)
-const turnAnswerLines = (turn) => (turn?.agentAnswer || '').split('\n').filter(Boolean)
+const hasTurnAnswer = (turn) => Boolean((turn?.agentAnswer || '').trim())
 const turnThinkingPreview = (turn) => {
   const s = turn?.thinkingBuf || ''
   return s.length <= 200 ? s : '…' + s.slice(-200)
 }
 const isDesignTurn = (turn) => turn?.agentPlan?.tool === 'strategy_design'
 const isTextOnlyTurn = (turn) => textOnlyTools.includes(turn?.agentPlan?.tool) && !turn?.result
+const isStreamingAnswerTurn = (turn) => Boolean(isStreaming.value && hasTurnAnswer(turn) && latestTurn.value?.id === turn?.id)
 const turnAgentTitle = (turn) => turn?.agentPlan?.tool_label || 'Agent 结论'
 const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '股票筛选' : '待判断')
 function agentSourceLabel(plan, aiRuntime = null) {
@@ -237,7 +239,6 @@ const aiStatusLine = computed(() => {
   if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 不自动筛选`
   return `AI Agent 就绪 · ${[aiStatus.backend, aiStatus.model].filter(Boolean).join(' / ')}`
 })
-const agentAnswerLines = computed(() => (agentAnswer.value || '').split('\n').filter(Boolean))
 const agentAnswerTitle = computed(() => agentPlan.value?.tool_label || 'Agent 结论')
 const agentToolLabel = computed(() => agentPlan.value?.tool_label || (result.value ? '股票筛选' : '待判断'))
 const conditionIntro = computed(() => {
@@ -663,14 +664,16 @@ const stageColor = (s) => ({
                 </div>
               </template>
 
-              <div v-if="turnAnswerLines(turn).length" class="agent-answer-panel" :class="{ compact: isTextOnlyTurn(turn) }">
+              <div v-if="hasTurnAnswer(turn)" class="agent-answer-panel" :class="{ compact: isTextOnlyTurn(turn) }">
                 <div class="agent-answer-title">
                   <span>{{ turnAgentTitle(turn) }}</span>
                   <em>{{ turnSourceLabel(turn) }}</em>
                 </div>
-                <div v-for="(line, i) in turnAnswerLines(turn)" :key="i" class="agent-answer-line">
-                  {{ line }}
-                </div>
+                <AiMarkdown
+                  :text="turn.agentAnswer"
+                  :compact="isTextOnlyTurn(turn)"
+                  :streaming="isStreamingAnswerTurn(turn)"
+                />
                 <button
                   v-if="turnDetailTarget(turn)"
                   type="button"
@@ -1063,10 +1066,6 @@ const stageColor = (s) => ({
   font-size: 10px;
   font-style: normal;
   font-weight: 600;
-}
-
-.agent-answer-line + .agent-answer-line {
-  margin-top: 4px;
 }
 
 .agent-detail-button {

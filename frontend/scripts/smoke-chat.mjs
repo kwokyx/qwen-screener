@@ -210,9 +210,9 @@ async function clickByText(cdp, text, options = {}) {
   return result
 }
 
-async function installMockChatSse(cdp) {
-  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
-    source: `(() => {
+const CHAT_SSE_MOCK_SOURCE = `(() => {
+      if (window.__chatSmokeMockInstalled) return;
+      window.__chatSmokeMockInstalled = true;
       const originalFetch = window.fetch.bind(window);
       window.__chatSmokeCalls = [];
       window.__chatSmokeCompletions = [];
@@ -389,7 +389,7 @@ async function installMockChatSse(cdp) {
             query,
             'ask_clarification',
             '普通回复',
-            '我是这个项目里的有界选股 Agent，可以执行明确选股条件、内置策略、结果解释、排序、分页和详情定位；普通 AI 对话不会自动调用本地筛选工具。',
+            '**有界选股 Agent** 可以执行：\\n\\n- 明确选股条件\\n- 内置策略、结果解释、排序、分页和详情定位\\n\\n普通 AI 对话不会自动调用本地筛选工具。',
             [],
             chatOnlyStatus,
           );
@@ -595,8 +595,17 @@ async function installMockChatSse(cdp) {
           headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
         });
       };
-    })();`,
+    })();`
+
+async function installMockChatSse(cdp) {
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: CHAT_SSE_MOCK_SOURCE,
   })
+}
+
+async function ensureMockChatSse(cdp) {
+  const installed = await evaluate(cdp, `${CHAT_SSE_MOCK_SOURCE}\nwindow.__chatSmokeMockInstalled === true`)
+  if (!installed) fail('Chat mock SSE failed to install in current document.')
 }
 
 async function sendChat(cdp, query, expectedText, expectedTool, expectsResult) {
@@ -665,6 +674,11 @@ async function chatSnapshot(cdp) {
         .map((el) => el.textContent.replace(/\\s+/g, ' ').trim()),
       hasFullResults: text.includes('完整列表'),
       hasFallbackReason: text.includes('未执行原因') || text.includes('本地快速路径') || text.includes('模型耗时') || text.includes('ReAct 模型'),
+      markdown: {
+        strongCount: document.querySelectorAll('.agent-answer-panel strong').length,
+        listItemCount: document.querySelectorAll('.agent-answer-panel li').length,
+        leakedBoldMarkers: text.includes('**有界选股 Agent**'),
+      },
       calls: window.__chatSmokeCalls || [],
     };
   })()`)
@@ -712,6 +726,7 @@ async function run() {
 
     await setViewport(cdp, 1440, 900)
     await navigate(cdp, `${BASE_URL}/chat`)
+    await ensureMockChatSse(cdp)
 
     const calls = []
     calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false))
@@ -744,6 +759,9 @@ async function run() {
     if (desktop.turns < 11) fail('Chat did not render the expected multi-turn thread.', desktop)
     if (!desktop.hasFullResults) fail('Chat result preview did not expose full results.', desktop)
     if (!desktop.hasFallbackReason) fail('Chat runtime panel did not expose fallback/timing details.', desktop)
+    if (desktop.markdown.strongCount < 1 || desktop.markdown.listItemCount < 2 || desktop.markdown.leakedBoldMarkers) {
+      fail('Chat AI Markdown did not render structured content.', desktop.markdown)
+    }
     if (!calls.some((call) => call.query === '这个 Agent 是什么' && call.terminal?.plan?.tool_label === '普通回复')) {
       fail('Chat smoke did not preserve the plain-chat model-final route.', calls)
     }

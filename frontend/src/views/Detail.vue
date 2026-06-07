@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
 import KLineChart from '../components/charts/KLineChart.vue'
+import AiMarkdown from '../components/AiMarkdown.vue'
 import {
   NAlert,
   NButton,
@@ -32,7 +33,6 @@ import EmptyState from '../components/EmptyState.vue'
 import { useAiStatusStore } from '../stores/aiStatus'
 
 const aiStatus = useAiStatusStore()
-import { marked } from 'marked'
 import { friendlyError } from '../shared/errors.js'
 import {
   detailQualityFields,
@@ -41,7 +41,6 @@ import {
   qualityForRecord,
 } from '../shared/dataQuality.js'
 
-marked.setOptions({ breaks: true, gfm: true })
 import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
 import { useWatchlistStore } from '../stores/watchlist'
@@ -581,11 +580,6 @@ const market = computed(() => {
   return '主板'
 })
 
-const aiHtml = computed(() => {
-  if (!aiText.value) return ''
-  return marked.parse(aiText.value)
-})
-
 const valuationCells = computed(() => {
   const l = detail.value?.latest
   if (!l) return []
@@ -896,10 +890,7 @@ function peerRowProps(row) {
               <NButton size="tiny" secondary @click="askQwen" style="margin-top:6px;">重试</NButton>
             </NAlert>
 
-            <div v-if="aiText" class="ai-md">
-              <div v-html="aiHtml" />
-              <span v-if="aiStreaming" class="caret" />
-            </div>
+            <AiMarkdown v-if="aiText" :text="aiText" :streaming="aiStreaming" compact />
           </NCard>
 
           <!-- Stock Info Card -->
@@ -1318,53 +1309,6 @@ function peerRowProps(row) {
   font-family: 'IBM Plex Mono', monospace;
   font-weight: 700;
 }
-
-/* ---- AI markdown ---- */
-.ai-md :deep(h1),
-.ai-md :deep(h2),
-.ai-md :deep(h3) {
-  font-size: 13px;
-  font-weight: 700;
-  margin: 10px 0 5px;
-  color: #111111;
-}
-.ai-md :deep(h1):first-child,
-.ai-md :deep(h2):first-child,
-.ai-md :deep(h3):first-child { margin-top: 0; }
-.ai-md :deep(p) { margin: 5px 0; line-height: 1.7; font-size: 12px; }
-.ai-md :deep(p):first-child { margin-top: 0; }
-.ai-md :deep(p):last-child { margin-bottom: 0; }
-.ai-md :deep(strong) { color: #111111; font-weight: 700; }
-.ai-md :deep(em) { color: #3F3F46; font-style: normal; font-weight: 600; }
-.ai-md :deep(ul),
-.ai-md :deep(ol) { padding-left: 16px; margin: 5px 0; }
-.ai-md :deep(li) { margin: 2px 0; line-height: 1.6; font-size: 12px; }
-.ai-md :deep(code) {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
-  padding: 1px 4px;
-  background: #FFFFFF;
-  border-radius: 3px;
-}
-.ai-md :deep(blockquote) {
-  margin: 6px 0;
-  padding: 4px 10px;
-  border-left: 3px solid #111111;
-  color: #3F3F46;
-  background: #FFFFFF;
-  border-radius: 0 4px 4px 0;
-}
-
-.caret {
-  display: inline-block;
-  width: 6px;
-  height: 14px;
-  margin-left: 2px;
-  background: #111111;
-  vertical-align: middle;
-  animation: caret-blink 1s steps(2) infinite;
-}
-@keyframes caret-blink { 50% { opacity: 0 } }
 
 @media (max-width: 900px) {
   .chart-card :deep(.n-card-header) {
