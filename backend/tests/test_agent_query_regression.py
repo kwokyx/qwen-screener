@@ -357,7 +357,7 @@ def test_chat_react_unknown_strategy_does_not_use_local_strategy(db, seed_stocks
         ("你好", "你好，我可以帮你"),
     ],
 )
-def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks, monkeypatch, query, expected_text):
+def test_chat_react_plain_chat_uses_model_final_without_tools(db, seed_stocks, monkeypatch, query, expected_text):
     def model_final(_query, context=None, observations=None, step_index=1):
         return AgentReactDecision(
             kind="final",
@@ -385,6 +385,7 @@ def test_chat_react_plain_chat_uses_local_response_without_tools(db, seed_stocks
     assert expected_text in response.answer
     assert response.screen_result is None
     assert response.strategy_result is None
+    assert [call.name for call in response.tool_calls] == ["tool_router"]
     assert response.react_steps[-1]["timing_phase"] == "model_final"
     assert response.react_steps[-1]["fallback_reason"] is None
 

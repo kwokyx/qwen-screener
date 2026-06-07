@@ -364,6 +364,8 @@ def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
             message=plan.reasoning,
         )
     ]
+    if plan.tool == "ask_clarification" and plan.tool_label == "普通回复":
+        return calls
     calls.append(
         _tool_call(
             "parameter_validation",

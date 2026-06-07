@@ -349,6 +349,9 @@ async function installMockChatSse(cdp) {
         };
       }
       function textEvents(query, tool, label, answer, conditions = [], status = aiStatus) {
+        const calls = label === '普通回复'
+          ? [toolCall('tool_router', '意图判断', 'done', { tool, label }, '模型判断这是普通对话')]
+          : [toolCall(tool, label, 'done', {}, '未执行股票筛选')];
         return [
           { type: 'thinking', text: '模型判断下一步。' },
           {
@@ -358,7 +361,7 @@ async function installMockChatSse(cdp) {
             conditions,
             ai_status: status,
             tool_trace: ['ReAct final：模型未调用工具，直接回答'],
-            tool_calls: [toolCall(tool, label, 'done', {}, '未执行股票筛选')],
+            tool_calls: calls,
             timings: { planning_ms: 860, model_ms: 860, tool_ms: 0, fallback_reason: null },
           },
           {
@@ -368,7 +371,7 @@ async function installMockChatSse(cdp) {
             conditions,
             ai_status: status,
             tool_trace: ['ReAct final：模型未调用工具，直接回答'],
-            tool_calls: [toolCall(tool, label, 'done', {}, '未执行股票筛选')],
+            tool_calls: calls,
             timings: { planning_ms: 860, model_ms: 860, tool_ms: 0, fallback_reason: null },
           },
           { type: 'done' },

@@ -29,7 +29,7 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 | 因子筛选器 | `/results` | 13 字段 × 7 操作符的可组合筛选 |
 | 个股详情 | `/detail/:code` | K 线 + 关键指标 + 千问基本面分析（流式） |
 | 自选监控 | `/portfolio` | 自选股 + 价格预警，登录后跨设备同步 |
-| 智能选股工作台 | `/strategy` | 自然语言 Agent → 本地筛选工具；支持结构化条件与内置策略 |
+| 智能选股工作台 | `/strategy` | 自然语言 Agent → 模型路由工具；支持结构化条件与内置策略 |
 
 > 完整 API 接口文档见 [`docs/API.md`](docs/API.md)，含所有端点的 curl 示例与响应样本。
 
@@ -181,7 +181,7 @@ health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发
 | `roe` | 净资产收益率 % | `stock_financial` |
 | `revenue_yoy` / `profit_yoy` | 营收 / 净利同比 % | `stock_financial` |
 | `gross_margin` / `debt_ratio` | 毛利率 / 资产负债率 % | `stock_financial` |
-| `industry` / `market` | 行业 / 板块 | `stock_basic` |
+| `industry` / `market` | 行业 / 板块；`market` 仅限主板/创业板/科创板/北交所，A 股/全 A 是默认股票池 | `stock_basic` |
 
 操作符：`gt / gte / lt / lte / eq / between / in`
 
@@ -249,7 +249,7 @@ docker compose exec -T backend python scripts/release_smoke.py
 
 `release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE 普通对话模型 final、策略/详情模型 action、真实筛选返回结果或安全停止，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN；外层 `docker compose ps` 是单独验证项，容器内脚本继续使用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`；Chat Agent 不会私自本地筛选，模型不可用或没有合法 action/final 时会返回普通回复并显示 `fallback_reason`。存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖真实支持字段筛选、内置策略、普通对话 final、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
 
-Chat Agent 采用 bounded ReAct，不是无限自主 Agent。模型每步只能选择一个白名单工具或给出最终回答：普通帮助类对话和问候应直接 final，不调用筛选或策略工具；筛选、内置策略、解释上一轮、排序、分页、确认执行、调严/放宽和个股详情都必须由模型 action 明确选择。只有模型返回通过 schema 校验的工具 action，后端才会执行工具；后端安全层仍会拦截 unsupported metric、空条件全市场筛选和非法参数。工具执行成功后直接使用后端确定性总结结束本轮，不再请求第二次模型总结。模型慢、超时、上游不可达或没有给出合法 action/final 时，后端返回普通回复，不调用筛选工具，并在 SSE 中保留 `model_ms` 与 `fallback_reason`。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答；这些 ReAct step 事件带有 `timing_phase`，可区分 `model_action`、`model_final`、`local_final`、`model_action_stopped` 和 `tool_execution`。前端只展示公开步骤摘要，不展示模型私有思考链。
+Chat Agent 采用 bounded ReAct，不是无限自主 Agent。模型每步只能选择一个白名单工具或给出最终回答：普通帮助类对话和问候应直接 final，不调用筛选或策略工具，也不会生成 `ask_clarification` 工具调用；只有用户想筛股票但缺少必要条件时才显示“补充追问”。筛选、内置策略、解释上一轮、排序、分页、确认执行、调严/放宽和个股详情都必须由模型 action 明确选择。只有模型返回通过 schema 校验的工具 action，后端才会执行工具；后端安全层仍会拦截 unsupported metric、空条件全市场筛选和非法参数。工具执行成功后直接使用后端确定性总结结束本轮，不再请求第二次模型总结。模型慢、超时、上游不可达或没有给出合法 action/final 时，后端返回普通回复，不调用筛选工具，并在 SSE 中保留 `model_ms` 与 `fallback_reason`。SSE 会继续保留旧的 `planning/parsed/screening/result/agent/done` 事件，并额外输出 `react_step/tool_start/tool_observation/tool_done/final`，用于区分模型决策、工具执行和最终回答；这些 ReAct step 事件带有 `timing_phase`，可区分 `model_action`、`model_final`、`local_final`、`model_action_stopped` 和 `tool_execution`。前端只展示公开步骤摘要，不展示模型私有思考链。
 
 Unsupported metric 是进入模型前的本地快速路径。命中三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价等字段时，后端直接返回不支持说明，不调用 Qwen，不调用筛选引擎，SSE 不会出现 `screening/result`，`model_ms=0` 且 `fallback_reason=local_fast_path`。
 
@@ -342,7 +342,7 @@ qwen-stock-screener/
 | **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
 | **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
 | **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
-| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | 本地确定性解析优先；其余请求进入 bounded ReAct：模型选工具 → 后端执行 → 确定性总结；AI 慢/不可达时安全降级 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` |
+| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | Chat 与 Strategy Agent 入口都走 bounded ReAct：模型 final/action → 后端 schema 校验 → 工具执行或普通回复；AI 慢/不可达时不本地兜底筛选 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` |
 | **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | Baostock-first；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
 | **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
 | **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |

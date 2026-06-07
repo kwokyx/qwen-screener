@@ -18,7 +18,7 @@
 | `gross_margin` | 是 | `stock_financial.gross_margin` | 周度财务指标同步 | 该条件不会命中缺失值 | 毛利率 | - |
 | `debt_ratio` | 是 | `stock_financial.debt_ratio` | 周度财务指标同步 | 该条件不会命中缺失值 | 负债率、资产负债率 | - |
 | `industry` | 是 | `stock_basic.industry` | 股票列表 / 财务同步 | 支持部分中文行业词模糊匹配 | 银行、消费、医药、科技 | - |
-| `market` | 是 | `stock_basic.market` | 股票列表同步 | 需要匹配本地板块文本 | 主板、创业板、科创板、北交所 | - |
+| `market` | 是 | `stock_basic.market` | 股票列表同步 | 仅匹配 `主板` / `创业板` / `科创板` / `北交所`；`A股` / `全A` 是默认股票池，不作为 market 条件 | 主板、创业板、科创板、北交所 | 不支持 `market=A股`，否则会把默认全集误写成不存在的板块 |
 | `profit_cagr_3y` | 否 | 未入库 | 暂无同步任务 | ask_clarification / 明确说明不支持，不筛选 | 三年净利润复合增速、CAGR、复合增速 | 当前只保存最新报告期同比，缺少连续年度可比口径和年度序列计算 |
 | `deducted_profit` | 否 | 未入库 | 暂无同步任务 | 明确说明不支持，不筛选 | 扣非净利润、扣非净利 | 本地 `stock_financial` 未保存扣非口径 |
 | `operating_cash_flow` | 否 | 未入库 | 暂无同步任务 | 明确说明不支持，不筛选 | 经营现金流、现金流 | 本地未保存现金流量表字段 |

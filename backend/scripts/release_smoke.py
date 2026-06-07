@@ -104,6 +104,27 @@ def _http_json(base_url: str, path: str, *, timeout: float = 20.0) -> dict[str, 
         raise SmokeFailure(f"GET {path} returned non-JSON body: {body[:200]}") from exc
 
 
+def _post_json(base_url: str, path: str, payload: dict[str, Any], *, timeout: float = 60.0) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/{path.lstrip('/')}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            response_body = resp.read().decode("utf-8")
+    except TimeoutError as exc:
+        raise SmokeFailure(f"POST {path} timed out after {timeout:.0f}s") from exc
+    except urllib.error.URLError as exc:
+        raise SmokeFailure(f"POST {path} failed: {exc}") from exc
+    try:
+        return json.loads(response_body)
+    except json.JSONDecodeError as exc:
+        raise SmokeFailure(f"POST {path} returned non-JSON body: {response_body[:200]}") from exc
+
+
 def _expected_ai_backend() -> str | None:
     value = (
         os.environ.get("RELEASE_SMOKE_EXPECTED_AI_BACKEND")
@@ -317,6 +338,26 @@ def _check_plain_chat(base_url: str) -> None:
     _warn("SSE plain chat safe-stop", f"这个 Agent 是什么 stopped without local fallback: {terminal.get('fallback_reason')}")
 
 
+def _check_strategy_agent_api(base_url: str) -> None:
+    started = time.time()
+    payload = _post_json(base_url, "/strategy/agent", {"query": "这个 Agent 是什么", "limit": 10})
+    elapsed = time.time() - started
+    plan = payload.get("plan") or {}
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    _require(plan.get("tool") == "ask_clarification", f"/strategy/agent plain chat routed to {plan.get('tool')}")
+    _require(plan.get("tool_label") == "普通回复", f"/strategy/agent plain chat label={plan.get('tool_label')}")
+    _require(payload.get("screen_result") is None, "/strategy/agent plain chat returned screen_result")
+    _require(payload.get("strategy_result") is None, "/strategy/agent plain chat returned strategy_result")
+    _require("local_fast_path" not in payload_text, "/strategy/agent plain chat used local fast-path")
+    if plan.get("ai_used") is True:
+        _require("有界选股 Agent" in payload_text or "Agent" in payload_text, "/strategy/agent did not explain Agent boundary")
+        _pass("Strategy Agent API model final", f"这个 Agent 是什么 -> 普通回复 elapsed={elapsed:.1f}s")
+        return
+    warnings = payload.get("warnings") or []
+    _require(warnings, "/strategy/agent safe-stop missing warning")
+    _warn("Strategy Agent API safe-stop", f"这个 Agent 是什么 stopped without local fallback: {warnings[0]}")
+
+
 def _check_strategy_fast_path(base_url: str) -> None:
     events = _post_sse(base_url, "找最近强势突破的股票", {})
     types = _event_types(events)
@@ -470,6 +511,7 @@ def main() -> int:
         lambda: _check_health(base_url),
         lambda: _check_fast_path(base_url),
         lambda: _check_plain_chat(base_url),
+        lambda: _check_strategy_agent_api(base_url),
         lambda: _check_strategy_fast_path(base_url),
         lambda: _check_detail(base_url),
         lambda: _check_named_detail(base_url),

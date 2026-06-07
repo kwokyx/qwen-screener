@@ -507,9 +507,40 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 
 ---
 
-## 8. 策略回测 `/strategy`
+## 8. 策略工具 `/strategy`
+
+### GET `/strategy/templates`
+返回当前内置策略模板列表。
+
+### GET `/strategy/tools`
+返回 Agent 可调用工具、支持字段和数据边界。
+
+### POST `/strategy/select`
+直接执行一个内置策略，不经过自然语言 Agent。
+
+**请求体**
+```json
+{
+  "strategy_id": "turtle_breakout",
+  "limit": 50
+}
+```
+
+### POST `/strategy/agent`
+Strategy 工作台自然语言入口。该端点复用 bounded ReAct：除 unsupported metric 会在模型前硬拦截外，普通对话由模型 final，筛选/策略/详情等必须由模型 action 选择工具；后端只执行通过 schema 校验的工具 action。AI 慢、超时或不可达时返回普通回复，不执行本地兜底筛选。
+
+**请求体**
+```json
+{
+  "query": "找最近强势突破的股票",
+  "limit": 80
+}
+```
+
+**响应** `200`：`StrategyAgentResponse`，可能包含 `screen_result`、`strategy_result`，或仅包含 `answer`/`warnings` 的普通回复。
 
 ### POST `/strategy/backtest`
+
 运行策略回测：给定筛选条件 + 时间窗，模拟「按月调仓、等权持有 top N」。
 
 **请求体**

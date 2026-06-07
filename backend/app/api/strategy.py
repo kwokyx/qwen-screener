@@ -10,7 +10,7 @@ from app.schemas.strategy import (
     StrategyTemplate,
     StrategyToolInfo,
 )
-from app.services import strategy_selector
+from app.services import agent_react, strategy_selector
 
 
 router = APIRouter(prefix="/strategy", tags=["strategy"])
@@ -41,6 +41,6 @@ def select(req: StrategySelectRequest, db: Session = Depends(get_db)):
 def agent(req: StrategyAgentRequest, db: Session = Depends(get_db)):
     """Agent 选股：自然语言目标 -> 工具规划 -> 调用筛选/策略工具。"""
     try:
-        return strategy_selector.run_agent_selection(db, req.query, req.limit)
+        return agent_react.run_chat_react_agent(db, req.query, context={}, limit=req.limit)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

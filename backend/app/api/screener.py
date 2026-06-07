@@ -138,7 +138,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             },
         }
 
-    def _stage_text(tool: str, source: str) -> str:
+    def _stage_text(tool: str, source: str, tool_label: str | None = None) -> str:
         """Return truthful SSE stage text for each tool."""
         labels = {
             "stock_screen": "股票筛选",
@@ -150,11 +150,14 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
             "stock_detail": "详情页定位",
             "ask_clarification": "补充追问",
         }
+        label = labels.get(tool, "处理")
+        if tool in {"ask_clarification", "strategy_design", "explain_result", "stock_detail"} and tool_label:
+            label = tool_label
         if tool in {"stock_screen", "strategy_select"}:
-            return f"正在执行本地工具：{labels.get(tool, '处理')}…\n"
+            return f"正在执行本地工具：{label}…\n"
         if tool in {"sort_results", "paginate_results"}:
-            return f"正在执行本地结果操作：{labels.get(tool, '处理')}…\n"
-        return f"正在整理响应：{labels.get(tool, '处理')}（{source}）…\n"
+            return f"正在执行本地结果操作：{label}…\n"
+        return f"正在整理响应：{label}（{source}）…\n"
 
     def _fallback_reason(response) -> str | None:
         plan = response.plan
@@ -293,7 +296,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 effective_limit,
                 response.screen_result.total,
             )
-            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source, plan.tool_label)})
             if not is_result_operation:
                 yield event({
                     "type": "parsed",
@@ -334,7 +337,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
 
         if plan.tool == "strategy_design":
             logger.info("Agent SSE 跳过执行: tool=strategy_design reason=non-executing")
-            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source, plan.tool_label)})
             yield event({"type": "design", **common})
             yield event({"type": "thinking", "text": "已生成策略设计方案\n"})
             yield event({"type": "done"})
@@ -348,7 +351,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
                 response.strategy_result.total,
             )
             yield event({"type": "planned", **pre_tool_common})
-            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source, plan.tool_label)})
             yield event({
                 "type": "screening",
                 "tool": plan.tool,
@@ -367,7 +370,7 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         # explain_result / stock_detail / ask_clarification are non-executing
         if plan.tool in ("explain_result", "stock_detail", "ask_clarification"):
             logger.info("Agent SSE 跳过执行: tool={} reason=non-executing", plan.tool)
-            yield event({"type": "thinking", "text": _stage_text(plan.tool, source)})
+            yield event({"type": "thinking", "text": _stage_text(plan.tool, source, plan.tool_label)})
 
         payload = {"type": "agent", **response_payload(response, timings)}
         if response.strategy_result is not None:

@@ -85,6 +85,45 @@ def test_plan_agent_turn_accepts_valid_screen_and_compact_context(monkeypatch):
     assert captured["timeout"] == agent_planner._AGENT_PLAN_TIMEOUT_SECONDS
 
 
+def test_plan_agent_turn_accepts_known_market_value(monkeypatch):
+    _configure(
+        monkeypatch,
+        "stock_screen",
+        {
+            "conditions": [
+                {"field": "market", "op": "eq", "value": "主板"},
+                {"field": "roe", "op": "gt", "value": 15},
+            ],
+        },
+    )
+
+    result = agent_planner.plan_agent_turn("ROE 大于 15 的主板股票")
+
+    assert result is not None
+    assert [(item.field, item.op, item.value) for item in result.conditions] == [
+        ("market", "eq", "主板"),
+        ("roe", "gt", 15),
+    ]
+
+
+def test_plan_agent_turn_rejects_a_share_market_value(monkeypatch):
+    _configure(
+        monkeypatch,
+        "stock_screen",
+        {
+            "conditions": [
+                {"field": "industry", "op": "eq", "value": "银行"},
+                {"field": "market", "op": "eq", "value": "A股"},
+            ],
+        },
+    )
+
+    result = agent_planner.plan_agent_turn("低估值高分红的银行股")
+
+    assert result is None
+    assert agent_planner.last_plan_failure_reason() == "模型工具参数校验失败"
+
+
 def test_plan_agent_turn_accepts_sort_results_tool(monkeypatch):
     _configure(monkeypatch, "sort_results", {"sort_by": "dividend_yield", "sort_desc": True})
 

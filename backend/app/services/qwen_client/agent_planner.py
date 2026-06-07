@@ -264,6 +264,7 @@ ALLOWED_TOOLS: frozenset[str] = frozenset(t["function"]["name"] for t in TOOLS)
 
 VALID_SORT_FIELDS: frozenset[str] = ALLOWED_FIELDS | {"change_pct"}
 STRING_FIELDS: frozenset[str] = frozenset({"industry", "market"})
+VALID_MARKET_VALUES: frozenset[str] = frozenset({"主板", "创业板", "科创板", "北交所"})
 
 VALID_STRATEGY_IDS: frozenset[str] = frozenset({
     "turtle_breakout",
@@ -328,6 +329,10 @@ class _ConditionArg(_StrictArgs):
     @model_validator(mode="after")
     def _valid_value(self) -> "_ConditionArg":
         if self.field in STRING_FIELDS:
+            if self.field == "market":
+                values = self.value if isinstance(self.value, list) else [self.value]
+                if not all(isinstance(item, str) and item in VALID_MARKET_VALUES for item in values):
+                    raise ValueError("market 仅支持：主板、创业板、科创板、北交所；A股/全A是默认股票池，不应作为 market 条件")
             if self.op == "eq" and isinstance(self.value, str) and self.value:
                 return self
             if self.op == "in" and isinstance(self.value, list) and self.value and all(
@@ -715,6 +720,7 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
         "全部股票/全市场/不设条件才允许 stock_screen conditions=[]。"
         "ask_clarification.missing_info 仅可用：行业、风格偏好、估值范围、持有周期、风险承受。\n"
         "支持字段仅限 pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。"
+        "market 仅用于主板/创业板/科创板/北交所；A股/全A是默认股票池，不要生成 market=A股。\n"
         "不支持三年CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；"
         "遇到不支持字段必须 ask_clarification，不要改写成别的指标继续筛选。\n"
         "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；"
@@ -829,6 +835,7 @@ def _build_react_messages(
         "普通寒暄、能力说明、使用方式询问或非选股开放对话，直接给 final 普通回答，不要调用 ask_clarification。"
         "只有用户想筛股票但缺少必要条件时，才使用 ask_clarification。\n"
         "支持字段：pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover。\n"
+        "market 仅用于主板/创业板/科创板/北交所；A股/全A是默认股票池，不要生成 market=A股。\n"
         "不支持：三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；必须 ask_clarification 或 final 说明，不能近似改写后筛选。\n"
         "stock_detail 只定位详情。explain_result/sort_results/paginate_results 必须有上一轮结果，否则 ask_clarification。"
         "strategy_design 默认不执行；确认执行只有上一轮有条件才可筛选。已有 observation 时优先 final，禁止重复相同工具参数。\n"

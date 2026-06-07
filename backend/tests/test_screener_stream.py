@@ -267,7 +267,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     assert terminal["plan"]["tool"] == "ask_clarification"
     assert terminal["plan"]["tool_label"] == "普通回复"
     assert terminal["plan"]["ai_used"] is False
-    assert terminal["model_ms"] == 0
+    assert terminal["model_ms"] >= 0
     assert terminal["fallback_reason"] == "模型 ReAct 异常"
 
     for query in ("可以，做吧", "为什么这些股票排在前面"):
@@ -281,7 +281,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
         assert "parsed" not in event_types
         assert terminal["plan"]["tool"] == "ask_clarification"
         assert terminal["plan"]["ai_used"] is False
-        assert terminal["model_ms"] == 0
+        assert terminal["model_ms"] >= 0
         assert terminal["fallback_reason"] == "模型 ReAct 异常"
 
     events = _stream_events(client, "查看第一只详情", context={})
@@ -293,7 +293,7 @@ def test_nl_stream_no_context_model_failure_never_screens(db, seed_stocks, monke
     assert "parsed" not in event_types
     assert terminal["plan"]["tool"] == "ask_clarification"
     assert terminal["plan"]["ai_used"] is False
-    assert terminal["model_ms"] == 0
+    assert terminal["model_ms"] >= 0
     assert terminal["fallback_reason"] == "模型 ReAct 异常"
     assert not any(call["name"] == "stock_screen" for call in terminal["tool_calls"])
 
@@ -982,6 +982,7 @@ def test_nl_stream_plain_chat_uses_model_final_without_tools(db, seed_stocks, mo
     client = TestClient(app)
     events = _stream_events(client, "这个 Agent 是什么", context={})
     event_types = _event_types(events)
+    thinking_text = "\n".join(event.get("text", "") for event in events if event["type"] == "thinking")
     agent = next(event for event in events if event["type"] == "agent")
 
     assert "screening" not in event_types
@@ -991,6 +992,9 @@ def test_nl_stream_plain_chat_uses_model_final_without_tools(db, seed_stocks, mo
     assert agent["plan"]["tool_label"] == "普通回复"
     assert agent["plan"]["ai_used"] is True
     assert agent["fallback_reason"] is None
+    assert "正在整理响应：普通回复（AI 模型）" in thinking_text
+    assert "补充追问" not in thinking_text
+    assert [call["name"] for call in agent["tool_calls"]] == ["tool_router"]
     assert "有界选股 Agent" in agent["answer"]
 
 

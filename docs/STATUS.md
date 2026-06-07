@@ -28,7 +28,7 @@
 | NL 筛选（一次性 + SSE 流式三阶段） | [`api/screener.py`](../backend/app/api/screener.py) | ✅ `test_screener.py`（含端到端） |
 | 千问 AI 客户端（FC + JSON + regex 三层降级 + 双后端切换 + 缓存） | [`services/qwen_client/`](../backend/app/services/qwen_client/) | ✅ `test_qwen_transport.py` + 手动端到端验证 |
 | 个股投资分析（一次 + SSE 流式） | [`api/qwen.py`](../backend/app/api/qwen.py) | ⚠️ 无单测，已手动验证 |
-| Agent 智能选股（本地确定性解析优先 + bounded ReAct + 结构化筛选工具 + 策略选股工具） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_scoring.py` |
+| Agent 智能选股（Chat/Strategy 入口模型优先 bounded ReAct + 结构化筛选工具 + 策略选股工具） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` + `test_strategy_scoring.py` |
 | 对话历史持久化（跨设备同步） | [`api/chat.py`](../backend/app/api/chat.py) | ✅ `test_chat_sessions.py` |
 | 通知中心（CRUD + 已读 / 全部已读） | [`api/notification.py`](../backend/app/api/notification.py) | ✅ `test_notifications.py` |
 | 数据同步（Baostock 优先，AKShare 少量兜底） | [`services/data_sync.py`](../backend/app/services/data_sync.py) | ✅ `test_data_sync_guard.py` + `test_dividend_sync.py` |
