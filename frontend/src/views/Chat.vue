@@ -201,14 +201,6 @@ function traceDisplay(trace) {
 }
 
 const toolCallRows = computed(() => visibleToolCalls(latestTurn.value?.toolCalls || toolCalls.value || []))
-  if (call?.name === 'stock_screen' && result.total != null) return `命中 ${result.total} 只`
-  if (call?.name === 'strategy_select' && result.total != null) return `命中 ${result.total} 只`
-  if (call?.name === 'stock_detail' && result.code) return `目标 ${result.name || result.code}`
-  if (call?.name === 'condition_parser') return call.message || '已生成筛选条件'
-  if (call?.name === 'result_sort') return call.message || '已调整结果范围'
-  if (call?.message) return call.message.length > 42 ? `${call.message.slice(0, 42)}…` : call.message
-  return ''
-}
 
 function detailTargetFromToolCalls(calls = []) {
   return (calls || []).find((call) => call?.name === 'stock_detail' && call?.result?.code)?.result || null
@@ -2599,8 +2591,6 @@ const stageColor = (s) => ({
     padding: 10px 16px 14px;
   }
 
-    width: calc(100% - 32px);
-  }
 }
 
 @media (max-width: 680px) {
