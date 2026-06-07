@@ -20,8 +20,8 @@ const view = computed(() => {
   const dx = props.width / (props.data.length - 1)
   const pts = props.data.map((v, i) => [i * dx, props.height - ((v - min) / range) * props.height])
   const trend = props.data[props.data.length - 1] >= props.data[0]
-  const c = props.color || (trend ? UP : DOWN)
-  const f = props.fill || c + '22'
+  const c = props.color != null && props.color !== '' ? props.color : (trend ? UP : DOWN)
+  const f = props.fill != null && props.fill !== '' ? props.fill : c + '22'
   const path = pts.map((p, i) => (i === 0 ? `M${p[0]},${p[1]}` : `L${p[0]},${p[1]}`)).join(' ')
   const area = path + ` L${props.width},${props.height} L0,${props.height} Z`
   return { path, area, c, f }
