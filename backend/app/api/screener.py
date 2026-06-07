@@ -216,7 +216,6 @@ def run_nl_screen_stream(req: NLScreenRequest, db: Session = Depends(get_db)):
         }
 
     def gen():
-        yield event({"type": "thinking", "text": "正在处理…\n"})
         planning_started = time.perf_counter()
         stream_queue = Queue()
         deferred_steps: list[dict] = []
