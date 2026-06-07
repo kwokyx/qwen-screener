@@ -12,16 +12,14 @@ const wl = useWatchlistStore()
 const router = useRouter()
 const route = useRoute()
 
-const open = ref(localStorage.getItem('qwen.watchdock.open') === '1')
+const open = ref(false)
 
 function toggle() {
   open.value = !open.value
-  localStorage.setItem('qwen.watchdock.open', open.value ? '1' : '0')
 }
 
 function close() {
   open.value = false
-  localStorage.setItem('qwen.watchdock.open', '0')
 }
 
 function goto(code) {

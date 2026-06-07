@@ -512,325 +512,295 @@ const stageColor = (s) => ({
 
 <template>
   <Shell>
-    <div class="chat-workbench">
-      <!-- Sidebar -->
-      <aside class="chat-sidebar">
-        <button class="new-chat-button" @click="newSession">
-          <Icon name="plus" :size="12" /> 新建对话
-        </button>
-
-        <div v-if="!history.items.length" class="history-empty-state">
-          在中间输入目标开始筛选
-        </div>
-
-        <!-- 分组：今天 / 昨天 / 本周 / 更早 -->
-        <template v-for="group in [
-          { key: 'today', label: '今天', list: history.grouped.today },
-          { key: 'yesterday', label: '昨天', list: history.grouped.yesterday },
-          { key: 'thisWeek', label: '本周', list: history.grouped.thisWeek },
-          { key: 'earlier', label: '更早', list: history.grouped.earlier },
-        ]" :key="group.key">
-          <div v-if="group.list.length" class="history-group-label">{{ group.label }}</div>
-          <div v-for="c in group.list" :key="c.id"
-               class="history-item"
-               :class="{ active: c.id === history.activeId }"
-               @click="restoreFromHistory(c.id)"
-               :title="isStreaming ? '当前对话进行中，请先停止' : historyTitle(c)"
-               :style="{ cursor: isStreaming ? 'wait' : 'pointer' }">
-            <span class="history-main">
-              <span class="history-title">{{ historyTitle(c) }}</span>
-              <span class="history-sub">{{ historyMeta(c) }}</span>
-            </span>
-            <span class="history-badge">{{ historyBadge(c) }}</span>
-            <button class="history-del" @click="deleteHistory(c.id, $event)" title="删除">
-              <Icon name="x" :size="10" />
-            </button>
-          </div>
-        </template>
-
-        <button v-if="history.items.length" class="history-clear-button" @click="history.clear()">
-          清空全部历史 ({{ history.items.length }})
-        </button>
-
-        <div class="prompt-bank">
-          <div class="prompt-bank-title">
-            <Icon name="lightbulb" :size="11" :color="A2.amber" /> 推荐提问
-          </div>
-          <button
-            v-for="t in presetPrompts"
-            :key="t"
-            class="prompt-item"
-            type="button"
-            :disabled="isStreaming"
-            @click="!isStreaming && pickPreset(t)"
-          >
-            {{ t }}
-          </button>
-        </div>
-      </aside>
-
-      <!-- Main chat -->
-      <main class="chat-main">
-        <div class="chat-header">
-          <div class="chat-header-copy">
-            <div class="chat-header-title">
-              <Icon name="sparkle" :size="14" :color="A2.qwen" />
-              千问 Agent
+    <div class="ai-page">
+      <section class="ai-shell">
+        <aside class="history-panel">
+          <div class="history-panel-head">
+            <div class="history-head-lead">
+              <h3 class="history-title">历史会话</h3>
             </div>
-            <div class="chat-header-sub">
-              {{ phase === 'thinking' ? '选择下一步中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
+            <button class="history-new-btn" type="button" @click="newSession">新建</button>
+          </div>
+
+          <div class="history-panel-body">
+            <div v-if="!history.items.length" class="history-empty">
+              还没有历史会话，从右侧发起第一轮任务。
             </div>
-          </div>
-          <div class="chat-header-meta">
-            <span>{{ hasConversation ? `${conversationTurns.length} 轮` : '准备就绪' }}</span>
-            <span>{{ phase }}</span>
-          </div>
-        </div>
 
-        <div ref="chatScroll" class="chat-scroll" :class="{ 'has-thread': hasConversation }">
-          <!-- AI 离线时的状态条 -->
-          <div v-if="!aiStatus.isUp" :style="{ marginBottom: '16px', padding: '10px 14px', background: A2.amberSoft, color: A2.amber, borderRadius: '8px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '10px' }">
-            <Icon name="alert" :size="13" />
-            <span style="flex:1">
-              <strong>AI 暂不可用</strong>
-              <span :style="{ color: A2.textMuted, marginLeft: '6px' }">{{ aiStatus.reason || 'AI 服务暂时不可达' }}</span>
-            </span>
-            <button class="btn-outline" :style="{ padding: '4px 10px', fontSize: '11px' }" @click="aiStatus.recheck">
-              <Icon name="refresh" :size="11" /> 重新检测
-            </button>
-          </div>
-
-          <!-- 起始引导 -->
-          <div v-if="!hasConversation" class="starter-panel">
-            <div :style="{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: '12px', alignItems: 'center' }">
-              <div :style="{ display: 'grid', placeItems: 'center', width: '40px', height: '40px', borderRadius: '8px', background: A2.qwenSoft, color: A2.qwen }">
-                <Icon name="sparkle" :size="20" />
-              </div>
-              <div>
-                <div :style="{ fontSize: '14px', fontWeight: 700, color: A2.text, marginBottom: '3px' }">智能筛选</div>
-                <div :style="{ fontSize: '12px', color: A2.textMuted }">输入目标，返回条件、追问或股票池。</div>
-              </div>
-            </div>
-            <div class="starter-grid">
-              <button v-for="t in presetPrompts" :key="t" type="button" @click="!isStreaming && pickPreset(t)">
-                {{ t }}
-              </button>
-            </div>
-          </div>
-
-          <div v-if="hasConversation" class="conversation-list">
-            <article v-for="turn in conversationTurns" :key="turn.id" class="conversation-turn">
-              <div class="user-message">
-                <div class="user-bubble">{{ turn.query }}</div>
-              </div>
-
-              <div v-if="turn.phase === 'thinking'" class="assistant-row">
-                <div class="assistant-avatar">千</div>
-                <div class="thinking-card">
-                  <div class="thinking-head">
-                    <Icon name="brain" :size="11" :color="A2.qwen" />
-                    <span>正在选择下一步…</span>
-                    <span class="dot-flow"><i></i><i></i><i></i></span>
-                  </div>
-                  <pre v-if="turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
-                </div>
-              </div>
-
-              <template v-if="turn.parsedConditions?.length">
-                <div class="condition-intro">
-                  <template v-if="isDesignTurn(turn)">
-                    {{ turnConditionIntro(turn) }}：
-                  </template>
-                  <template v-else>
-                    {{ turnConditionIntro(turn) }}<span v-if="turn.phase === 'screening'">，执行中…</span>：
-                  </template>
-                </div>
-                <div class="condition-list">
-                  <div v-for="(c, i) in turn.parsedConditions" :key="i"
-                       class="cond-chip"
-                       :style="{ '--delay': (i * 60) + 'ms' }">
-                    <span>{{ fmtCond(c) }}</span>
-                  </div>
-                </div>
-              </template>
-
-              <div v-if="hasTurnAnswer(turn)" class="agent-answer-panel" :class="{ compact: isTextOnlyTurn(turn) }">
-                <div class="agent-answer-title">
-                  <span>{{ turnAgentTitle(turn) }}</span>
-                  <em>{{ turnSourceLabel(turn) }}</em>
-                </div>
-                <AiMarkdown
-                  :text="turn.agentAnswer"
-                  :compact="isTextOnlyTurn(turn)"
-                  :streaming="isStreamingAnswerTurn(turn)"
-                />
-                <button
-                  v-if="turnDetailTarget(turn)"
-                  type="button"
-                  class="agent-detail-button"
-                  @click="openDetailTarget(turnDetailTarget(turn))"
-                >
-                  打开详情 <Icon name="arrowRight" :size="12" />
-                </button>
-              </div>
-
-              <div v-if="turn.phase === 'screening'" class="screening-card">
-                <div class="screening-head">
-                  <span class="dot-flow" :style="{ '--c': A2.qwen }"><i></i><i></i><i></i></span>
-                  {{ turnToolLabel(turn) }}执行中…
-                </div>
-                <div v-for="n in 4" :key="n" class="screening-row">
-                  <div class="sk-bar" />
-                  <div class="sk-bar wide" />
-                  <div class="sk-bar" />
-                  <div class="sk-bar" />
-                  <div class="sk-bar" />
-                </div>
-              </div>
-
-              <div v-if="turn.phase === 'error'" class="error-card">
-                <Icon name="shield" :size="14" />
-                <div style="flex:1">{{ turn.errorMsg }}</div>
-                <button class="btn-outline" @click="retryTurn(turn)">
-                  <Icon name="refresh" :size="11" /> 重试
-                </button>
-              </div>
-
-              <div v-if="turn.result" class="result-preview">
-                <div class="result-preview-head">
-                  <div>
-                    <div class="result-preview-title">{{ turnResultTitle(turn) }}</div>
-                    <div class="result-preview-sub">命中 <strong>{{ turn.result.total }}</strong> 只 · 预览前 {{ turnResultItems(turn).length }} 只</div>
-                  </div>
-                  <button class="result-preview-more" @click="openFullResults(turn)">
-                    完整列表 <Icon name="arrowRight" :size="12" />
-                  </button>
-                </div>
-                <div v-if="turn.result.items.length" class="result-preview-list">
-                  <button
-                    v-for="(s, i) in turnResultItems(turn)"
-                    :key="s.code"
-                    type="button"
-                    class="result-preview-row"
-                    @click="router.push(`/detail/${s.code}`)"
-                  >
-                    <span class="result-rank">{{ String(i + 1).padStart(2, '0') }}</span>
-                    <span class="result-stock">
-                      <strong>{{ s.name }}</strong>
-                      <small>{{ s.code }}</small>
-                    </span>
-                    <span class="result-industry">{{ s.industry || '—' }}</span>
-                    <span class="result-facts">
-                      <small v-for="fact in resultFacts(s)" :key="fact">{{ fact }}</small>
-                    </span>
-                    <span class="result-price">
-                      <strong>{{ fmtMetric(s.close) }}</strong>
-                      <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
-                    </span>
-                    <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
-                  </button>
-                </div>
-                <EmptyState v-else icon="filter" :title="emptyResultTitleFor(turn)" :subtitle="zeroResultHintFor(turn)" />
-              </div>
-            </article>
-          </div>
-        </div>
-
-        <!-- Input -->
-        <div class="composer-shell">
-          <div class="composer-card">
-            <textarea
-              v-model="input"
-              class="composer-input"
-              @keydown.enter.exact.prevent="send"
-              :disabled="isStreaming"
-              placeholder="例如：找出 PE 低于 15、ROE > 15%、最新季度净利润同比 > 20% 的消费股…"
-            />
-            <div class="composer-footer">
-              <span v-if="!aiStatus.isUp" class="composer-status warning">
-                <span class="status-dot" />
-                {{ aiStatusLine }}
-              </span>
-              <span v-else class="composer-status">
-                {{ phase === 'thinking' ? '选择下一步中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
-              </span>
-              <div class="composer-spacer" />
-              <button v-if="isStreaming" class="composer-action stop" @click="stop">
-                <Icon name="x" :size="12" /> 停止
-              </button>
-              <button
-                v-else
-                class="composer-action send"
-                @click="send"
-                :disabled="!canSubmit"
-                :title="!aiStatus.isUp ? `AI 服务暂时不可用（${aiStatus.reason || '上游网络异常'}），不会自动调用筛选工具` : ''"
+            <template v-for="group in [
+              { key: 'today', label: '今天', list: history.grouped.today },
+              { key: 'yesterday', label: '昨天', list: history.grouped.yesterday },
+              { key: 'thisWeek', label: '本周', list: history.grouped.thisWeek },
+              { key: 'earlier', label: '更早', list: history.grouped.earlier },
+            ]" :key="group.key">
+              <div v-if="group.list.length" class="history-group-label">{{ group.label }}</div>
+              <div
+                v-for="c in group.list"
+                :key="c.id"
+                class="session-entry"
+                :class="{ active: c.id === history.activeId }"
               >
-                发送 <Icon name="send" :size="12" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      <!-- Right inspector：实时阶段时间轴 -->
-      <aside class="chat-inspector">
-        <div class="inspector-title">
-          <Icon name="tools" :size="12" :color="A2.qwen" /> 实时执行
-          <span v-if="phase !== 'idle'">{{ phase }}</span>
-        </div>
-
-        <div v-if="phase === 'idle'" class="inspector-empty">
-          等待输入
-        </div>
-
-        <template v-else>
-          <div v-if="runtimeRows.length" class="runtime-list">
-            <div v-for="row in runtimeRows" :key="row.label" class="runtime-row" :class="row.state">
-              <span>{{ row.label }}</span>
-              <strong>{{ row.value }}</strong>
-            </div>
-          </div>
-
-          <div v-if="toolCallRows.length" class="tool-call-list">
-            <div v-for="call in toolCallRows" :key="call.id" class="tool-call-row" :style="{ '--state': toolStatusColor(call.status) }">
-              <div class="tool-call-head">
-                <span class="stage-dot" :class="call.status" :style="{ '--c': toolStatusColor(call.status) }"></span>
-                <strong>{{ call.label || call.name }}</strong>
-                <em>{{ toolStatusLabel(call.status) }}</em>
+                <button
+                  class="session-item"
+                  type="button"
+                  :disabled="isStreaming"
+                  :title="isStreaming ? '当前对话进行中，请先停止' : historyTitle(c)"
+                  @click="restoreFromHistory(c.id)"
+                >
+                  <div class="session-item-top">
+                    <span class="session-name">{{ historyTitle(c) }}</span>
+                    <span class="session-badge">{{ historyBadge(c) }}</span>
+                  </div>
+                  <span class="session-meta">{{ historyMeta(c) }}</span>
+                </button>
+                <button class="session-delete" type="button" title="删除" @click="deleteHistory(c.id, $event)">
+                  <Icon name="x" :size="12" />
+                </button>
               </div>
-              <div v-if="toolParamText(call)" class="tool-call-meta">{{ toolParamText(call) }}</div>
-            </div>
+            </template>
+
+            <button v-if="history.items.length" class="history-clear-button" @click="history.clear()">
+              清空全部历史 ({{ history.items.length }})
+            </button>
           </div>
-          <div v-else v-for="(stg, i) in stages" :key="stg.t"
-               :style="{ padding: '8px 10px', borderLeft: `2px solid ${stageColor(stg.state)}`, background: A2.bgDeep, marginBottom: '5px', fontSize: '10.5px', borderRadius: '0 6px 6px 0' }">
-            <div :style="{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontFamily: 'IBM Plex Mono, monospace', color: A2.text, fontWeight: 600 }">
-              <span :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
-                <span class="stage-dot" :class="stg.state" :style="{ '--c': stageColor(stg.state) }"></span>
-                {{ stg.t }}
-              </span>
-              <span :style="{ color: A2.textDim, fontWeight: 500 }">{{ stg.dur || (stg.state === 'running' ? '…' : '') }}</span>
+        </aside>
+
+        <main class="main-panel" :class="{ home: !hasConversation }">
+          <template v-if="!hasConversation">
+            <div class="home-stage">
+              <div class="home-hero-copy">
+                <p class="home-eyebrow">QWEN STOCK AGENT</p>
+                <h1 class="home-heading">用自然语言筛选 A 股</h1>
+                <p class="home-subtitle">
+                  输入选股目标，Agent 会判断是否需要调用工具；没有工具调用时只做普通对话，不会伪装筛选结果。
+                </p>
+              </div>
+
+              <form class="composer composer--home" @submit.prevent="send">
+                <textarea
+                  v-model="input"
+                  class="composer-input"
+                  rows="1"
+                  :disabled="isStreaming"
+                  placeholder="例如：找出 PE 低于 15、ROE > 15%、最新季度净利润同比 > 20% 的消费股"
+                  @keydown.enter.exact.prevent="send"
+                />
+                <div class="composer-bar">
+                  <div class="composer-modes">
+                    <button
+                      v-for="t in presetPrompts.slice(0, 2)"
+                      :key="t"
+                      class="mode-chip"
+                      type="button"
+                      :disabled="isStreaming"
+                      @click="!isStreaming && pickPreset(t)"
+                    >
+                      {{ t }}
+                    </button>
+                  </div>
+                  <button class="send-icon-btn" type="submit" :disabled="!canSubmit" title="发送" aria-label="发送">
+                    <Icon name="send" :size="15" />
+                  </button>
+                </div>
+              </form>
+
+              <div class="home-prompt-grid">
+                <button
+                  v-for="t in presetPrompts"
+                  :key="t"
+                  class="home-prompt-card"
+                  type="button"
+                  :disabled="isStreaming"
+                  @click="!isStreaming && pickPreset(t)"
+                >
+                  <span class="home-prompt-kicker">示例</span>
+                  <span class="home-prompt-title">{{ t }}</span>
+                </button>
+              </div>
             </div>
-            <div :style="{ color: A2.textMuted, marginTop: '3px' }">{{ stg.out }}</div>
-          </div>
-        </template>
+          </template>
 
-        <div v-if="toolTrace.length && !toolCallRows.length" class="inspector-meta">
-          <div class="inspector-meta-title">工具记录</div>
-          <div v-for="trace in toolTrace" :key="trace">{{ traceDisplay(trace) }}</div>
-        </div>
+          <template v-else>
+            <div class="thread-shell">
+              <div ref="chatScroll" class="chat-scroll has-thread">
+                <div v-if="!aiStatus.isUp" class="status-banner warning-banner">
+                  <Icon name="alert" :size="13" />
+                  <span>
+                    <strong>AI 暂不可用</strong>
+                    <em>{{ aiStatus.reason || 'AI 服务暂时不可达' }}</em>
+                  </span>
+                  <button class="status-action" type="button" @click="aiStatus.recheck">
+                    <Icon name="refresh" :size="11" /> 重新检测
+                  </button>
+                </div>
 
-        <div v-if="screenMeta" class="inspector-meta">
-          <div class="inspector-meta-title">本轮信息</div>
-          工具：{{ screenMeta.tool_label || screenMeta.tool || 'Agent' }}<br />
-          状态：{{ result ? `命中 ${result.total} 只` : (isTextOnlyAgent ? '未执行筛选' : '已完成') }}<br />
-          来源：{{ sourceLabel }}
-        </div>
+                <div class="chat-thread">
+                  <article v-for="turn in conversationTurns" :key="turn.id" class="msg-pair">
+                    <div class="msg user">
+                      <div class="msg-content">{{ turn.query }}</div>
+                    </div>
 
-        <div class="risk-note">
-          <Icon name="shield" :size="12" :color="A2.textMuted" />
-          <span>仅供研究参考，不构成投资建议。</span>
-        </div>
-      </aside>
+                    <div class="msg assistant">
+                      <div class="assistant-head">
+                        <span class="assistant-avatar">千</span>
+                        <span>{{ turnAgentTitle(turn) }}</span>
+                        <em>{{ turnSourceLabel(turn) }}</em>
+                      </div>
+
+                      <div v-if="turn.phase === 'thinking'" class="thinking-placeholder">
+                        <Icon name="brain" :size="13" :color="A2.qwen" />
+                        <span>正在选择下一步…</span>
+                        <span class="dot-flow"><i></i><i></i><i></i></span>
+                      </div>
+                      <pre v-if="turn.phase === 'thinking' && turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
+
+                      <div v-if="turn.parsedConditions?.length" class="condition-block">
+                        <div class="condition-intro">
+                          <template v-if="isDesignTurn(turn)">
+                            {{ turnConditionIntro(turn) }}：
+                          </template>
+                          <template v-else>
+                            {{ turnConditionIntro(turn) }}<span v-if="turn.phase === 'screening'">，执行中…</span>：
+                          </template>
+                        </div>
+                        <div class="condition-list">
+                          <div
+                            v-for="(c, i) in turn.parsedConditions"
+                            :key="i"
+                            class="cond-chip"
+                            :style="{ '--delay': (i * 60) + 'ms' }"
+                          >
+                            <span>{{ fmtCond(c) }}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div v-if="hasTurnAnswer(turn)" class="msg-content agent-answer-panel" :class="{ compact: isTextOnlyTurn(turn) }">
+                        <AiMarkdown
+                          :text="turn.agentAnswer"
+                          :compact="isTextOnlyTurn(turn)"
+                          :streaming="isStreamingAnswerTurn(turn)"
+                        />
+                        <button
+                          v-if="turnDetailTarget(turn)"
+                          type="button"
+                          class="agent-detail-button"
+                          @click="openDetailTarget(turnDetailTarget(turn))"
+                        >
+                          打开详情 <Icon name="arrowRight" :size="12" />
+                        </button>
+                      </div>
+
+                      <div v-if="turn.phase === 'screening'" class="tool-trace">
+                        <div class="tool-trace-head">
+                          <Icon name="tools" :size="13" />
+                          <span>{{ turnToolLabel(turn) }}执行中</span>
+                        </div>
+                        <div v-for="n in 4" :key="n" class="screening-row">
+                          <div class="sk-bar" />
+                          <div class="sk-bar wide" />
+                          <div class="sk-bar" />
+                        </div>
+                      </div>
+
+                      <div v-if="turn.phase === 'error'" class="error-card">
+                        <Icon name="shield" :size="14" />
+                        <div>{{ turn.errorMsg }}</div>
+                        <button class="btn-outline" @click="retryTurn(turn)">
+                          <Icon name="refresh" :size="11" /> 重试
+                        </button>
+                      </div>
+
+                      <div v-if="turn.result" class="result-preview">
+                        <div class="result-preview-head">
+                          <div>
+                            <div class="result-preview-title">{{ turnResultTitle(turn) }}</div>
+                            <div class="result-preview-sub">命中 <strong>{{ turn.result.total }}</strong> 只 · 预览前 {{ turnResultItems(turn).length }} 只</div>
+                          </div>
+                          <button class="result-preview-more" @click="openFullResults(turn)">
+                            完整列表 <Icon name="arrowRight" :size="12" />
+                          </button>
+                        </div>
+                        <div v-if="turn.result.items.length" class="result-preview-list">
+                          <button
+                            v-for="(s, i) in turnResultItems(turn)"
+                            :key="s.code"
+                            type="button"
+                            class="result-preview-row"
+                            @click="router.push(`/detail/${s.code}`)"
+                          >
+                            <span class="result-rank">{{ String(i + 1).padStart(2, '0') }}</span>
+                            <span class="result-stock">
+                              <strong>{{ s.name }}</strong>
+                              <small>{{ s.code }}</small>
+                            </span>
+                            <span class="result-industry">{{ s.industry || '—' }}</span>
+                            <span class="result-facts">
+                              <small v-for="fact in resultFacts(s)" :key="fact">{{ fact }}</small>
+                            </span>
+                            <span class="result-price">
+                              <strong>{{ fmtMetric(s.close) }}</strong>
+                              <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
+                            </span>
+                            <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
+                          </button>
+                        </div>
+                        <EmptyState v-else icon="filter" :title="emptyResultTitleFor(turn)" :subtitle="zeroResultHintFor(turn)" />
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+
+              <div v-if="runtimeRows.length || toolCallRows.length" class="execution-strip">
+                <div v-if="runtimeRows.length" class="runtime-list">
+                  <div v-for="row in runtimeRows" :key="row.label" class="runtime-row" :class="row.state">
+                    <span>{{ row.label }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </div>
+                </div>
+                <div v-if="toolCallRows.length" class="tool-call-list">
+                  <div v-for="call in toolCallRows" :key="call.id" class="tool-call-row" :style="{ '--state': toolStatusColor(call.status) }">
+                    <div class="tool-call-head">
+                      <span class="stage-dot" :class="call.status" :style="{ '--c': toolStatusColor(call.status) }"></span>
+                      <strong>{{ call.label || call.name }}</strong>
+                      <em>{{ toolStatusLabel(call.status) }}</em>
+                    </div>
+                    <div v-if="toolParamText(call)" class="tool-call-meta">{{ toolParamText(call) }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="composer-dock">
+                <form class="composer composer--thread" @submit.prevent="send">
+                  <textarea
+                    v-model="input"
+                    class="composer-input"
+                    rows="1"
+                    :disabled="isStreaming"
+                    placeholder="给千问 Agent 发送消息"
+                    @keydown.enter.exact.prevent="send"
+                  />
+                  <div class="composer-bar">
+                    <div class="composer-modes">
+                      <span class="composer-status" :class="{ warning: !aiStatus.isUp }">
+                        {{ phase === 'thinking' ? '选择下一步中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
+                      </span>
+                    </div>
+                    <button v-if="isStreaming" class="send-icon-btn stop" type="button" title="停止" aria-label="停止" @click="stop">
+                      <Icon name="x" :size="15" />
+                    </button>
+                    <button v-else class="send-icon-btn" type="submit" :disabled="!canSubmit" title="发送" aria-label="发送">
+                      <Icon name="send" :size="15" />
+                    </button>
+                  </div>
+                </form>
+                <div class="composer-hint-line">Enter 发送 · 明确工具才执行筛选 · 普通对话不会伪装股票结果</div>
+              </div>
+            </div>
+          </template>
+        </main>
+      </section>
     </div>
   </Shell>
 </template>
@@ -1952,5 +1922,793 @@ const stageColor = (s) => ({
   0%   { box-shadow: 0 0 0 0 rgba(36,86,216,0.45); }
   70%  { box-shadow: 0 0 0 6px rgba(36,86,216,0); }
   100% { box-shadow: 0 0 0 0 rgba(36,86,216,0); }
+}
+
+/* Ported from the user's AI workspace: two-pane chat shell + docked composer. */
+.ai-page {
+  display: flex;
+  height: clamp(620px, calc(100vh - 114px), 820px);
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FFFFFF;
+}
+
+.ai-shell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.history-panel {
+  display: flex;
+  width: 260px;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 260px;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid #EDEDED;
+  background: #F7F7F7;
+}
+
+.history-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 14px 12px;
+}
+
+.history-head-lead {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-title {
+  margin: 0;
+  color: #111111;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.history-new-btn {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid #D8D8D8;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+
+.history-new-btn:hover {
+  border-color: #B8B8B8;
+  background: #F5F5F5;
+  color: #111111;
+}
+
+.history-panel-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 6px 8px 12px;
+}
+
+.history-empty {
+  display: flex;
+  min-height: 96px;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  color: #71717A;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.history-group-label {
+  margin: 12px 0 5px;
+  padding: 0 10px;
+  color: #A1A1AA;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.session-entry {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px;
+  align-items: center;
+  padding: 0 2px;
+  border-radius: 10px;
+  transition: background 0.18s;
+}
+
+.session-entry:hover,
+.session-entry.active {
+  background: #EFEDE6;
+}
+
+.session-entry.active {
+  box-shadow: inset 2px 0 0 #111111;
+}
+
+.session-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-item:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.session-item-top {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #111111;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-badge {
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.session-meta {
+  overflow: hidden;
+  max-width: 100%;
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-delete {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #A1A1AA;
+  cursor: pointer;
+  opacity: 0;
+  transition: background 0.18s, color 0.18s, opacity 0.18s;
+}
+
+.session-entry:hover .session-delete,
+.session-entry:focus-within .session-delete {
+  opacity: 1;
+}
+
+.session-delete:hover {
+  background: rgba(200, 49, 42, 0.10);
+  color: #C8312A;
+}
+
+.history-clear-button {
+  margin: 10px 8px 0;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #71717A;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.history-clear-button:hover {
+  background: #EFEDE6;
+  color: #111111;
+}
+
+.main-panel {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  background: #FFFFFF;
+}
+
+.main-panel.home {
+  justify-content: center;
+}
+
+.home-stage {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 18px;
+}
+
+.home-hero-copy {
+  display: flex;
+  width: min(760px, 100%);
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 18px;
+  text-align: center;
+}
+
+.home-eyebrow {
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 999px;
+  background: #F7F7F7;
+  color: #111111;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.home-heading {
+  margin: 0;
+  color: #111111;
+  font-size: clamp(30px, 4vw, 44px);
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.home-subtitle {
+  max-width: 640px;
+  margin: 14px 0 0;
+  color: #71717A;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.home-prompt-grid {
+  display: grid;
+  width: min(760px, 100%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.home-prompt-card {
+  display: grid;
+  min-height: 92px;
+  align-content: start;
+  gap: 7px;
+  padding: 14px 16px;
+  border: 1px solid #EDEDED;
+  border-radius: 16px;
+  background: #FFFFFF;
+  color: #111111;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 6px 18px rgba(14, 14, 12, 0.05);
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+
+.home-prompt-card:hover:not(:disabled) {
+  transform: translateY(-2px);
+  border-color: #D8D8D8;
+  box-shadow: 0 10px 24px rgba(14, 14, 12, 0.08);
+}
+
+.home-prompt-card:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.home-prompt-kicker {
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.home-prompt-title {
+  color: #111111;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.composer {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  padding: 10px 10px 8px 16px;
+  border: 1px solid #EDEDED;
+  border-radius: 24px;
+  background: #FFFFFF;
+  box-shadow: 0 10px 30px rgba(14, 14, 12, 0.08);
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+
+.composer:focus-within {
+  border-color: #111111;
+  box-shadow: 0 0 0 3px rgba(17, 17, 17, 0.08), 0 10px 30px rgba(14, 14, 12, 0.08);
+}
+
+.composer--home,
+.composer--thread {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 30px;
+  height: auto;
+  padding: 8px 4px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #111111;
+  font-size: 15px;
+  line-height: 1.6;
+  resize: none;
+}
+
+.composer-input::placeholder {
+  color: #A1A1AA;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 3px;
+}
+
+.composer-modes {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mode-chip {
+  display: inline-flex;
+  max-width: 280px;
+  height: 30px;
+  align-items: center;
+  overflow: hidden;
+  padding: 0 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 999px;
+  background: #F7F7F7;
+  color: #3F3F46;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-chip:hover:not(:disabled) {
+  background: #FFFFFF;
+  color: #111111;
+}
+
+.send-icon-btn {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: #111111;
+  color: #FFFFFF;
+  cursor: pointer;
+  transition: background 0.18s, opacity 0.18s, transform 0.18s;
+}
+
+.send-icon-btn.stop {
+  background: #3F3D38;
+}
+
+.send-icon-btn:hover:not(:disabled) {
+  background: #000000;
+}
+
+.send-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.thread-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 32px 24px 16px;
+  scroll-behavior: smooth;
+}
+
+.chat-scroll:not(.has-thread) {
+  display: block;
+}
+
+.chat-thread {
+  display: flex;
+  width: 100%;
+  max-width: 820px;
+  margin: 0 auto;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.msg-pair {
+  display: grid;
+  gap: 18px;
+  animation: msg-fade-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes msg-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.msg.user {
+  align-items: flex-end;
+}
+
+.msg.assistant {
+  align-items: stretch;
+}
+
+.msg-content {
+  min-width: 0;
+  color: #111111;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.msg.user .msg-content {
+  max-width: 82%;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: #F7F7F7;
+  color: #111111;
+  line-height: 1.6;
+}
+
+.assistant-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #111111;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.assistant-head em {
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.assistant-avatar {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 8px;
+  background: #111111;
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.agent-answer-panel {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #2F3137;
+  font-size: 14px;
+}
+
+.condition-block {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.condition-intro,
+.condition-list,
+.screening-card,
+.error-card,
+.result-preview {
+  margin-left: 0;
+}
+
+.condition-intro {
+  color: #71717A;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.condition-list {
+  gap: 7px;
+}
+
+.tool-trace {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 14px;
+  background: #F7F7F7;
+}
+
+.tool-trace-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #3F3F46;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.screening-row {
+  grid-template-columns: 36px minmax(0, 1fr) 84px;
+  padding: 8px 0;
+}
+
+.thinking-placeholder {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: #F7F7F7;
+  color: #71717A;
+  font-size: 13px;
+}
+
+.thinking-preview {
+  max-height: 120px;
+  margin: 8px 0 0;
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #F7F7F7;
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(200, 49, 42, 0.10);
+  color: #C8312A;
+  font-size: 12px;
+}
+
+.execution-strip {
+  display: grid;
+  width: min(820px, calc(100% - 48px));
+  gap: 8px;
+  margin: 0 auto;
+  padding: 8px 0 4px;
+}
+
+.execution-strip .runtime-list,
+.execution-strip .tool-call-list {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.composer-dock {
+  flex-shrink: 0;
+  padding: 12px 24px 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.94) 28%, #FFFFFF 62%);
+}
+
+.composer-hint-line {
+  max-width: 760px;
+  margin: 8px auto 0;
+  color: #A1A1AA;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.composer-status {
+  overflow: hidden;
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-status.warning {
+  color: #987400;
+}
+
+.status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 auto 16px;
+  width: min(820px, 100%);
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.warning-banner {
+  background: #FFFBEB;
+  color: #987400;
+}
+
+.status-banner span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.status-banner em {
+  overflow: hidden;
+  color: #71717A;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid #EDEDED;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .history-panel {
+    display: none;
+  }
+
+  .ai-page {
+    height: calc(100vh - 84px);
+    min-height: calc(100vh - 84px);
+  }
+
+  .chat-scroll {
+    padding: 24px 16px 12px;
+  }
+
+  .composer-dock {
+    padding: 10px 16px 14px;
+  }
+
+  .execution-strip {
+    width: calc(100% - 32px);
+  }
+}
+
+@media (max-width: 680px) {
+  .home-stage {
+    justify-content: flex-start;
+    padding: 48px 14px 18px;
+  }
+
+  .home-heading {
+    font-size: 24px;
+  }
+
+  .home-subtitle {
+    font-size: 13px;
+  }
+
+  .home-prompt-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .composer {
+    border-radius: 20px;
+    padding: 8px 8px 6px 14px;
+  }
+
+  .mode-chip {
+    max-width: 180px;
+    padding: 0 10px;
+  }
+
+  .msg.user .msg-content {
+    max-width: 92%;
+  }
 }
 </style>

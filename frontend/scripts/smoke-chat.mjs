@@ -626,10 +626,25 @@ async function sendChat(cdp, query, expectedText, expectedTool, expectsResult) {
   })()`)
   await waitForExpression(
     cdp,
-    `[...document.querySelectorAll('button')].some((btn) => btn.textContent.includes('发送') && !btn.disabled)`,
+    `[...document.querySelectorAll('button')].some((btn) => {
+      const label = [btn.textContent, btn.getAttribute('title'), btn.getAttribute('aria-label')].join(' ');
+      return label.includes('发送') && !btn.disabled;
+    })`,
     `send button enabled for ${query}`,
   )
-  await clickByText(cdp, '发送', { selector: 'button', last: true })
+  const clicked = await evaluate(cdp, `(() => {
+    const matches = [...document.querySelectorAll('button')].filter((btn) => {
+      const label = [btn.textContent, btn.getAttribute('title'), btn.getAttribute('aria-label')].join(' ');
+      const rect = btn.getBoundingClientRect();
+      return label.includes('发送') && rect.width > 0 && rect.height > 0 && !btn.disabled;
+    });
+    const el = matches[matches.length - 1];
+    if (!el) return false;
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    el.click();
+    return true;
+  })()`)
+  if (!clicked) fail(`Could not click send button for ${query}`)
   await waitForExpression(
     cdp,
     `window.__chatSmokeCompletions && window.__chatSmokeCompletions.includes(${JSON.stringify(query)})`,
@@ -644,7 +659,10 @@ async function sendChat(cdp, query, expectedText, expectedTool, expectsResult) {
     cdp,
     `(() => {
       const input = document.querySelector('textarea');
-      const stopping = [...document.querySelectorAll('button')].some((btn) => btn.textContent.includes('停止'));
+      const stopping = [...document.querySelectorAll('button')].some((btn) => {
+        const label = [btn.textContent, btn.getAttribute('title'), btn.getAttribute('aria-label')].join(' ');
+        return label.includes('停止');
+      });
       return input && !input.disabled && !stopping;
     })()`,
     `chat ready after ${query}`,
@@ -662,7 +680,7 @@ async function chatSnapshot(cdp) {
     const text = document.body.innerText;
     return {
       href: location.href,
-      turns: document.querySelectorAll('.conversation-turn').length,
+      turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
       resultPreviews: document.querySelectorAll('.result-preview').length,
       toolRows: [...document.querySelectorAll('.tool-call-row')]
         .map((el) => el.textContent.replace(/\\s+/g, ' ').trim())
@@ -749,7 +767,7 @@ async function run() {
     await waitForExpression(cdp, 'location.pathname === "/chat"', 'browser back to chat')
     await waitForExpression(
       cdp,
-      'location.pathname === "/chat" && document.querySelectorAll(".conversation-turn").length >= 11',
+      'location.pathname === "/chat" && document.querySelectorAll(".conversation-turn, .msg-pair").length >= 11',
       'chat state after back',
     )
 
@@ -774,7 +792,7 @@ async function run() {
     await waitForExpression(cdp, 'document.body.innerText.includes("现在执行")', 'mobile chat restore')
     const mobile = await evaluate(cdp, `(() => {
       window.scrollTo(0, window.scrollY);
-      const overflowers = [...document.querySelectorAll('.chat-workbench, .starter-panel, .result-preview, .result-preview-row, textarea')]
+      const overflowers = [...document.querySelectorAll('.ai-page, .ai-shell, .main-panel, .thread-shell, .chat-scroll, .msg-pair, .result-preview, .result-preview-row, .composer, textarea')]
         .map((el) => {
           const rect = el.getBoundingClientRect();
           const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
@@ -785,7 +803,7 @@ async function run() {
         innerWidth: window.innerWidth,
         scrollX: window.scrollX,
         bodyScrollWidth: document.documentElement.scrollWidth,
-        turns: document.querySelectorAll('.conversation-turn').length,
+        turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
         overflowers,
       };
     })()`)
