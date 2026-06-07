@@ -552,12 +552,12 @@ const stageColor = (s) => ({
                         <em>{{ turnSourceLabel(turn) }}</em>
                       </div>
 
-                      <div v-if="turn.phase === 'thinking'" class="thinking-placeholder">
+                      <div v-if="turn.phase === 'thinking' && !toolCallRows.length" class="thinking-placeholder">
                         <Icon name="brain" :size="13" :color="A2.qwen" />
-                        <span>正在选择下一步…</span>
+                        <span>正在分析…</span>
                         <span class="dot-flow"><i></i><i></i><i></i></span>
                       </div>
-                      <pre v-if="turn.phase === 'thinking' && turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
+                      <pre v-if="turn.phase === 'thinking' && turn.thinkingBuf && !toolCallRows.length" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
 
                       <div v-if="toolCallRows.length" class="tool-trace">
                         <div class="tool-trace-head">
@@ -716,11 +716,7 @@ const stageColor = (s) => ({
                     @keydown.enter.exact.prevent="send"
                   />
                   <div class="composer-bar">
-                    <div class="composer-modes">
-                      <span class="composer-status" :class="{ warning: !aiStatus.isUp }">
-                        {{ phase === 'thinking' ? '思考中…' : phase === 'screening' ? '执行中…' : '' }}
-                      </span>
-                    </div>
+                    <div class="composer-modes"></div>
                     <button v-if="isStreaming" class="send-icon-btn stop" type="button" title="停止" aria-label="停止" @click="stop">
                       <Icon name="x" :size="15" />
                     </button>
