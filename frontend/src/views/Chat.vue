@@ -559,6 +559,25 @@ const stageColor = (s) => ({
                       </div>
                       <pre v-if="turn.phase === 'thinking' && turn.thinkingBuf" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
 
+                      <div v-if="toolCallRows.length" class="tool-trace">
+                        <div class="tool-trace-head">
+                          <Icon name="tools" :size="13" />
+                          <span>工具调用</span>
+                        </div>
+                        <div class="tool-call-list">
+                          <div v-for="(call, i) in toolCallRows" :key="call.id" class="tool-call" :class="{ pending: call.status === 'running' }">
+                            <span class="tool-call-index">
+                              <Icon v-if="call.status === 'running'" name="loader" :size="12" class="spin" />
+                              <template v-else>{{ i + 1 }}</template>
+                            </span>
+                            <div class="tool-call-main">
+                              <div class="tool-call-name">{{ call.label || call.name }}</div>
+                              <div class="tool-call-summary">{{ call.message }}<span v-if="call.status === 'running'" class="tool-dots"></span></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       <div v-if="turn.parsedConditions?.length" class="condition-block">
                         <div class="condition-intro">
                           <template v-if="isDesignTurn(turn)">
@@ -683,25 +702,6 @@ const stageColor = (s) => ({
                       </div>
                     </div>
                   </article>
-                </div>
-              </div>
-
-              <div v-if="toolCallRows.length" class="tool-trace">
-                <div class="tool-trace-head">
-                  <Icon name="tools" :size="13" />
-                  <span>工具调用</span>
-                </div>
-                <div class="tool-call-list">
-                  <div v-for="(call, i) in toolCallRows" :key="call.id" class="tool-call" :class="{ pending: call.status === 'running' }">
-                    <span class="tool-call-index">
-                      <Icon v-if="call.status === 'running'" name="loader" :size="12" class="spin" />
-                      <template v-else>{{ i + 1 }}</template>
-                    </span>
-                    <div class="tool-call-main">
-                      <div class="tool-call-name">{{ call.label || call.name }}</div>
-                      <div class="tool-call-summary">{{ call.message }}<span v-if="call.status === 'running'" class="tool-dots"></span></div>
-                    </div>
-                  </div>
                 </div>
               </div>
 
