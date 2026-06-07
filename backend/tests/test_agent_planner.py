@@ -124,6 +124,49 @@ def test_plan_agent_turn_rejects_a_share_market_value(monkeypatch):
     assert agent_planner.last_plan_failure_reason() == "模型工具参数校验失败"
 
 
+def test_plan_agent_turn_clamps_explicit_positive_profit_yoy(monkeypatch):
+    _configure(
+        monkeypatch,
+        "stock_screen",
+        {
+            "conditions": [
+                {"field": "roe", "op": "gt", "value": 15},
+                {"field": "revenue_yoy", "op": "gt", "value": 20},
+                {"field": "profit_yoy", "op": "gt", "value": 20},
+            ],
+        },
+    )
+
+    result = agent_planner.plan_agent_turn("ROE 大于 15 且最新季度净利润同比正增长的成长股")
+
+    assert result is not None
+    assert [(item.field, item.op, item.value) for item in result.conditions] == [
+        ("roe", "gt", 15),
+        ("profit_yoy", "gt", 0),
+    ]
+
+
+def test_plan_agent_turn_clamps_explicit_positive_revenue_and_profit_yoy(monkeypatch):
+    _configure(
+        monkeypatch,
+        "stock_screen",
+        {
+            "conditions": [
+                {"field": "revenue_yoy", "op": "gt", "value": 20},
+                {"field": "profit_yoy", "op": "gt", "value": 20},
+            ],
+        },
+    )
+
+    result = agent_planner.plan_agent_turn("营收同比为正且净利润同比为正")
+
+    assert result is not None
+    assert [(item.field, item.op, item.value) for item in result.conditions] == [
+        ("revenue_yoy", "gt", 0),
+        ("profit_yoy", "gt", 0),
+    ]
+
+
 def test_plan_agent_turn_accepts_sort_results_tool(monkeypatch):
     _configure(monkeypatch, "sort_results", {"sort_by": "dividend_yield", "sort_desc": True})
 

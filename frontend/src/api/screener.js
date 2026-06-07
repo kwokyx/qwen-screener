@@ -18,7 +18,7 @@ export async function screen(conditions, opts = {}) {
   return data
 }
 
-/** 自然语言筛选（千问，一次性返回） */
+/** 自然语言筛选（bounded ReAct，一次性返回 stock_screen 结果） */
 export async function screenNL(query) {
   const { data } = await client.post('/screener/nl', { query })
   return data

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
 from app.schemas.screener import NLScreenRequest, ScreenRequest, ScreenResponse
-from app.services import agent_react, qwen_client, screener_engine, strategy_selector
+from app.services import agent_react, screener_engine, strategy_selector
 
 
 router = APIRouter(prefix="/screener", tags=["screener"])
@@ -27,33 +27,19 @@ def run_screen(req: ScreenRequest, db: Session = Depends(get_db)):
 
 @router.post("/nl", response_model=ScreenResponse)
 def run_nl_screen(req: NLScreenRequest, db: Session = Depends(get_db)):
-    """自然语言筛选：千问解析 → 引擎执行（一次性返回）"""
-    if req.context:
-        try:
-            response = agent_react.run_chat_react_agent(
-                db,
-                req.query,
-                context=req.context,
-                limit=50,
-            )
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        if response.screen_result is None:
-            raise HTTPException(400, response.answer)
-        return response.screen_result
-
+    """自然语言筛选：bounded ReAct 选择筛选工具后一次性返回结果。"""
     try:
-        parsed = qwen_client.parse_nl_query(req.query)
-    except RuntimeError as e:
-        raise HTTPException(503, str(e))
-    if not parsed.conditions and not strategy_selector.is_explicit_all_stocks_query(req.query):
-        raise HTTPException(400, "未识别到可执行筛选条件，请补充指标或明确要求查看全部股票")
-    try:
-        result = screener_engine.screen(db, parsed)
+        response = agent_react.run_chat_react_agent(
+            db,
+            req.query,
+            context=req.context or {},
+            limit=50,
+        )
     except ValueError as e:
-        raise HTTPException(400, f"千问解析的条件无效: {e}")
-    result.parsed_conditions = parsed.conditions
-    return result
+        raise HTTPException(400, str(e))
+    if response.screen_result is None:
+        raise HTTPException(400, response.answer)
+    return response.screen_result
 
 
 @router.post("/nl/stream")

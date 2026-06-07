@@ -254,16 +254,16 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 ---
 
 ### POST `/screener/nl`
-自然语言筛选（千问解析 → 引擎执行），**一次性返回**。
+自然语言筛选 **一次性返回**。该端点与 SSE Chat 入口复用 bounded ReAct：模型必须选择 `stock_screen` action 且参数通过 schema 校验后，后端才执行筛选；普通对话、策略设计、详情、解释、排序或没有合法 action 时不会强行筛选。
 
 **请求体**
 ```json
 { "query": "低估值高分红的银行股，按股息率排序" }
 ```
 
-**响应** `200`：同 `POST /screener`，**但 `parsed_conditions` 字段会回显** 千问解析出的结构化条件。
+**响应** `200`：同 `POST /screener`，**但 `parsed_conditions` 字段会回显** 模型 action 生成并通过校验的结构化条件。
 
-**错误** `503` AI 服务不可达；`400` 千问解析的条件无效。
+**错误** `400`：模型没有调用 `stock_screen`、普通对话、unsupported metric、AI 不可达或工具参数无效。该一次性端点只返回筛选结果；需要展示普通回复和完整 ReAct 步骤时使用 `/screener/nl/stream`。
 
 ---
 

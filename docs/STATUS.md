@@ -25,7 +25,7 @@
 | JWT 认证（注册 / 登录 / me） | [`api/auth.py`](../backend/app/api/auth.py) | ✅ `test_auth_e2e.py`（端到端） |
 | 股票搜索 / 详情 / K 线 / 自选 CRUD | [`api/stock.py`](../backend/app/api/stock.py) | ✅ `test_stock_api.py` |
 | 筛选引擎（13 字段 × 7 操作符 × AND/OR） | [`services/screener_engine.py`](../backend/app/services/screener_engine.py) | ✅ `test_screener.py` |
-| NL 筛选（一次性 + SSE 流式三阶段） | [`api/screener.py`](../backend/app/api/screener.py) | ✅ `test_screener.py`（含端到端） |
+| NL 筛选（结构化 + 一次性 ReAct + SSE ReAct） | [`api/screener.py`](../backend/app/api/screener.py) | ✅ `test_screener.py` + `test_screener_stream.py`（含端到端） |
 | 千问 AI 客户端（FC + JSON + regex 三层降级 + 双后端切换 + 缓存） | [`services/qwen_client/`](../backend/app/services/qwen_client/) | ✅ `test_qwen_transport.py` + 手动端到端验证 |
 | 个股投资分析（一次 + SSE 流式） | [`api/qwen.py`](../backend/app/api/qwen.py) | ⚠️ 无单测，已手动验证 |
 | Agent 智能选股（Chat/Strategy 入口模型优先 bounded ReAct + 结构化筛选工具 + 策略选股工具） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` + `test_strategy_scoring.py` |

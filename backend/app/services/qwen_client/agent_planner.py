@@ -274,6 +274,9 @@ VALID_STRATEGY_IDS: frozenset[str] = frozenset({
     "limit_up_shakeout",
     "uptrend_limit_down",
 })
+PROFIT_YOY_TERMS: tuple[str, ...] = ("净利润同比", "净利同比", "利润同比")
+REVENUE_YOY_TERMS: tuple[str, ...] = ("营收同比", "收入同比", "营业收入同比", "销售同比")
+POSITIVE_GROWTH_TERMS: tuple[str, ...] = ("正增长", "为正", "大于0", "大于 0", ">0", "＞0")
 VALID_MISSING_INFO: frozenset[str] = frozenset({
     "行业", "风格偏好", "估值范围", "持有周期", "风险承受",
 })
@@ -724,7 +727,7 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
         "不支持三年CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；"
         "遇到不支持字段必须 ask_clarification，不要改写成别的指标继续筛选。\n"
         "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；"
-        "成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；"
+        "成长=仅在用户未给出明确同比阈值时用 revenue_yoy>20 且 profit_yoy>20；净利润同比正增长=profit_yoy>0，不能额外添加 revenue_yoy；白马=roe>15且market_cap>500；"
         "小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
         "industry用中文短词。"
     )
@@ -839,7 +842,7 @@ def _build_react_messages(
         "不支持：三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；必须 ask_clarification 或 final 说明，不能近似改写后筛选。\n"
         "stock_detail 只定位详情。explain_result/sort_results/paginate_results 必须有上一轮结果，否则 ask_clarification。"
         "strategy_design 默认不执行；确认执行只有上一轮有条件才可筛选。已有 observation 时优先 final，禁止重复相同工具参数。\n"
-        "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=revenue_yoy>20且profit_yoy>20；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
+        "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=仅在用户未给出明确同比阈值时用 revenue_yoy>20 且 profit_yoy>20；净利润同比正增长=profit_yoy>0，不能额外添加 revenue_yoy；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
     )
     messages: list[dict] = [{"role": "system", "content": system}]
     compact_context = _compact_context(context)
@@ -935,14 +938,18 @@ def _to_plan_result(
 
     if tool_name == "stock_screen":
         args: StockScreenArgs
+        conditions = _normalize_model_conditions_for_query(
+            query,
+            [
+                FilterCondition(field=c.field, op=c.op, value=c.value)
+                for c in args.conditions
+            ],
+        )
         return AgentPlanResult(
             tool=tool_name,
             tool_label=label,
             reasoning="AI 将自然语言目标转换为结构化筛选条件。",
-            conditions=[
-                FilterCondition(field=c.field, op=c.op, value=c.value)
-                for c in args.conditions
-            ],
+            conditions=conditions,
             logic=args.logic,
             sort_by=args.sort_by,
             sort_desc=args.sort_desc,
@@ -1021,3 +1028,36 @@ def _to_plan_result(
             "question": args.question,
         },
     )
+
+
+def _normalize_model_conditions_for_query(query: str, conditions: list[FilterCondition]) -> list[FilterCondition]:
+    """Clamp over-broad model condition expansions while preserving tool choice."""
+    normalized_query = query.replace(" ", "")
+    explicit_profit_positive = (
+        any(term in normalized_query for term in PROFIT_YOY_TERMS)
+        and any(term in normalized_query for term in POSITIVE_GROWTH_TERMS)
+    )
+    explicit_revenue_positive = (
+        any(term in normalized_query for term in REVENUE_YOY_TERMS)
+        and any(term in normalized_query for term in POSITIVE_GROWTH_TERMS)
+    )
+    if not explicit_profit_positive and not explicit_revenue_positive:
+        return conditions
+
+    mentions_revenue_yoy = any(term in normalized_query for term in REVENUE_YOY_TERMS)
+    normalized: list[FilterCondition] = []
+    for condition in conditions:
+        if condition.field == "revenue_yoy" and not mentions_revenue_yoy:
+            continue
+        if condition.field == "revenue_yoy" and explicit_revenue_positive and condition.op in {"gt", "gte"}:
+            value = condition.value
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 20:
+                normalized.append(FilterCondition(field="revenue_yoy", op="gt", value=0))
+                continue
+        if condition.field == "profit_yoy" and condition.op in {"gt", "gte"}:
+            value = condition.value
+            if explicit_profit_positive and isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 20:
+                normalized.append(FilterCondition(field="profit_yoy", op="gt", value=0))
+                continue
+        normalized.append(condition)
+    return normalized

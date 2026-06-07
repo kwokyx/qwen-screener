@@ -629,6 +629,83 @@ def test_nl_one_shot_uses_context_for_confirmation(db, seed_stocks, monkeypatch)
     ]
 
 
+def test_nl_one_shot_without_context_uses_react_action(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        qwen_client,
+        "parse_nl_query",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("one-shot NL endpoint should use ReAct, not legacy parser")),
+    )
+
+    def plan_react_step(_query, context=None, observations=None, step_index=1):
+        return AgentReactDecision(
+            kind="action",
+            public_reason="模型判断需要筛选银行股。",
+            plan=AgentPlanResult(
+                tool="stock_screen",
+                tool_label="结构化股票筛选",
+                reasoning="模型解析银行低估值条件",
+                conditions=[
+                    FilterCondition(field="industry", op="in", value=["银行"]),
+                    FilterCondition(field="pe", op="lt", value=15),
+                ],
+                sort_by="dividend_yield",
+                sort_desc=True,
+            ),
+        )
+
+    monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
+
+    client = TestClient(app)
+    response = client.post("/api/v1/screener/nl", json={"query": "低估值银行股"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["code"] == "600036.SH"
+    assert body["parsed_conditions"] == [
+        {"field": "industry", "op": "in", "value": ["银行"]},
+        {"field": "pe", "op": "lt", "value": 15},
+    ]
+
+
+def test_nl_one_shot_plain_chat_does_not_screen_or_legacy_parse(db, seed_stocks, monkeypatch):
+    monkeypatch.setattr(
+        strategy_selector,
+        "_ai_status",
+        lambda: {"configured": True, "ok": True, "reason": None},
+    )
+    monkeypatch.setattr(
+        qwen_client,
+        "parse_nl_query",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not use legacy NL parser")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.screener_engine,
+        "screen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plain chat must not screen")),
+    )
+    monkeypatch.setattr(
+        strategy_selector.qwen_client,
+        "plan_react_step",
+        lambda *_args, **_kwargs: AgentReactDecision(
+            kind="final",
+            public_reason="模型判断这是普通对话。",
+            final_answer="你好，我可以帮你筛选 A 股，也可以普通对话。",
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/v1/screener/nl", json={"query": "你好"})
+
+    assert response.status_code == 400
+    assert "普通对话" in response.json()["detail"]
+
+
 def test_nl_stream_adjusts_previous_conditions(db, seed_stocks, monkeypatch):
     monkeypatch.setattr(
         strategy_selector,

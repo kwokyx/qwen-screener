@@ -25,7 +25,7 @@ FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自
 | 模块 | 路径 | 说明 |
 |---|---|---|
 | 行情 Dashboard | `/dashboard` | 大盘指数、行业涨跌、Top 涨/跌幅 |
-| 千问对话筛选 | `/chat` | 自然语言输入 → 千问解析为结构化条件 → SSE 流式返回 |
+| 千问对话筛选 | `/chat` | 自然语言输入 → bounded ReAct 模型选择工具或普通回复 → SSE 流式返回 |
 | 因子筛选器 | `/results` | 13 字段 × 7 操作符的可组合筛选 |
 | 个股详情 | `/detail/:code` | K 线 + 关键指标 + 千问基本面分析（流式） |
 | 自选监控 | `/portfolio` | 自选股 + 价格预警，登录后跨设备同步 |
@@ -337,7 +337,7 @@ qwen-stock-screener/
 | **股票数据** [`api/stock.py`](backend/app/api/stock.py) | 模糊搜索、个股详情（基本面 + 最新行情 + 财务）、K 线（任意 N 日，自动回填）、自选 CRUD | ✅ `test_stock_api.py` |
 | **筛选引擎** [`services/screener_engine.py`](backend/app/services/screener_engine.py) | 13 字段 × 7 操作符 × AND/OR 组合 + 排序 + 分页 | ✅ `test_screener.py` |
 | **千问 AI 客户端** [`services/qwen_client/`](backend/app/services/qwen_client/) | Function Calling + bounded ReAct step；OpenAI / DashScope 双后端切换；SSE 流式；指数退避重试；Redis 缓存 | ✅ `test_agent_planner.py` |
-| **NL 筛选** [`api/screener.py`](backend/app/api/screener.py) | 三个端点：结构化 / NL 一次性 / NL SSE 流式（thinking → parsed → result 三阶段） | ✅ `test_screener.py` |
+| **NL 筛选** [`api/screener.py`](backend/app/api/screener.py) | 三个端点：结构化 / NL 一次性 / NL SSE 流式；NL 入口复用 bounded ReAct，只有模型选择 `stock_screen` 才执行筛选 | ✅ `test_screener.py` + `test_screener_stream.py` |
 | **基本面分析** [`api/qwen.py`](backend/app/api/qwen.py) | 个股投资分析：一次性 + SSE 流式两个端点；1h Redis 缓存 | — |
 | **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
 | **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
@@ -355,7 +355,7 @@ qwen-stock-screener/
 |---|---|---|
 | **Login** [`Login.vue`](frontend/src/views/Login.vue) | `/auth/*` | 登录 / 注册一体页，A2 主题 |
 | **行情 Dashboard** [`Dashboard.vue`](frontend/src/views/Dashboard.vue) | `/market/*` | 4 指数 + 30 日 sparkline + 板块涨跌 + 涨跌榜（4 个 tab） |
-| **千问对话筛选** [`Chat.vue`](frontend/src/views/Chat.vue) | `/screener/nl/stream` | SSE 流式三阶段；历史持久化 + 跨设备同步；0 命中智能建议；预设提示 |
+| **千问对话筛选** [`Chat.vue`](frontend/src/views/Chat.vue) | `/screener/nl/stream` | SSE 展示 bounded ReAct 公开步骤；历史持久化 + 跨设备同步；0 命中建议；预设提示 |
 | **因子筛选器** [`Results.vue`](frontend/src/views/Results.vue) | `/screener` | 默认条件可视化 + 实时 sparkline + 价值分排序 |
 | **个股详情** [`Detail.vue`](frontend/src/views/Detail.vue) | `/stock/{code}` + `/stock/{code}/kline` + `/stock/{code}/intraday` | klinecharts K 线；5/15/30/60 分钟 K + 日/周/月 K；MA/BOLL/MACD/KDJ/RSI 切换；分钟线失败时明确提示，不用日线伪装 |
 | **自选监控** [`Portfolio.vue`](frontend/src/views/Portfolio.vue) | `/stock/me/watchlist` + alertEngine 轮询 | 5 种预警类型（涨跌 % / 价格突破 / 当日 %）；跨设备同步 |
