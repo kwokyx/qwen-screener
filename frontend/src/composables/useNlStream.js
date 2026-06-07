@@ -174,7 +174,7 @@ function turnToContext(turn, recentTurns = [], sessionId = null) {
  *
  * 状态：idle → thinking → parsed → screening → done | error
  * @param {{saveThread: function, get: function, activate: function, activeSession: object}} historyStore  pinia chatHistory store
- * @param {{onResult?: (codes: string[]) => void}} hooks  事件钩子（如懒加载 sparkline）
+ * @param {{onResult?: (codes: string[]) => void, startFresh?: boolean}} hooks  事件钩子（如懒加载 sparkline）
  */
 export function useNlStream(historyStore, hooks = {}) {
   // ---- 状态 ----
@@ -190,7 +190,8 @@ export function useNlStream(historyStore, hooks = {}) {
   const toolCalls = ref([])
   const reactSteps = ref([])
   const errorMsg = ref('')
-  const thread = ref(loadInitialThread(historyStore))
+  const startFresh = Boolean(hooks.startFresh)
+  const thread = ref(startFresh ? [] : loadInitialThread(historyStore))
 
   // 各阶段时间戳，inspector 显示用时
   const tStart = ref(0)
@@ -212,6 +213,7 @@ export function useNlStream(historyStore, hooks = {}) {
 
   function reset() {
     phase.value = 'idle'
+    lastQuery.value = ''
     thinkingBuf.value = ''
     parsedConditions.value = []
     screenMeta.value = null
@@ -222,6 +224,9 @@ export function useNlStream(historyStore, hooks = {}) {
     toolCalls.value = []
     reactSteps.value = []
     errorMsg.value = ''
+    tStart.value = 0
+    tParsed.value = 0
+    tDone.value = 0
   }
 
   function restoreLatestThreadState() {
@@ -541,7 +546,11 @@ export function useNlStream(historyStore, hooks = {}) {
     return ok
   }
 
-  restoreLatestThreadState()
+  if (startFresh) {
+    persistCurrentThread([])
+  } else {
+    restoreLatestThreadState()
+  }
 
   watch(
     () => historyStore.activeId,

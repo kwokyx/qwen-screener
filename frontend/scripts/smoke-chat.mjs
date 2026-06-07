@@ -210,6 +210,55 @@ async function clickByText(cdp, text, options = {}) {
   return result
 }
 
+async function nativeClickByText(cdp, text, options = {}) {
+  const selector = options.selector || 'button,a,[role="button"]'
+  const index = options.last ? 'matches.length - 1' : '0'
+  const target = await evaluate(cdp, `(() => {
+    const text = ${JSON.stringify(text)};
+    const selector = ${JSON.stringify(selector)};
+    const matches = [...document.querySelectorAll(selector)].filter((el) => {
+      const content = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+      const rect = el.getBoundingClientRect();
+      return content.includes(text) && rect.width > 0 && rect.height > 0 && !el.disabled;
+    });
+    const el = matches[${index}];
+    if (!el) {
+      return {
+        ok: false,
+        available: [...document.querySelectorAll(selector)]
+          .map((node) => (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 30),
+      };
+    }
+    const rect = el.getBoundingClientRect();
+    return {
+      ok: true,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      tag: el.tagName,
+      text: (el.innerText || el.textContent || '').trim(),
+    };
+  })()`)
+  if (!target?.ok) fail(`Could not click text: ${text}`, target)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: target.x, y: target.y })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: target.x,
+    y: target.y,
+    button: 'left',
+    clickCount: 1,
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: target.x,
+    y: target.y,
+    button: 'left',
+    clickCount: 1,
+  })
+  return target
+}
+
 const CHAT_SSE_MOCK_SOURCE = `(() => {
       if (window.__chatSmokeMockInstalled) return;
       window.__chatSmokeMockInstalled = true;
@@ -834,6 +883,39 @@ async function run() {
     })()`)
     if (mobile.overflowers.length) fail('Mobile chat layout has visible overflow.', mobile)
 
+    await setViewport(cdp, 1440, 900)
+    await cdp.send('Page.navigate', { url: `${BASE_URL}/dashboard` })
+    await waitForExpression(cdp, 'location.pathname === "/dashboard"', 'dashboard before AI stock picker nav')
+    const navClick = await nativeClickByText(cdp, 'AI选股', {
+      selector: '.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a',
+    })
+    const navDeadline = Date.now() + 15000
+    let navState = null
+    while (Date.now() < navDeadline) {
+      navState = await evaluate(cdp, `(() => ({
+        href: location.href,
+        pathname: location.pathname,
+        hasHome: document.body.innerText.includes('用自然语言筛选 A 股'),
+        turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
+        menuItems: [...document.querySelectorAll('.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a')]
+          .map((node) => (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 20),
+        bodyStart: document.body.innerText.slice(0, 300),
+      }))()`)
+      if (navState.pathname === '/chat' && navState.hasHome) break
+      await delay(100)
+    }
+    if (navState?.pathname !== '/chat' || !navState?.hasHome) {
+      fail('Timed out waiting for AI stock picker nav opens home.', { navClick, navState })
+    }
+    const freshHome = await evaluate(cdp, `(() => ({
+      href: location.href,
+      turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
+      hasHome: document.body.innerText.includes('用自然语言筛选 A 股'),
+    }))()`)
+    if (!freshHome.hasHome || freshHome.turns !== 0) fail('AI stock picker nav did not open the home state.', freshHome)
+
     console.log(JSON.stringify({
       status: 'ok',
       baseUrl: BASE_URL,
@@ -851,6 +933,7 @@ async function run() {
         })),
       },
       mobile,
+      freshHome,
     }, null, 2))
   } finally {
     if (cdp) {

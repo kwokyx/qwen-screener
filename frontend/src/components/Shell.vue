@@ -45,6 +45,10 @@ const userMenuOptions = computed(() => [
 ])
 
 function handleMenuSelect(key) {
+  if (key === 'chat') {
+    router.push({ name: 'chat', query: { fresh: Date.now().toString(36) } })
+    return
+  }
   router.push({ name: key })
 }
 

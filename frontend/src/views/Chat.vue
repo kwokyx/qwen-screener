@@ -25,7 +25,10 @@ const input = ref('')
 const { load: loadSparks, get: spark } = useKlineCache(30)
 
 // SSE 状态机：把流式逻辑都委托给 composable
-const stream = useNlStream(history, { onResult: loadSparks })
+const stream = useNlStream(history, {
+  onResult: loadSparks,
+  startFresh: Boolean(route.query.fresh),
+})
 const {
   phase, lastQuery, thinkingBuf, parsedConditions, screenMeta, result, agentAnswer, agentPlan, toolTrace, toolCalls, errorMsg,
   thread, liveTurn,
@@ -295,7 +298,7 @@ async function openFullResults(turn = latestTurn.value) {
 function newSession() {
   if (isStreaming.value) stop()
   clearThread()
-  history.newSession()
+  input.value = ''
 }
 
 function retryTurn(turn) {
@@ -322,11 +325,15 @@ function fmtRelTime(ts) {
   return `${d.getMonth() + 1}-${d.getDate()}`
 }
 
-// 从其他页面跳转携带 ?q=xxx 时自动发送
-onMounted(() => {
+function consumeRouteIntent() {
   const sessionId = route.query.session
   if (sessionId && typeof sessionId === 'string') {
     streamRestore(sessionId)
+    router.replace({ path: '/chat' })
+    return
+  }
+  if (route.query.fresh) {
+    newSession()
     router.replace({ path: '/chat' })
     return
   }
@@ -337,7 +344,11 @@ onMounted(() => {
     // 用过即清，刷新不重发
     router.replace({ path: '/chat' })
   }
-})
+}
+
+// 从其他页面跳转携带 ?q=xxx 时自动发送；导航点击 AI选股携带 ?fresh=... 时回到起始态。
+onMounted(consumeRouteIntent)
+watch(() => route.fullPath, consumeRouteIntent)
 
 watch(
   () => conversationTurns.value.map((turn) => [
