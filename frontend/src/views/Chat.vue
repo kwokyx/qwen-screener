@@ -106,6 +106,18 @@ const thinkingPreview = computed(() => {
   return '…' + s.slice(-200)
 })
 const textOnlyTools = ['strategy_design', 'ask_clarification', 'explain_result', 'stock_detail']
+const executionTools = new Set([
+  'stock_screen',
+  'strategy_select',
+  'result_sort',
+  'sort_results',
+  'paginate_results',
+  'stock_detail',
+  'explain_result',
+  'strategy_design',
+])
+const isExecutionTool = (tool) => executionTools.has(tool)
+const visibleToolCalls = (calls = []) => (calls || []).filter((call) => isExecutionTool(call?.name))
 const turnResultItems = (turn) => (turn?.result?.items || []).slice(0, 6)
 const hasTurnAnswer = (turn) => Boolean((turn?.agentAnswer || '').trim())
 const turnThinkingPreview = (turn) => {
@@ -183,6 +195,8 @@ const runtimeRows = computed(() => {
   )
   if (!hasTiming) return []
   const tool = meta.tool || turn?.agentPlan?.tool || agentPlan.value?.tool
+  const visibleCalls = visibleToolCalls(turn?.toolCalls || toolCalls.value || [])
+  if (!turn?.result && !result.value && !isExecutionTool(tool) && !visibleCalls.length) return []
   const modelMs = Number(timings.model_ms || 0)
   const toolMs = Number(timings.tool_ms || 0)
   const usedModel = meta.ai_status?.used === true || meta.ai_status?.source === 'ai_agent'
@@ -207,14 +221,32 @@ const runtimeRows = computed(() => {
       value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : (phase.value === 'screening' ? '执行中…' : '0ms'),
       state: phase.value === 'screening' ? 'running' : 'local',
     })
-  } else if (tool === 'sort_results' || tool === 'paginate_results') {
+  } else if (tool === 'result_sort' || tool === 'sort_results' || tool === 'paginate_results') {
     rows.push({
       label: '本地结果操作',
       value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : '0ms',
       state: 'local',
     })
+  } else if (tool === 'stock_detail') {
+    rows.push({
+      label: '个股详情',
+      value: toolMs > 0 ? `定位 ${fmtRuntimeMs(toolMs)}` : '已定位',
+      state: 'local',
+    })
+  } else if (tool === 'explain_result') {
+    rows.push({
+      label: '结果解释',
+      value: toolMs > 0 ? `生成 ${fmtRuntimeMs(toolMs)}` : '已生成',
+      state: 'local',
+    })
+  } else if (tool === 'strategy_design') {
+    rows.push({
+      label: '策略设计',
+      value: toolMs > 0 ? `生成 ${fmtRuntimeMs(toolMs)}` : '仅生成条件',
+      state: 'local',
+    })
   } else {
-    rows.push({ label: '本地工具', value: '未执行筛选', state: 'skip' })
+    rows.push({ label: '本地工具', value: '已处理', state: 'local' })
   }
   if (reason) {
     rows.push(
@@ -280,7 +312,7 @@ function traceDisplay(trace) {
     .replace(/^未调用 screener_engine\.screen：/, '未执行股票筛选：')
 }
 
-const toolCallRows = computed(() => latestTurn.value?.toolCalls || toolCalls.value || [])
+const toolCallRows = computed(() => visibleToolCalls(latestTurn.value?.toolCalls || toolCalls.value || []))
 const toolStatusLabel = (status) => ({
   pending: '等待',
   running: '执行中',

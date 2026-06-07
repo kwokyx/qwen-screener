@@ -608,7 +608,7 @@ async function ensureMockChatSse(cdp) {
   if (!installed) fail('Chat mock SSE failed to install in current document.')
 }
 
-async function sendChat(cdp, query, expectedText, expectedTool, expectsResult) {
+async function sendChat(cdp, query, expectedText, expectedTool, expectsResult, options = {}) {
   await evaluate(cdp, `(() => {
     const input = document.querySelector('textarea');
     if (!input) return false;
@@ -672,6 +672,14 @@ async function sendChat(cdp, query, expectedText, expectedTool, expectsResult) {
   if (!call?.tools?.includes(expectedTool)) fail(`Unexpected tool for ${query}.`, call)
   if (expectsResult && call.resultEvents < 1 && !call.hasEmbeddedResult) fail(`Expected result payload for ${query}.`, call)
   if (!expectsResult && call.resultEvents !== 0) fail(`Did not expect result event for ${query}.`, call)
+  if (options.expectExecution === false) {
+    const executionVisible = await evaluate(cdp, '!!document.querySelector(".execution-strip")')
+    if (executionVisible) fail(`Did not expect execution strip for plain chat: ${query}.`)
+  }
+  if (options.expectExecution === true) {
+    const executionVisible = await evaluate(cdp, '!!document.querySelector(".execution-strip")')
+    if (!executionVisible) fail(`Expected execution strip for tool call: ${query}.`)
+  }
   return call
 }
 
@@ -747,10 +755,10 @@ async function run() {
     await ensureMockChatSse(cdp)
 
     const calls = []
-    calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false))
-    calls.push(await sendChat(cdp, '这个 Agent 是什么', '有界选股 Agent', 'ask_clarification', false))
-    calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', 'ask_clarification', false))
-    calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true))
+    calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', 'ask_clarification', false, { expectExecution: false }))
+    calls.push(await sendChat(cdp, '这个 Agent 是什么', '有界选股 Agent', 'ask_clarification', false, { expectExecution: false }))
+    calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', 'ask_clarification', false, { expectExecution: false }))
+    calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true, { expectExecution: true }))
     calls.push(await sendChat(cdp, '找最近强势突破的股票', '策略选股结果', 'strategy_select', true))
     calls.push(await sendChat(cdp, '为什么这些股票排在前面', '招商银行排在前面', 'explain_result', false))
     calls.push(await sendChat(cdp, '按股息率排序', '南京银行', 'result_sort', true))
