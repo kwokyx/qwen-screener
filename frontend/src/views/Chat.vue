@@ -199,17 +199,6 @@ const runtimeRows = computed(() => {
   }
   return rows
 })
-const aiStatusLine = computed(() => {
-  if (!aiStatus.lastChecked) return 'AI 检测中…'
-  if (aiStatus.pending) return 'AI 检测中 · 暂不自动筛选'
-  if (aiStatus.stale) return 'AI 状态刷新中 · 使用上次结果'
-  if (!aiStatus.configured && aiStatus.reason && !aiStatus.reason.includes('未配置')) {
-    return 'AI 探测失败 · 暂不自动筛选'
-  }
-  if (!aiStatus.configured) return 'AI 未配置 · 普通对话'
-  if (!aiStatus.isUp) return `${aiStatus.backend || 'AI'} 不可用 · 不自动筛选`
-  return `AI Agent 就绪 · ${[aiStatus.backend, aiStatus.model].filter(Boolean).join(' / ')}`
-})
 const agentAnswerTitle = computed(() => agentPlan.value?.tool_label || 'Agent 结论')
 const agentToolLabel = computed(() => agentPlan.value?.tool_label || (result.value ? '股票筛选' : '待判断'))
 const conditionIntro = computed(() => {
@@ -793,7 +782,7 @@ const stageColor = (s) => ({
                   <div class="composer-bar">
                     <div class="composer-modes">
                       <span class="composer-status" :class="{ warning: !aiStatus.isUp }">
-                        {{ phase === 'thinking' ? '选择下一步中…' : phase === 'screening' ? '本地工具执行中…' : aiStatusLine }}
+                        {{ phase === 'thinking' ? '思考中…' : phase === 'screening' ? '执行中…' : '' }}
                       </span>
                     </div>
                     <button v-if="isStreaming" class="send-icon-btn stop" type="button" title="停止" aria-label="停止" @click="stop">
@@ -804,7 +793,6 @@ const stageColor = (s) => ({
                     </button>
                   </div>
                 </form>
-                <div class="composer-hint-line">Enter 发送 · 明确工具才执行筛选 · 普通对话不会伪装股票结果</div>
               </div>
             </div>
           </template>
@@ -2653,14 +2641,6 @@ const stageColor = (s) => ({
   background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.94) 28%, #FFFFFF 62%);
 }
 
-.composer-hint-line {
-  max-width: 760px;
-  margin: 8px auto 0;
-  color: #A1A1AA;
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: center;
-}
 
 .composer-status {
   overflow: hidden;
