@@ -122,10 +122,14 @@ const allAlerts = computed(() => {
 const fmtPE = (v) => v == null ? '—' : v < 0 ? '亏损' : v.toFixed(1)
 const fmtROE = (v) => v == null ? '—' : `${v.toFixed(1)}%`
 const fmtNum = (v, digits = 2) => v == null ? '—' : Number(v).toFixed(digits)
-const fmtDays = (ts) => {
+const fmtDate = (ts) => {
   if (!ts) return '—'
-  const d = Math.floor((Date.now() / 1000 - ts) / 86400)
-  return d <= 0 ? '今天' : `${d} 天`
+  const d = new Date(ts * 1000)
+  if (Number.isNaN(d.getTime())) return '—'
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 const alertText = (a) => {
   if (a.type === 'pct_up') return `累计涨幅 >= ${a.threshold}%`
@@ -201,7 +205,7 @@ const watchColumns = computed(() => [
       ])
     },
   },
-  { title: '加入日期', key: 'addedAt', align: 'right', render: row => mono(fmtDays(row.addedAt), { color: Preview.textMuted }) },
+  { title: '加入日期', key: 'addedAt', align: 'right', render: row => mono(fmtDate(row.addedAt), { color: Preview.textMuted }) },
   {
     title: '预警',
     key: 'alerts',
