@@ -539,8 +539,12 @@ const stageColor = (s) => ({
 
                       </div>
 
+                      <div v-if="!toolCallRows.length && turn.phase !== 'done' && turn.phase !== 'idle'" class="thinking-line">
+                        <Icon name="loader" :size="13" class="spin" />
+                        <span>正在分析…</span>
+                      </div>
 
-                      <div v-if="toolCallRows.length" class="tool-trace">
+                      <div v-if="toolCallRows.length" class="chat-tool-trace">
                         <div class="tool-trace-head">
                           <Icon name="tools" :size="13" />
                           <span>工具调用</span>
@@ -1862,6 +1866,16 @@ const stageColor = (s) => ({
   50%  { content: '..'; }
   75%  { content: '...'; }
   100% { content: ''; }
+}
+
+
+.thinking-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #71717A;
+  font-size: 12.5px;
+  margin-bottom: 10px;
 }
 
 </style>
