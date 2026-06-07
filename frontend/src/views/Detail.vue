@@ -15,7 +15,6 @@ import {
   NDescriptionsItem,
   NGi,
   NGrid,
-  NProgress,
   NResult,
   NSkeleton,
   NSpace,
@@ -34,12 +33,6 @@ import { useAiStatusStore } from '../stores/aiStatus'
 
 const aiStatus = useAiStatusStore()
 import { friendlyError } from '../shared/errors.js'
-import {
-  detailQualityFields,
-  detailQualityRecord,
-  formatCoverage,
-  qualityForRecord,
-} from '../shared/dataQuality.js'
 
 import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
@@ -478,16 +471,6 @@ const quoteSourceTitle = computed(() => {
   if (quote.value?.source === 'tencent') return '来自实时行情 provider'
   return '实时行情上游不可用或超时，当前使用本地最新日线'
 })
-const detailQuality = computed(() => qualityForRecord(
-  detailQualityRecord(detail.value, quote.value),
-  detailQualityFields,
-))
-const detailQualityPercent = computed(() => Math.round(detailQuality.value.ratio * 100))
-const detailQualityStatus = computed(() => detailQuality.value.tagType)
-const detailMissingText = computed(() => {
-  const labels = detailQuality.value.missingLabels
-  return labels.length ? labels.join('、') : '关键字段完整'
-})
 const change = computed(() => {
   const q = displayQuote.value
   if (!q) return null
@@ -907,48 +890,6 @@ function peerRowProps(row) {
             </NButton>
           </NCard>
 
-          <NCard title="数据状态" size="small" class="section-card">
-            <div class="quality-head">
-              <span>关键字段覆盖</span>
-              <strong>{{ formatCoverage(detailQuality.ratio) }}</strong>
-            </div>
-            <NProgress
-              type="line"
-              :percentage="detailQualityPercent"
-              :height="6"
-              :show-indicator="false"
-              :status="detailQualityStatus"
-            />
-            <div class="quality-meta">
-              <span>最近交易日</span>
-              <strong>{{ detail.latest?.trade_date || '—' }}</strong>
-            </div>
-            <div class="quality-fields">
-              <NTag
-                v-if="!detailQuality.missing.length"
-                size="small"
-                type="success"
-                :bordered="false"
-              >
-                关键字段完整
-              </NTag>
-              <template v-else>
-                <NTag
-                  v-for="field in detailQuality.missing"
-                  :key="field.key"
-                  size="small"
-                  type="warning"
-                  :bordered="false"
-                >
-                  缺 {{ field.label }}
-                </NTag>
-              </template>
-            </div>
-            <p class="quality-note">
-              {{ detailMissingText }}；缺失项会影响相关条件筛选和排序。
-            </p>
-          </NCard>
-
           <NAlert type="warning" :bordered="false" class="risk-note">
             <template #icon><Icon name="shield" :size="11" /></template>
             仅供研究参考，不构成投资建议
@@ -1238,51 +1179,6 @@ function peerRowProps(row) {
   color: #111111;
   font-weight: 700;
   white-space: nowrap;
-}
-
-/* ---- Data Quality ---- */
-.quality-head,
-.quality-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.quality-head {
-  margin-bottom: 8px;
-  font-size: 12px;
-  color: #52525B;
-}
-
-.quality-head strong,
-.quality-meta strong {
-  color: #111111;
-  font-family: 'IBM Plex Mono', monospace;
-}
-
-.quality-meta {
-  margin-top: 8px;
-  font-size: 11px;
-  color: #71717A;
-}
-
-.quality-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.quality-fields :deep(.n-tag) {
-  border-radius: 4px;
-}
-
-.quality-note {
-  margin: 8px 0 0;
-  color: #71717A;
-  font-size: 11px;
-  line-height: 1.55;
 }
 
 /* ---- AI ---- */
