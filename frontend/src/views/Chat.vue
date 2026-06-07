@@ -669,7 +669,7 @@ const stageColor = (s) => ({
                               <strong>{{ fmtMetric(s.close) }}</strong>
                               <small :style="{ color: s.change_pct > 0 ? '#E04F76' : s.change_pct < 0 ? '#16A35C' : '#A1A1AA' }">{{ fmtChange(s.change_pct) }}</small>
                             </span>
-                            <span class="result-trend"><Sparkline :data="spark(s.code)" :width="72" :height="20" /></span>
+                            <span class="result-trend"><Sparkline :data="spark(s.code)" :color="s.change_pct >= 0 ? '#C8312A' : '#0E8A66'" :fill="s.change_pct >= 0 ? '#C8312A22' : '#0E8A6622'" :width="72" :height="20" /></span>
                           </button>
                         </div>
                         <EmptyState v-else icon="filter" :title="emptyResultTitleFor(turn)" :subtitle="zeroResultHintFor(turn)" />

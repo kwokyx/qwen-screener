@@ -575,7 +575,7 @@ const columns = computed(() => [
     title: '30日走势',
     key: 'trend',
     width: 94,
-    render: (s) => h(Sparkline, { data: resultSpark(s.code), width: 64, height: 20 }),
+    render: (s) => h(Sparkline, { data: resultSpark(s.code), color: s.change_pct >= 0 ? '#C8312A' : '#0E8A66', fill: s.change_pct >= 0 ? '#C8312A22' : '#0E8A6622', width: 64, height: 20 }),
   },
   {
     title: '操作',

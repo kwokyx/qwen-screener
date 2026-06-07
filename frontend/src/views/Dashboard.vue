@@ -294,7 +294,7 @@ onMounted(loadAll)
                 <div class="index-name">{{ idx.name }}</div>
                 <div class="index-code">{{ idx.code }} · {{ idx.constituents }} 只</div>
               </div>
-              <Sparkline :data="idxSpark[i] || []" :width="64" :height="24" />
+              <Sparkline :data="idxSpark[i] || []" :color="idx.change_pct >= 0 ? '#C8312A' : '#0E8A66'" :fill="idx.change_pct >= 0 ? '#C8312A22' : '#0E8A6622'" :width="64" :height="24" />
             </div>
             <div class="index-value-row">
               <span class="index-value" :class="idx.change_pct >= 0 ? 'up' : 'down'">
