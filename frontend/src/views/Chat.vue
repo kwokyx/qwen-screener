@@ -159,46 +159,6 @@ function zeroResultHintFor(turn) {
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
 const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
 const sourceLabel = computed(() => agentSourceLabel(agentPlan.value, screenMeta.value?.ai_status))
-function fallbackReasonText(reason) {
-  if (!reason) return ''
-  if (reason === 'local_fast_path') return '本地快速路径'
-  if (reason === 'local_rules') return '本地规则'
-  const text = String(reason)
-  return text.length > 42 ? `${text.slice(0, 42)}…` : text
-}
-const runtimeRows = computed(() => {
-  const turn = latestTurn.value
-  const meta = turn?.screenMeta || screenMeta.value || {}
-  const timings = meta.timings || meta
-  const hasTiming = (
-    timings.planning_ms != null ||
-    timings.model_ms != null ||
-    timings.tool_ms != null ||
-    timings.fallback_reason != null ||
-    timings.completion_reason != null
-  )
-  if (!hasTiming) return []
-  const tool = meta.tool || turn?.agentPlan?.tool || agentPlan.value?.tool
-  const visibleCalls = visibleToolCalls(turn?.toolCalls || toolCalls.value || [])
-  if (!turn?.result && !result.value && !isExecutionTool(tool) && !visibleCalls.length) return []
-  const reason = fallbackReasonText(timings.fallback_reason)
-  const toolLabel = agentToolLabel.value
-  const rows = [
-    {
-      label: '执行方式',
-      value: `已使用${toolLabel}工具`,
-      state: 'local',
-    },
-  ]
-  if (reason) {
-    rows.push({
-      label: '未执行原因',
-      value: reason,
-      state: 'skip',
-    })
-  }
-  return rows
-})
 const agentAnswerTitle = computed(() => agentPlan.value?.tool_label || 'Agent 结论')
 const agentToolLabel = computed(() => agentPlan.value?.tool_label || (result.value ? '股票筛选' : '待判断'))
 const conditionIntro = computed(() => {
@@ -241,22 +201,6 @@ function traceDisplay(trace) {
 }
 
 const toolCallRows = computed(() => visibleToolCalls(latestTurn.value?.toolCalls || toolCalls.value || []))
-const toolStatusLabel = (status) => ({
-  pending: '等待',
-  running: '执行中',
-  done: '完成',
-  skipped: '跳过',
-  failed: '失败',
-}[status] || status || '完成')
-const toolStatusColor = (status) => ({
-  pending: A2.textDim,
-  running: A2.qwen,
-  done: A2.up,
-  skipped: A2.textMuted,
-  failed: A2.down,
-}[status] || A2.textDim)
-function toolParamText(call) {
-  const result = call?.result || {}
   if (call?.name === 'stock_screen' && result.total != null) return `命中 ${result.total} 只`
   if (call?.name === 'strategy_select' && result.total != null) return `命中 ${result.total} 只`
   if (call?.name === 'stock_detail' && result.code) return `目标 ${result.name || result.code}`
@@ -750,21 +694,21 @@ const stageColor = (s) => ({
                 </div>
               </div>
 
-              <div v-if="runtimeRows.length || toolCallRows.length" class="execution-strip">
-                <div v-if="runtimeRows.length" class="runtime-list">
-                  <div v-for="row in runtimeRows" :key="row.label" class="runtime-row" :class="row.state">
-                    <span>{{ row.label }}</span>
-                    <strong>{{ row.value }}</strong>
-                  </div>
+              <div v-if="toolCallRows.length" class="tool-trace">
+                <div class="tool-trace-head">
+                  <Icon name="tools" :size="13" />
+                  <span>工具调用</span>
                 </div>
-                <div v-if="toolCallRows.length" class="tool-call-list">
-                  <div v-for="call in toolCallRows" :key="call.id" class="tool-call-row" :style="{ '--state': toolStatusColor(call.status) }">
-                    <div class="tool-call-head">
-                      <span class="stage-dot" :class="call.status" :style="{ '--c': toolStatusColor(call.status) }"></span>
-                      <strong>{{ call.label || call.name }}</strong>
-                      <em>{{ toolStatusLabel(call.status) }}</em>
+                <div class="tool-call-list">
+                  <div v-for="(call, i) in toolCallRows" :key="call.id" class="tool-call" :class="{ pending: call.status === 'running' }">
+                    <span class="tool-call-index">
+                      <Icon v-if="call.status === 'running'" name="loader" :size="12" class="spin" />
+                      <template v-else>{{ i + 1 }}</template>
+                    </span>
+                    <div class="tool-call-main">
+                      <div class="tool-call-name">{{ call.label || call.name }}</div>
+                      <div class="tool-call-summary">{{ call.message }}<span v-if="call.status === 'running'" class="tool-dots"></span></div>
                     </div>
-                    <div v-if="toolParamText(call)" class="tool-call-meta">{{ toolParamText(call) }}</div>
                   </div>
                 </div>
               </div>
@@ -1721,91 +1665,82 @@ const stageColor = (s) => ({
 .history-item:hover .history-del { display: inline-flex; }
 .history-del:hover { background: rgba(200, 49, 42, 0.10); color: #C8312A; }
 
-.runtime-list {
-  display: grid;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.runtime-row {
-  display: grid;
-  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
-  align-items: center;
+.tool-trace {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
-  padding: 8px 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
   border: 1px solid #EDEDED;
-  border-radius: 6px;
-  background: #FFFFFF;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
-  line-height: 1.35;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(36, 86, 216, 0.06), rgba(45, 125, 82, 0.05)), #F7F7F7;
 }
-
-.runtime-row span {
-  color: #A1A1AA;
-  font-weight: 600;
-}
-
-.runtime-row strong {
-  min-width: 0;
-  overflow: hidden;
-  color: #2F3137;
+.tool-trace-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #3F3F46;
+  font-size: 12px;
   font-weight: 700;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-.runtime-row.model { border-color: rgba(36, 86, 216, 0.22); }
-.runtime-row.local { border-color: rgba(45, 125, 82, 0.22); }
-.runtime-row.running { border-color: rgba(36, 86, 216, 0.32); background: rgba(36, 86, 216, 0.05); }
-.runtime-row.skip { background: #F7F7F7; }
-
 .tool-call-list {
   display: grid;
-  gap: 6px;
-}
-
-.tool-call-row {
-  padding: 9px 10px;
-  border-left: 2px solid var(--state);
-  border-radius: 0 6px 6px 0;
-  background: #F7F7F7;
-}
-
-.tool-call-head {
-  display: flex;
-  align-items: center;
   gap: 7px;
-  color: #111111;
-  font-size: 10.8px;
-  font-weight: 600;
 }
-
-.tool-call-head strong {
+.tool-call {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+}
+.tool-call-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #2456D8;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+.tool-call-main {
   min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-.tool-call-head em {
-  flex-shrink: 0;
-  color: #71717A;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 9.5px;
-  font-style: normal;
-  font-weight: 600;
+.tool-call-name {
+  color: #111111;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.35;
 }
-
-.tool-call-meta {
-  margin-top: 4px;
+.tool-call-summary {
+  margin-top: 2px;
   color: #71717A;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 10px;
-  line-height: 1.45;
-  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tool-call.pending .tool-call-name {
+  color: #2456D8;
+}
+.tool-call.pending .tool-call-index {
+  background: transparent;
+  color: #2456D8;
+}
+.tool-dots::after {
+  content: '';
+  display: inline-block;
+  width: 1em;
+  text-align: left;
+  animation: tool-dots 1.2s steps(4, end) infinite;
+}
+@keyframes tool-dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+  100% { content: ''; }
 }
 
 .risk-note {
@@ -1956,19 +1891,6 @@ const stageColor = (s) => ({
   100% { background-position: 0 50%; }
 }
 
-/* inspector 阶段圆点 */
-.stage-dot {
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: var(--c);
-  display: inline-block;
-}
-.stage-dot.running { animation: pulse-ring 1.2s infinite; }
-@keyframes pulse-ring {
-  0%   { box-shadow: 0 0 0 0 rgba(36,86,216,0.45); }
-  70%  { box-shadow: 0 0 0 6px rgba(36,86,216,0); }
-  100% { box-shadow: 0 0 0 0 rgba(36,86,216,0); }
-}
 
 /* Ported from the user's AI workspace: two-pane chat shell + docked composer. */
 .ai-page {
@@ -2554,29 +2476,6 @@ const stageColor = (s) => ({
   gap: 7px;
 }
 
-.tool-trace {
-  display: grid;
-  gap: 8px;
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  border: 1px solid #EDEDED;
-  border-radius: 14px;
-  background: #F7F7F7;
-}
-
-.tool-trace-head {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #3F3F46;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.screening-row {
-  grid-template-columns: 36px minmax(0, 1fr) 84px;
-  padding: 8px 0;
-}
 
 .thinking-placeholder {
   display: inline-flex;
@@ -2615,18 +2514,6 @@ const stageColor = (s) => ({
   font-size: 12px;
 }
 
-.execution-strip {
-  display: grid;
-  width: min(820px, calc(100% - 48px));
-  gap: 8px;
-  margin: 0 auto;
-  padding: 8px 0 4px;
-}
-
-.execution-strip .runtime-list,
-.execution-strip .tool-call-list {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
 
 .composer-dock {
   flex-shrink: 0;
@@ -2712,7 +2599,6 @@ const stageColor = (s) => ({
     padding: 10px 16px 14px;
   }
 
-  .execution-strip {
     width: calc(100% - 32px);
   }
 }
