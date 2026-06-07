@@ -18,8 +18,8 @@ from app.config import settings
 from app.schemas.screener import ALLOWED_FIELDS, FilterCondition
 from .transport import openai_client
 
-_AGENT_PLAN_TIMEOUT_SECONDS = 10.0
-_AGENT_REACT_STEP_TIMEOUT_SECONDS = 12.0
+_AGENT_PLAN_TIMEOUT_SECONDS = float(settings.agent_plan_timeout_seconds)
+_AGENT_REACT_STEP_TIMEOUT_SECONDS = float(settings.agent_react_step_timeout_seconds)
 _LAST_PLAN_FAILURE_REASON: ContextVar[str | None] = ContextVar(
     "last_agent_plan_failure_reason",
     default=None,
@@ -572,7 +572,7 @@ def plan_react_step(
 
     模型可以选择一个工具 action，也可以在已有 observation 后给出 final。
     任何非法工具、非法 JSON/schema、超时或请求失败都返回 None，由 orchestrator
-    使用本地高置信度兜底或澄清。
+    安全停止或返回普通回复；用户入口不会自动执行本地筛选兜底。
     """
     reset_plan_failure_reason()
     chat_client = _agent_chat_client()

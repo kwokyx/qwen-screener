@@ -4,7 +4,11 @@ import pytest
 
 from app.schemas.screener import ALLOWED_FIELDS, FilterCondition
 from app.services import agent_react, strategy_selector
-from app.services.qwen_client.agent_planner import AgentPlanResult, AgentReactDecision
+from app.services.qwen_client.agent_planner import (
+    _AGENT_REACT_STEP_TIMEOUT_SECONDS,
+    AgentPlanResult,
+    AgentReactDecision,
+)
 
 
 LAST_RESULT_CONTEXT = {
@@ -494,9 +498,10 @@ def test_bounded_react_model_path_and_timeout_metadata(db, seed_stocks, monkeypa
         return None
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", slow_timeout)
-    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 12 秒")
+    timeout_reason = f"模型 ReAct 步骤超过 {_AGENT_REACT_STEP_TIMEOUT_SECONDS:g} 秒"
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: timeout_reason)
     fallback = agent_react.run_chat_react_agent(db, "找一个我没定义过的神奇策略", context={}, limit=10)
     final_event = fallback.react_steps[-1]
     assert fallback.plan.ai_used is False
     assert final_event["model_ms"] > 0
-    assert "模型 ReAct 步骤超过 12 秒" in final_event["fallback_reason"]
+    assert timeout_reason in final_event["fallback_reason"]

@@ -207,6 +207,22 @@ def test_plan_agent_turn_hard_times_out_slow_model(monkeypatch):
     assert agent_planner.plan_agent_turn("你好") is None
 
 
+def test_plan_react_step_uses_configured_timeout(monkeypatch):
+    captured = {}
+    _configure(
+        monkeypatch,
+        "stock_screen",
+        {"conditions": [{"field": "industry", "op": "in", "value": ["银行"]}]},
+        captured,
+    )
+
+    result = agent_planner.plan_react_step("低估值银行股")
+
+    assert result is not None
+    assert result.kind == "action"
+    assert captured["timeout"] == agent_planner._AGENT_REACT_STEP_TIMEOUT_SECONDS
+
+
 def test_plan_agent_turn_supports_dashscope_compatible_function_call(monkeypatch):
     captured = {}
     monkeypatch.setattr(agent_planner.settings, "ai_backend", "dashscope")

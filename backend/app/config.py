@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.4-mini"
     openai_reasoning: str = "high"
     openai_responses_enabled: bool = True
+    agent_plan_timeout_seconds: float = 10.0
+    agent_react_step_timeout_seconds: float = 18.0
 
     # 阿里云百炼 dashscope（备用）
     dashscope_api_key: str = ""

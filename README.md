@@ -123,6 +123,8 @@ npm run dev                                     # → http://localhost:5173
 | `OPENAI_MODEL` | `qwen3.6-plus` | OpenCode Go 当前示例模型 |
 | `OPENAI_REASONING` | `high` | Responses API reasoning effort（Chat Completions 兼容模式不会使用） |
 | `OPENAI_RESPONSES_ENABLED` | `false` | OpenCode Go/Qwen 走 Chat Completions 时保持关闭，避免先探测不支持的 Responses API |
+| `AGENT_PLAN_TIMEOUT_SECONDS` | `10` | 旧 FC Agent 规划超时；超时后不执行本地筛选 |
+| `AGENT_REACT_STEP_TIMEOUT_SECONDS` | `18` | bounded ReAct 单步模型超时；慢时安全停止并保留 `fallback_reason` |
 | `DASHSCOPE_API_KEY` | — | 阿里云百炼 Key（[控制台](https://bailian.console.aliyun.com)） |
 | `QWEN_MODEL` | `qwen-plus` | dashscope 模型 |
 | `CORS_ORIGINS` | `http://localhost:5173` | 多个用逗号分隔 |

@@ -7,7 +7,11 @@ from fastapi.testclient import TestClient
 from app.schemas.screener import FilterCondition, ScreenRequest
 from app.main import app
 from app.services import qwen_client, strategy_selector
-from app.services.qwen_client.agent_planner import AgentPlanResult, AgentReactDecision
+from app.services.qwen_client.agent_planner import (
+    _AGENT_REACT_STEP_TIMEOUT_SECONDS,
+    AgentPlanResult,
+    AgentReactDecision,
+)
 
 
 def _events(body: str) -> list[dict]:
@@ -1221,7 +1225,8 @@ def test_nl_stream_react_tool_result_skips_final_timeout(db, seed_stocks, monkey
         )
 
     monkeypatch.setattr(strategy_selector.qwen_client, "plan_react_step", plan_react_step)
-    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: "模型 ReAct 步骤超过 12 秒")
+    timeout_reason = f"模型 ReAct 步骤超过 {_AGENT_REACT_STEP_TIMEOUT_SECONDS:g} 秒"
+    monkeypatch.setattr(strategy_selector.qwen_client, "last_plan_failure_reason", lambda: timeout_reason)
 
     client = TestClient(app)
     events = _stream_events(client, "请根据模型判断做一次筛选观察", context={})
