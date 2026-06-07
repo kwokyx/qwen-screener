@@ -159,27 +159,11 @@ function zeroResultHintFor(turn) {
 const isDesignResponse = computed(() => agentPlan.value?.tool === 'strategy_design')
 const isTextOnlyAgent = computed(() => textOnlyTools.includes(agentPlan.value?.tool) && !result.value)
 const sourceLabel = computed(() => agentSourceLabel(agentPlan.value, screenMeta.value?.ai_status))
-function fmtRuntimeMs(ms) {
-  const n = Number(ms || 0)
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}s`
-  return `${Math.max(0, Math.round(n))}ms`
-}
 function fallbackReasonText(reason) {
   if (!reason) return ''
   if (reason === 'local_fast_path') return '本地快速路径'
   if (reason === 'local_rules') return '本地规则'
   const text = String(reason)
-  return text.length > 42 ? `${text.slice(0, 42)}…` : text
-}
-function completionReasonText(reason) {
-  if (!reason) return ''
-  const text = String(reason)
-  if (text.includes('模型 ReAct 步骤超过') || text.includes('超过 8 秒')) {
-    return '模型最终总结超时，已展示工具结果'
-  }
-  if (text.includes('重复调用相同工具参数')) {
-    return '模型重复调用同一工具，已保留现有结果'
-  }
   return text.length > 42 ? `${text.slice(0, 42)}…` : text
 }
 const runtimeRows = computed(() => {
@@ -197,66 +181,21 @@ const runtimeRows = computed(() => {
   const tool = meta.tool || turn?.agentPlan?.tool || agentPlan.value?.tool
   const visibleCalls = visibleToolCalls(turn?.toolCalls || toolCalls.value || [])
   if (!turn?.result && !result.value && !isExecutionTool(tool) && !visibleCalls.length) return []
-  const modelMs = Number(timings.model_ms || 0)
-  const toolMs = Number(timings.tool_ms || 0)
-  const usedModel = meta.ai_status?.used === true || meta.ai_status?.source === 'ai_agent'
   const reason = fallbackReasonText(timings.fallback_reason)
-  const completionReason = completionReasonText(timings.completion_reason)
-  const modelAttempted = !usedModel && modelMs > 0
-  const fallbackByTimeout = modelAttempted && Boolean(timings.fallback_reason)
+  const toolLabel = agentToolLabel.value
   const rows = [
     {
-      label: '工具选择',
-      value: usedModel
-        ? `ReAct 模型 ${fmtRuntimeMs(modelMs)}`
-        : (fallbackByTimeout
-            ? `模型未给出工具调用 ${fmtRuntimeMs(modelMs)}`
-            : (modelAttempted ? `模型未完成 ${fmtRuntimeMs(modelMs)}` : `本地判断 ${fmtRuntimeMs(timings.planning_ms)}`)),
-      state: usedModel ? 'model' : (modelAttempted ? 'skip' : 'local'),
+      label: '执行方式',
+      value: `已使用${toolLabel}工具`,
+      state: 'local',
     },
   ]
-  if (tool === 'stock_screen' || tool === 'strategy_select') {
-    rows.push({
-      label: '本地工具',
-      value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : (phase.value === 'screening' ? '执行中…' : '0ms'),
-      state: phase.value === 'screening' ? 'running' : 'local',
-    })
-  } else if (tool === 'result_sort' || tool === 'sort_results' || tool === 'paginate_results') {
-    rows.push({
-      label: '本地结果操作',
-      value: toolMs > 0 ? `执行 ${fmtRuntimeMs(toolMs)}` : '0ms',
-      state: 'local',
-    })
-  } else if (tool === 'stock_detail') {
-    rows.push({
-      label: '个股详情',
-      value: toolMs > 0 ? `定位 ${fmtRuntimeMs(toolMs)}` : '已定位',
-      state: 'local',
-    })
-  } else if (tool === 'explain_result') {
-    rows.push({
-      label: '结果解释',
-      value: toolMs > 0 ? `生成 ${fmtRuntimeMs(toolMs)}` : '已生成',
-      state: 'local',
-    })
-  } else if (tool === 'strategy_design') {
-    rows.push({
-      label: '策略设计',
-      value: toolMs > 0 ? `生成 ${fmtRuntimeMs(toolMs)}` : '仅生成条件',
-      state: 'local',
-    })
-  } else {
-    rows.push({ label: '本地工具', value: '已处理', state: 'local' })
-  }
   if (reason) {
-    rows.push(
-      timings.fallback_reason === 'local_fast_path'
-        ? { label: '执行路径', value: reason, state: 'local' }
-        : { label: '未执行原因', value: reason, state: 'skip' },
-    )
-  }
-  if (completionReason) {
-    rows.push({ label: '总结状态', value: completionReason, state: 'skip' })
+    rows.push({
+      label: '未执行原因',
+      value: reason,
+      state: 'skip',
+    })
   }
   return rows
 })
@@ -342,8 +281,17 @@ function detailTargetFromToolCalls(calls = []) {
   return (calls || []).find((call) => call?.name === 'stock_detail' && call?.result?.code)?.result || null
 }
 
+function detailBasicsFromToolCalls(calls = []) {
+  const target = detailTargetFromToolCalls(calls)
+  return target?.basics || null
+}
+
 function turnDetailTarget(turn) {
   return detailTargetFromToolCalls(turn?.toolCalls)
+}
+
+function turnDetailBasics(turn) {
+  return detailBasicsFromToolCalls(turn?.toolCalls)
 }
 
 function openDetailTarget(target) {
@@ -713,14 +661,43 @@ const stageColor = (s) => ({
                           :compact="isTextOnlyTurn(turn)"
                           :streaming="isStreamingAnswerTurn(turn)"
                         />
-                        <button
+                        <div
                           v-if="turnDetailTarget(turn)"
-                          type="button"
-                          class="agent-detail-button"
+                          class="agent-detail-card"
                           @click="openDetailTarget(turnDetailTarget(turn))"
                         >
-                          打开详情 <Icon name="arrowRight" :size="12" />
-                        </button>
+                          <template v-if="turnDetailBasics(turn)">
+                            <div class="detail-card-head">
+                              <span class="detail-card-name">{{ turnDetailBasics(turn).name }}</span>
+                              <span class="detail-card-code">{{ turnDetailBasics(turn).code }}</span>
+                            </div>
+                            <div class="detail-card-meta">
+                              <span v-if="turnDetailBasics(turn).industry">{{ turnDetailBasics(turn).industry }}</span>
+                              <span v-if="turnDetailBasics(turn).market">{{ turnDetailBasics(turn).market }}</span>
+                              <span v-if="turnDetailBasics(turn).trade_date">{{ turnDetailBasics(turn).trade_date }}</span>
+                            </div>
+                            <div class="detail-card-stats">
+                              <span v-if="turnDetailBasics(turn).close != null" class="detail-stat">
+                                <em>{{ turnDetailBasics(turn).close?.toFixed(2) }}</em> 收盘
+                              </span>
+                              <span v-if="turnDetailBasics(turn).pe != null" class="detail-stat">
+                                <em>{{ turnDetailBasics(turn).pe?.toFixed(1) }}</em> PE
+                              </span>
+                              <span v-if="turnDetailBasics(turn).pb != null" class="detail-stat">
+                                <em>{{ turnDetailBasics(turn).pb?.toFixed(2) }}</em> PB
+                              </span>
+                              <span v-if="turnDetailBasics(turn).market_cap != null" class="detail-stat">
+                                <em>{{ turnDetailBasics(turn).market_cap?.toFixed(0) }}亿</em> 市值
+                              </span>
+                              <span v-if="turnDetailBasics(turn).dividend_yield != null" class="detail-stat">
+                                <em>{{ turnDetailBasics(turn).dividend_yield?.toFixed(2) }}%</em> 股息率
+                              </span>
+                            </div>
+                          </template>
+                          <div class="detail-card-action">
+                            打开详情页 <Icon name="arrowRight" :size="12" />
+                          </div>
+                        </div>
                       </div>
 
                       <div v-if="turn.phase === 'screening'" class="tool-trace">
@@ -1201,7 +1178,7 @@ const stageColor = (s) => ({
 .prompt-item:focus-visible,
 .composer-action:focus-visible,
 .result-preview-more:focus-visible,
-.agent-detail-button:focus-visible,
+.agent-detail-card:focus-visible,
 .result-preview-row:focus-visible {
   outline: 2px solid rgba(36, 86, 216, 0.42);
   outline-offset: 2px;
@@ -1453,26 +1430,82 @@ const stageColor = (s) => ({
   font-weight: 600;
 }
 
-.agent-detail-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+.agent-detail-card {
   margin-top: 10px;
-  padding: 6px 10px;
-  border: 1px solid #D8D8D8;
-  border-radius: 4px;
+  border: 1px solid #E4E4E7;
+  border-radius: 6px;
   background: #FFFFFF;
-  color: #3F3F46;
   cursor: pointer;
+  transition: border-color 0.18s, box-shadow 0.18s;
+  overflow: hidden;
+}
+.agent-detail-card:hover {
+  border-color: #A1A1AA;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.detail-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 4px;
+}
+.detail-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #18181B;
+}
+.detail-card-code {
+  font-size: 11px;
+  color: #A1A1AA;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+}
+.detail-card-meta {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 6px;
+  font-size: 11px;
+  color: #71717A;
+}
+.detail-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px;
+  border-top: 1px solid #F4F4F5;
+  background: #FAFAFA;
+}
+.detail-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #FFFFFF;
+  font-size: 10px;
+  color: #71717A;
+}
+.detail-stat em {
+  font-style: normal;
+  font-weight: 700;
+  font-size: 12px;
+  color: #18181B;
+}
+.detail-card-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px solid #E4E4E7;
   font-size: 11px;
   font-weight: 600;
-  transition: background 0.18s, border-color 0.18s, color 0.18s;
+  color: #3F3F46;
+  background: #FAFAFA;
+  transition: background 0.18s, color 0.18s;
 }
-
-.agent-detail-button:hover {
-  border-color: #B8B8B8;
-  background: #F5F5F5;
-  color: #111111;
+.agent-detail-card:hover .detail-card-action {
+  background: #F4F4F5;
+  color: #18181B;
 }
 
 .result-preview {

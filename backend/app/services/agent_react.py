@@ -333,12 +333,14 @@ def _response_from_model_plan(
                     str(model_plan.extra.get("name") or ""),
                 ]).strip(),
             )
+            basics = strategy_selector._fetch_stock_basics(db, target["code"]) if target else None
             detail_response = strategy_selector.build_stock_detail_response(
                 query,
                 context,
                 ai_configured=True,
                 code=target["code"] if target else "",
                 name=str(target.get("name") or "") if target else "",
+                basics=basics,
             )
         detail_response.plan.ai_used = True
         detail_response.plan.reasoning = model_plan.reasoning

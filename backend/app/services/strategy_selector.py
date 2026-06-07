@@ -1684,6 +1684,33 @@ def build_context_page_response(
     )
 
 
+def _fetch_stock_basics(db: Session, code: str) -> dict[str, Any] | None:
+    """Query StockDaily + StockBasic for the latest snapshot of a single stock."""
+    basic = db.get(StockBasic, code)
+    if basic is None:
+        return None
+    daily = (
+        db.query(StockDaily)
+        .filter(StockDaily.code == code)
+        .order_by(StockDaily.trade_date.desc())
+        .limit(1)
+        .first()
+    )
+    return {
+        "code": basic.code,
+        "name": basic.name,
+        "industry": basic.industry,
+        "market": basic.market,
+        "close": daily.close if daily else None,
+        "pe": daily.pe if daily else None,
+        "pb": daily.pb if daily else None,
+        "market_cap": daily.market_cap if daily else None,
+        "dividend_yield": daily.dividend_yield if daily else None,
+        "turnover": daily.turnover if daily else None,
+        "trade_date": str(daily.trade_date) if daily and daily.trade_date else None,
+    }
+
+
 def build_stock_detail_response(
     query: str,
     context: dict[str, Any],
@@ -1691,6 +1718,7 @@ def build_stock_detail_response(
     *,
     code: str = "",
     name: str = "",
+    basics: dict[str, Any] | None = None,
 ) -> StrategyAgentResponse:
     target = _resolve_stock_detail_target(query, context, code=code, name=name)
     if not target:
@@ -1704,7 +1732,11 @@ def build_stock_detail_response(
         return response
 
     target_name = target.get("name") or target["code"]
-    detail_url = f"/detail/{target['code']}"
+    target_code = target["code"]
+    detail_url = f"/detail/{target_code}"
+    result_data: dict[str, Any] = {"code": target_code, "name": target.get("name"), "url": detail_url}
+    if basics and basics.get("code") == target_code:
+        result_data["basics"] = basics
     plan = StrategyAgentPlan(
         tool="stock_detail",
         tool_label="个股详情",
@@ -1715,10 +1747,10 @@ def build_stock_detail_response(
     return StrategyAgentResponse(
         query=query,
         plan=plan,
-        answer=f"已定位 {target_name}（{target['code']}）的详情页。",
+        answer=f"已定位 {target_name}（{target_code}）的详情页。",
         tool_trace=[
             "tool_router -> stock_detail",
-            f"返回详情页目标：{target['code']}，未重新筛选",
+            f"返回详情页目标：{target_code}，未重新筛选",
         ],
         tool_calls=[
             _tool_call(
@@ -1735,7 +1767,7 @@ def build_stock_detail_response(
             _tool_call(
                 "stock_detail",
                 "个股详情",
-                result={"code": target["code"], "name": target.get("name"), "url": detail_url},
+                result=result_data,
                 message="已定位详情页目标",
             ),
         ],
@@ -1759,16 +1791,30 @@ def build_stock_detail_response_from_db(
 
     context_response = build_stock_detail_response(query, context, ai_configured=ai_configured)
     if context_response.plan.tool == "stock_detail":
+        target_code = (context_response.tool_calls or [{}])[-1].get("result", {}).get("code")
+        if target_code:
+            basics = _fetch_stock_basics(db, target_code)
+            if basics:
+                enriched = build_stock_detail_response(
+                    query, context, ai_configured=ai_configured,
+                    code=target_code,
+                    name=basics.get("name") or "",
+                    basics=basics,
+                )
+                enriched.tool_trace = context_response.tool_trace
+                return enriched
         return context_response
 
     target = _resolve_stock_detail_target_from_db(db, query)
     if target:
+        basics = _fetch_stock_basics(db, target["code"])
         return build_stock_detail_response(
             query,
             context,
             ai_configured=ai_configured,
             code=target["code"],
             name=target.get("name") or "",
+            basics=basics,
         )
 
     if is_stock_detail_query(query):
