@@ -389,7 +389,7 @@ def test_chat_react_plain_chat_uses_model_final_without_tools(db, seed_stocks, m
     assert expected_text in response.answer
     assert response.screen_result is None
     assert response.strategy_result is None
-    assert [call.name for call in response.tool_calls] == ["tool_router"]
+    assert response.tool_calls == []
     assert response.react_steps[-1]["timing_phase"] == "model_final"
     assert response.react_steps[-1]["fallback_reason"] is None
 

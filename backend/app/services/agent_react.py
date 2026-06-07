@@ -446,7 +446,7 @@ def _apply_final_answer(
         plan=plan,
         answer=final_answer.strip() or "我需要更多条件才能继续。",
         tool_trace=["ReAct final：模型未调用工具，直接回答"],
-        tool_calls=strategy_selector._planned_tool_calls(plan),
+        tool_calls=[],
     )
 
 

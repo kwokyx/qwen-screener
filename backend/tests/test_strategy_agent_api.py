@@ -75,7 +75,7 @@ def test_strategy_agent_api_model_final_is_plain_reply(db, seed_stocks, monkeypa
     assert body["plan"]["ai_used"] is True
     assert body["screen_result"] is None
     assert body["strategy_result"] is None
-    assert [call["name"] for call in body["tool_calls"]] == ["tool_router"]
+    assert body["tool_calls"] == []
     assert "有界选股 Agent" in body["answer"]
     assert body["react_steps"][-1]["timing_phase"] == "model_final"
 

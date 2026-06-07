@@ -309,6 +309,7 @@ def _check_fast_path(base_url: str) -> None:
     _require(plan.get("tool") == "ask_clarification", f"你好 routed to {plan.get('tool')}")
     _require(plan.get("tool_label") == "普通回复", f"你好 label={plan.get('tool_label')}")
     _require("screening" not in types and "result" not in types, "你好 triggered screening/result events")
+    _require(not terminal.get("tool_calls"), "你好 returned tool calls for plain chat")
     _require("done" in types, "你好 stream did not emit done")
     _require(terminal.get("fallback_reason") != "local_fast_path", "你好 should not use local fast-path")
     if plan.get("ai_used") is True:
@@ -328,6 +329,7 @@ def _check_plain_chat(base_url: str) -> None:
     _require(plan.get("tool") == "ask_clarification", f"plain chat routed to {plan.get('tool')}")
     _require(plan.get("tool_label") == "普通回复", f"plain chat label={plan.get('tool_label')}")
     _require("screening" not in types and "result" not in types and "planned" not in types, "plain chat triggered tool events")
+    _require(not terminal.get("tool_calls"), "plain chat returned tool calls")
     _require(terminal.get("fallback_reason") != "local_fast_path", "plain chat should not use local fast-path")
     if plan.get("ai_used") is True:
         _require(terminal.get("fallback_reason") is None, f"plain chat fallback={terminal.get('fallback_reason')!r}")
@@ -348,6 +350,7 @@ def _check_strategy_agent_api(base_url: str) -> None:
     _require(plan.get("tool_label") == "普通回复", f"/strategy/agent plain chat label={plan.get('tool_label')}")
     _require(payload.get("screen_result") is None, "/strategy/agent plain chat returned screen_result")
     _require(payload.get("strategy_result") is None, "/strategy/agent plain chat returned strategy_result")
+    _require(not payload.get("tool_calls"), "/strategy/agent plain chat returned tool calls")
     _require("local_fast_path" not in payload_text, "/strategy/agent plain chat used local fast-path")
     if plan.get("ai_used") is True:
         _require("有界选股 Agent" in payload_text or "Agent" in payload_text, "/strategy/agent did not explain Agent boundary")
