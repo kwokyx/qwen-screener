@@ -426,16 +426,7 @@ def _planned_tool_calls(plan: StrategyAgentPlan) -> list[StrategyToolCall]:
                     message="已匹配本地行业关键词",
                 )
             )
-        if plan.sort_by:
-            calls.append(
-                _tool_call(
-                    "result_sort",
-                    "结果排序",
-                    params={"sort_by": plan.sort_by, "sort_desc": plan.sort_desc},
-                    message="已确定排序参数",
-                )
-            )
-    elif plan.tool == "strategy_select":
+    if plan.tool == "strategy_select":
         calls.append(
             _tool_call(
                 "strategy_template_match",

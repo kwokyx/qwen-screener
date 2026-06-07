@@ -476,9 +476,6 @@ const stageColor = (s) => ({
               <div class="home-hero-copy">
                 <p class="home-eyebrow">QWEN STOCK AGENT</p>
                 <h1 class="home-heading">用自然语言筛选 A 股</h1>
-                <p class="home-subtitle">
-                  输入选股目标，Agent 会判断是否需要调用工具；没有工具调用时只做普通对话，不会伪装筛选结果。
-                </p>
               </div>
 
               <form class="composer composer--home" @submit.prevent="send">
@@ -487,21 +484,12 @@ const stageColor = (s) => ({
                   class="composer-input"
                   rows="1"
                   :disabled="isStreaming"
-                  placeholder="例如：找出 PE 低于 15、ROE > 15%、最新季度净利润同比 > 20% 的消费股"
+                  placeholder=""
                   @keydown.enter.exact.prevent="send"
                 />
                 <div class="composer-bar">
                   <div class="composer-modes">
-                    <button
-                      v-for="t in presetPrompts.slice(0, 2)"
-                      :key="t"
-                      class="mode-chip"
-                      type="button"
-                      :disabled="isStreaming"
-                      @click="!isStreaming && pickPreset(t)"
-                    >
-                      {{ t }}
-                    </button>
+
                   </div>
                   <button class="send-icon-btn" type="submit" :disabled="!canSubmit" title="发送" aria-label="发送">
                     <Icon name="send" :size="15" />
@@ -518,7 +506,6 @@ const stageColor = (s) => ({
                   :disabled="isStreaming"
                   @click="!isStreaming && pickPreset(t)"
                 >
-                  <span class="home-prompt-kicker">示例</span>
                   <span class="home-prompt-title">{{ t }}</span>
                 </button>
               </div>
@@ -549,15 +536,9 @@ const stageColor = (s) => ({
                       <div class="assistant-head">
                         <span class="assistant-avatar">千</span>
                         <span>{{ turnAgentTitle(turn) }}</span>
-                        <em>{{ turnSourceLabel(turn) }}</em>
+
                       </div>
 
-                      <div v-if="turn.phase === 'thinking' && !toolCallRows.length" class="thinking-placeholder">
-                        <Icon name="brain" :size="13" :color="A2.qwen" />
-                        <span>正在分析…</span>
-                        <span class="dot-flow"><i></i><i></i><i></i></span>
-                      </div>
-                      <pre v-if="turn.phase === 'thinking' && turn.thinkingBuf && !toolCallRows.length" class="thinking-preview">{{ turnThinkingPreview(turn) }}<span class="caret-mono" /></pre>
 
                       <div v-if="toolCallRows.length" class="tool-trace">
                         <div class="tool-trace-head">
@@ -644,17 +625,6 @@ const stageColor = (s) => ({
                         </div>
                       </div>
 
-                      <div v-if="turn.phase === 'screening'" class="tool-trace">
-                        <div class="tool-trace-head">
-                          <Icon name="tools" :size="13" />
-                          <span>{{ turnToolLabel(turn) }}执行中</span>
-                        </div>
-                        <div v-for="n in 4" :key="n" class="screening-row">
-                          <div class="sk-bar" />
-                          <div class="sk-bar wide" />
-                          <div class="sk-bar" />
-                        </div>
-                      </div>
 
                       <div v-if="turn.phase === 'error'" class="error-card">
                         <Icon name="shield" :size="14" />
@@ -828,8 +798,7 @@ const stageColor = (s) => ({
   gap: 6px;
   margin-top: 22px;
   padding: 12px;
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
+  
   background: #FFFFFF;
 }
 
@@ -1108,8 +1077,7 @@ const stageColor = (s) => ({
   width: min(100%, 760px);
   margin-bottom: 16px;
   padding: 14px;
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
+  
   background: #F7F7F7;
 }
 
@@ -1199,8 +1167,7 @@ const stageColor = (s) => ({
 .thinking-card {
   flex: 1;
   padding: 12px 14px;
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
+  
   background: #FFFFFF;
   color: #71717A;
   font-size: 12px;
@@ -1267,8 +1234,7 @@ const stageColor = (s) => ({
 .screening-card {
   margin-left: 40px;
   overflow: hidden;
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
+  
   background: #FFFFFF;
   box-shadow: 0 2px 10px rgba(14, 14, 12, 0.04);
 }
@@ -1322,8 +1288,7 @@ const stageColor = (s) => ({
   margin-left: 40px;
   margin-bottom: 20px;
   padding: 14px 16px;
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
+  
   background: #FFFFFF;
   color: #2F3137;
   font-size: 12.5px;
@@ -1819,6 +1784,86 @@ const stageColor = (s) => ({
     grid-area: price;
   }
 }
+
+/* ── AI Agent 工具调用卡片 ── */
+.chat-tool-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(36, 86, 216, 0.06), rgba(45, 125, 82, 0.05)), #F7F7F7;
+}
+.chat-tool-trace-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #3F3F46;
+  font-size: 12px;
+  font-weight: 700;
+}
+.chat-tool-call-list {
+  display: grid;
+  gap: 7px;
+}
+.chat-tool-call {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+}
+.chat-tool-call-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #FFFFFF;
+  color: #2456D8;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+.chat-tool-call-main {
+  min-width: 0;
+}
+.chat-tool-call-name {
+  color: #111111;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.chat-tool-call-summary {
+  margin-top: 2px;
+  color: #71717A;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chat-tool-call.pending .chat-tool-call-name {
+  color: #2456D8;
+}
+.chat-tool-call.pending .chat-tool-call-index {
+  background: transparent;
+  color: #2456D8;
+}
+.chat-tool-dots::after {
+  content: '';
+  display: inline-block;
+  width: 1em;
+  text-align: left;
+  animation: chat-tool-dots 1.2s steps(4, end) infinite;
+}
+@keyframes chat-tool-dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+  100% { content: ''; }
+}
+
 </style>
 
 <style scoped>
@@ -1883,12 +1928,11 @@ const stageColor = (s) => ({
 /* Ported from the user's AI workspace: two-pane chat shell + docked composer. */
 .ai-page {
   display: flex;
-  height: clamp(620px, calc(100vh - 114px), 820px);
+  position: fixed; top: 60px; left: 0; right: 0; bottom: 0;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #EDEDED;
-  border-radius: 8px;
+  
   background: #FFFFFF;
 }
 
@@ -2180,24 +2224,19 @@ const stageColor = (s) => ({
 
 .home-prompt-card {
   display: grid;
-  min-height: 92px;
-  align-content: start;
-  gap: 7px;
-  padding: 14px 16px;
+  align-content: center;
+  padding: 10px 14px;
   border: 1px solid #EDEDED;
-  border-radius: 16px;
+  border-radius: 12px;
   background: #FFFFFF;
   color: #111111;
   cursor: pointer;
   text-align: left;
-  box-shadow: 0 6px 18px rgba(14, 14, 12, 0.05);
-  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+  transition: border-color 0.18s;
 }
 
 .home-prompt-card:hover:not(:disabled) {
-  transform: translateY(-2px);
-  border-color: #D8D8D8;
-  box-shadow: 0 10px 24px rgba(14, 14, 12, 0.08);
+  border-color: #A1A1AA;
 }
 
 .home-prompt-card:disabled {
