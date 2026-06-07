@@ -201,7 +201,7 @@ const watchColumns = computed(() => [
       ])
     },
   },
-  { title: '关注', key: 'addedAt', align: 'right', render: row => mono(fmtDays(row.addedAt), { color: Preview.textMuted }) },
+  { title: '加入日期', key: 'addedAt', align: 'right', render: row => mono(fmtDays(row.addedAt), { color: Preview.textMuted }) },
   {
     title: '预警',
     key: 'alerts',
