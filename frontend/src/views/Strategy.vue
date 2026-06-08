@@ -518,7 +518,7 @@ watch([
         </n-button>
       </section>
 
-      <n-card size="small" :bordered="true" class="workspace-card">
+      <n-card size="small" :bordered="false" class="workspace-card">
         <div class="workspace-bar">
           <n-radio-group v-model:value="workspaceMode" size="small" :disabled="isBusy">
             <n-radio-button value="structured">条件选股</n-radio-button>
@@ -658,7 +658,7 @@ watch([
       </n-alert>
 
       <section class="result-panel">
-        <n-card size="small" :bordered="true">
+        <n-card size="small" :bordered="false">
           <template #header>
             <div class="table-head">
               <div>
@@ -718,7 +718,7 @@ watch([
 .strategy-page {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 20px;
 }
 
 .page-head,
@@ -726,7 +726,7 @@ watch([
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
 
 .page-head {
@@ -742,29 +742,40 @@ watch([
 
 .workspace-card,
 .result-panel :deep(.n-card) {
-  border-radius: 5px;
+  border-radius: 10px;
+  background: #F7F7F7;
+}
+
+.workspace-card :deep(.n-card__content),
+.result-panel :deep(.n-card__content) {
+  padding: 20px 24px 24px;
+}
+
+.workspace-card :deep(.n-card-header),
+.result-panel :deep(.n-card-header) {
+  padding: 18px 22px 10px;
 }
 
 .workspace-bar {
-  padding-bottom: 10px;
+  padding-bottom: 14px;
   border-bottom: 1px solid #EDEDED;
 }
 
 .mode-panel {
-  padding-top: 10px;
+  padding-top: 14px;
 }
 
 .strategy-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  padding-top: 10px;
+  gap: 10px;
+  padding-top: 14px;
 }
 
 .details-panel {
-  margin-top: 8px;
+  margin-top: 14px;
   border: 1px solid #E5E7EB;
-  border-radius: 5px;
+  border-radius: 8px;
   background: #FFFFFF;
   color: #52525B;
   font-size: 12px;
@@ -808,15 +819,15 @@ h1 {
 }
 
 .structured-toolbar {
-  gap: 14px;
-  padding: 7px 8px;
+  gap: 16px;
+  padding: 10px 12px;
   border: 1px solid #EDEDED;
-  border-radius: 5px;
+  border-radius: 8px;
   background: #FAFAFA;
 }
 
 .structured-control {
-  gap: 7px;
+  gap: 10px;
 }
 
 .sort-control {
@@ -829,18 +840,18 @@ h1 {
 
 .condition-builder {
   display: grid;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 .condition-row {
   display: grid;
   grid-template-columns: 28px 142px 112px minmax(160px, 1fr) auto auto;
-  gap: 7px;
+  gap: 10px;
   min-width: 0;
-  padding: 7px 8px;
+  padding: 10px 10px;
   border: 1px solid #EDEDED;
-  border-radius: 5px;
+  border-radius: 8px;
   background: #FFFFFF;
 }
 
@@ -855,7 +866,7 @@ h1 {
 }
 
 .structured-foot {
-  margin-top: 8px;
+  margin-top: 14px;
 }
 
 .structured-foot > div {
@@ -869,12 +880,12 @@ h1 {
   width: 100%;
   border: 1px solid #EDEDED;
   background: #FFFFFF;
-  border-radius: 5px;
-  padding: 9px;
+  border-radius: 8px;
+  padding: 16px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 14px;
   text-align: left;
   cursor: pointer;
   margin-bottom: 0;
@@ -907,10 +918,10 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 9px 10px;
+  gap: 14px;
+  padding: 14px 16px;
   border: 1px solid #EDEDED;
-  border-radius: 5px;
+  border-radius: 8px;
   background: #FAFAFA;
   color: #71717A;
   font-size: 12px;
@@ -1018,6 +1029,21 @@ h1 {
 .notice.compact {
   margin-top: 10px;
   font-size: 12px;
+}
+
+.result-panel :deep(.n-data-table-td) {
+  padding: 18px 14px;
+}
+
+.result-panel :deep(.n-data-table-th) {
+  background: transparent;
+  color: #71717A;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.result-panel :deep(.n-data-table-tr:hover td) {
+  background: #FFFFFF;
 }
 
 .table-loading,
