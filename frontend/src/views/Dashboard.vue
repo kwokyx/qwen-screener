@@ -348,7 +348,7 @@ onMounted(loadAll)
         </div>
       </NAlert>
 
-      <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" class="main-grid">
+      <NGrid :cols="24" :x-gap="20" :y-gap="20" responsive="screen" class="main-grid">
         <NGi :span="16">
           <NCard class="terminal-card table-card" :bordered="false">
             <template #header>
@@ -499,27 +499,27 @@ onMounted(loadAll)
 .dashboard-page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 20px;
 }
 
 .market-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 12px;
+  gap: 20px;
   align-items: stretch;
 }
 
 .terminal-card {
   background: #F7F7F7;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
 .terminal-card :deep(.n-card-header) {
-  padding: 16px 18px 8px;
+  padding: 18px 22px 10px;
 }
 
 .terminal-card :deep(.n-card__content) {
-  padding: 18px 22px 22px;
+  padding: 20px 24px 24px;
 }
 
 .index-card {
@@ -532,7 +532,7 @@ onMounted(loadAll)
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 14px;
 }
 
 .index-name,
@@ -790,7 +790,7 @@ onMounted(loadAll)
 .strength-card :deep(.n-data-table-td) {
   background: transparent;
   font-size: 13px;
-  padding: 14px 12px;
+  padding: 18px 14px;
 }
 
 .table-card :deep(.n-data-table-tr:hover td),
