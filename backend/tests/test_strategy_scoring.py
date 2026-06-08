@@ -8,6 +8,8 @@ from app.services.strategies import STRATEGIES, STRATEGY_REGISTRY
 
 
 def _make_df(records: list[dict]) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume", "amount", "name", "industry", "market"])
     defaults = {
         "symbol": "000001.SZ",
         "date": date(2026, 5, 1),
@@ -123,7 +125,7 @@ def test_strategy_templates_include_six_daily_strategies():
 
 def test_strategy_classes_return_empty_for_empty_histories():
     for strategy in STRATEGIES:
-        assert strategy.run(pd.DataFrame()) == []
+        assert strategy.run(_make_df([])) == []
 
 
 def test_strategy_registry_matches_templates_and_history_options():
@@ -137,7 +139,7 @@ def test_strategy_registry_matches_templates_and_history_options():
 def test_run_strategy_selection_supports_all_registered_strategies(db, monkeypatch):
     strategy_selector.clear_strategy_cache()
     monkeypatch.setattr(strategy_selector, "_latest_strategy_trade_date", lambda _db: date(2026, 6, 4))
-    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: pd.DataFrame())
+    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: _make_df([]))
 
     for strategy in STRATEGIES:
         response = strategy_selector.run_strategy_selection(db, strategy.id, limit=5)
@@ -163,7 +165,7 @@ def test_strategy_cache_reuses_full_result_across_limits(db, monkeypatch):
     def fake_load(_db, days):
         nonlocal load_calls
         load_calls += 1
-        return pd.DataFrame()
+        return _make_df([])
 
     monkeypatch.setattr(strategy_selector, "_load_histories", fake_load)
     monkeypatch.setattr(
@@ -194,7 +196,7 @@ def test_strategy_singleflight_failure_releases_inflight_and_allows_retry(db, mo
     db.commit()
     calls = 0
 
-    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: pd.DataFrame())
+    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: _make_df([]))
 
     def flaky_run(_df):
         nonlocal calls
