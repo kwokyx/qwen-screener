@@ -2549,19 +2549,8 @@ def _load_histories(
     days: int,
 ) -> "pd.DataFrame":
     import pandas as pd
-    from urllib.parse import urlparse
 
-    db_url = str(settings.database_url)
-    if db_url.startswith("sqlite"):
-        parsed = urlparse(db_url)
-        db_path = parsed.path.lstrip("/")
-        if not db_path or db_path == ":memory:":
-            return pd.DataFrame()
-    else:
-        return pd.DataFrame()
-
-    import sqlite3
-    conn = sqlite3.connect(db_path)
+    conn = db.connection().connection
     try:
         date_rows = conn.execute(
             "SELECT DISTINCT trade_date FROM stock_daily ORDER BY trade_date DESC LIMIT ?",
@@ -2589,7 +2578,7 @@ def _load_histories(
             parse_dates=["date"],
         )
     finally:
-        conn.close()
+        pass  # don't close — SQLAlchemy manages the connection
 
     if df.empty:
         return df
