@@ -905,7 +905,7 @@ async function run() {
     if (mobile.overflowers.length) fail('Mobile chat layout has visible overflow.', mobile)
 
     await setViewport(cdp, 1440, 900)
-    const activeNavClick = await nativeClickByText(cdp, 'AI选股', {
+    const activeNavClick = await clickByText(cdp, 'AI选股', {
       selector: '.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a',
     })
     const activeFreshHome = await waitForChatHome(cdp, 'active AI stock picker nav opens home', activeNavClick)
@@ -913,7 +913,7 @@ async function run() {
 
     await cdp.send('Page.navigate', { url: `${BASE_URL}/dashboard` })
     await waitForExpression(cdp, 'location.pathname === "/dashboard"', 'dashboard before AI stock picker nav')
-    const navClick = await nativeClickByText(cdp, 'AI选股', {
+    const navClick = await clickByText(cdp, 'AI选股', {
       selector: '.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a',
     })
     await waitForChatHome(cdp, 'AI stock picker nav opens home', navClick)

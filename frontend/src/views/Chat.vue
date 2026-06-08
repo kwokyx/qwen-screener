@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Shell from '../components/Shell.vue'
 import Icon from '../components/Icon.vue'
@@ -292,6 +292,10 @@ function newSession() {
   input.value = ''
 }
 
+function openChatHomeState() {
+  newSession()
+}
+
 function retryTurn(turn) {
   if (!turn?.query || isStreaming.value) return
   input.value = turn.query
@@ -324,7 +328,7 @@ function consumeRouteIntent() {
     return
   }
   if (route.query.fresh) {
-    newSession()
+    openChatHomeState()
     router.replace({ path: '/chat' })
     return
   }
@@ -338,7 +342,13 @@ function consumeRouteIntent() {
 }
 
 // 从其他页面跳转携带 ?q=xxx 时自动发送；导航点击 AI选股携带 ?fresh=... 时回到起始态。
-onMounted(consumeRouteIntent)
+onMounted(() => {
+  window.addEventListener('qwen-chat-home', openChatHomeState)
+  consumeRouteIntent()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('qwen-chat-home', openChatHomeState)
+})
 watch(() => route.fullPath, consumeRouteIntent)
 
 watch(

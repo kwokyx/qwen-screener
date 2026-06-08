@@ -344,7 +344,7 @@ qwen-stock-screener/
 | **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
 | **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
 | **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
-| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) | Chat 与 Strategy Agent 入口都走 bounded ReAct：模型 final/action → 后端 schema 校验 → 工具执行或普通回复；AI 慢/不可达时不本地兜底筛选 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` |
+| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) + [`services/strategies/`](backend/app/services/strategies/) | Chat 与 Strategy Agent 入口都走 bounded ReAct：模型 final/action → 后端 schema 校验 → 工具执行或普通回复；AI 慢/不可达时不本地兜底筛选；内置策略由本地策略 registry 执行 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` + `test_strategy_scoring.py` |
 | **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | Baostock-first；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
 | **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
 | **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |
@@ -377,6 +377,12 @@ qwen-stock-screener/
 | **SSE 客户端** | [`api/sse.js`](frontend/src/api/sse.js) | 通用 fetch + ReadableStream 流式解析，自动注入 JWT |
 | **错误翻译** | [`shared/errors.js`](frontend/src/shared/errors.js) | errno / 401 / 503 / network → 中文产品文案 |
 | **UI 基元** | Skeleton / EmptyState / Toaster / StarButton / AlertRuleEditor | 骨架屏 / 空态 / Toast / 一键加自选 / 预警规则编辑器 |
+
+### 策略后端边界
+
+内置策略是本地规则引擎，不是 AI 算分。每个策略位于 `backend/app/services/strategies/`，继承 `BaseStrategy`，声明 `id/name/tag/description/rules/history_days/max_codes` 并实现 `run(histories)`；`strategy_selector.py` 只负责 API 门面、缓存、日线数据加载和执行分发。AI 选股里的 `strategy_select` 只做路由，真实命中结果由本地策略类计算。
+
+策略结果中的 `score` 字段仅保留为 API 兼容，页面和文档按“命中强度 / 策略排序值”理解：只用于当前策略内部排序，不代表投资评级，也不能跨策略比较。完整策略列表、候选池限制、缺失 K 线行为和新增策略方式见 [`docs/STRATEGIES.md`](docs/STRATEGIES.md)。
 
 ### 工程基础设施
 

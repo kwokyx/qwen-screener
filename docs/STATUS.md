@@ -54,18 +54,19 @@
 ## 2. 半实现 / 有已知限制 ⚠️
 
 ### 2.1 策略选股（Strategy） — 主路径可用
-**位置**：[`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) + [`views/Strategy.vue`](../frontend/src/views/Strategy.vue)
+**位置**：[`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) + [`services/strategies/`](../backend/app/services/strategies/) + [`views/Strategy.vue`](../frontend/src/views/Strategy.vue)
 
 **能跑通的部分** ✅：
 - Chat 自然语言 Agent 采用模型优先 bounded ReAct：普通对话由模型 final，筛选/内置策略/解释/排序/分页/详情由模型 action 选择工具；后端只执行通过 schema 校验的白名单工具，并直接用确定性总结输出工具结果
 - 结构化条件筛选：13 字段 × 7 操作符 × AND/OR
-- 6 个项目内置日线策略：海龟突破、均线放量、RPS 强势突破、高位窄幅整理、涨停后承接、趋势急跌修复
+- 6 个项目内置日线策略：海龟突破、均线放量、RPS 强势突破、高位窄幅整理、涨停后承接、趋势急跌修复；每个策略是独立 `BaseStrategy` 子类，通过显式 registry 注册
 - 数据不足的股票跳过或在结果表明确标记缺失字段，不合成行情
 
 **已知限制**：
 1. 策略使用本地最新日线实时计算，定位是「当前选股」，不是历史收益回测。
 2. 免费数据源的财务字段是最新一期快照，适合条件筛选，不适合严肃历史回看。
-3. 内置策略阈值仍需结合更多市场样本继续校准。
+3. 命中强度只用于当前策略内部排序，不是投资评级，也不能跨策略比较。
+4. 内置策略阈值仍需结合更多市场样本继续校准。
 
 ### 2.2 涨停 / 跌停字段缺失
 **位置**：[`views/Dashboard.vue`](../frontend/src/views/Dashboard.vue) 市场概况
@@ -135,10 +136,10 @@ cd frontend && npm run smoke:dashboard && npm run smoke:strategy && npm run smok
 
 普通自动化测试不依赖真实 AI；`test_agent_query_regression.py` 固化 RC 语料：unsupported metric 必须前置拦截，对话解释/排序/分页/详情不能错误重筛，非确定性 query 使用 fake model / bounded ReAct。Chat SSE 除 unsupported metric 外不做模型前本地兜底：PE/PB、ROE、股息率、净利润同比、营收同比、毛利率、负债率、市值、行业、市场、收盘价、换手率等筛选，解释/排序/分页/确认执行/条件调严放宽等上下文操作，强势突破/均线放量/涨停后承接/高位旗形等内置策略，以及普通帮助类对话，都由模型 action/final 判断；后端只有拿到通过 schema 校验的工具 action 才执行工具。工具执行成功后不再等待第二次模型总结，而是使用后端确定性总结返回结果。普通 final / 安全停止只返回普通回复，`tool_calls=[]`，不会发送 `planning/tool_call/screening/result`。模型慢、超时、不可达或没有给出合法 action/final 时，Chat Agent 返回普通回复，不自动筛选，并保留 `model_ms` 与 `fallback_reason`。当前 unsupported metric 包括三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价；命中这些字段时应在 AI health / Qwen / screener 之前停止筛选并解释原因。完整字段边界见 [`FIELD_CAPABILITIES.md`](FIELD_CAPABILITIES.md)。真实 Qwen smoke 只验证运行态：AI 未配置或不健康时 WARN/跳过；Qwen 慢或不可达时安全停止是预期降级。`smoke:chat` 验证 `/chat` 多轮 UI、工具轨迹、结果预览、详情跳转、返回和刷新恢复；`smoke:dashboard` 验证 `/health/data` 的最新/应至交易日、覆盖率、同步任务和交易日说明在浏览器可见；`smoke:detail` 验证 `/detail/600036.SH` 本地详情、K 线和移动端溢出。
 
-### 🔧 4.2 评分展示已移除
+### 🔧 4.2 固定打分展示已移除
 **文件**：[`views/Results.vue`](../frontend/src/views/Results.vue) / [`views/Chat.vue`](../frontend/src/views/Chat.vue)
 
-列表和详情页已移除固定公式生成的“综合评分/策略得分”，避免把本地加权分误解成千问评分。详情页右侧原评分位置改为“千问解读”。如果以后要恢复评分，必须新增可解释的数据来源或真实 `/qwen/score/{code}` 端点，不能直接复用旧公式。
+列表和详情页已移除固定公式生成的统一打分，避免把本地加权分误解成千问评分。详情页右侧原评分位置改为“千问解读”。策略接口保留的 `score` 只表示当前策略内部命中强度；如果以后要恢复统一评分，必须新增可解释的数据来源或真实 `/qwen/score/{code}` 端点，不能直接复用旧公式。
 
 ### 🔧 4.3 测试用文件 SQLite，不是 in-memory
 **文件**：[`backend/tests/conftest.py`](../backend/tests/conftest.py)

@@ -358,6 +358,7 @@ export const useChatHistoryStore = defineStore('chatHistory', () => {
       activeId.value = items.value[0].id
       return
     }
+    if (activeId.value === NEW_SESSION_ID) return
     if (activeId.value && !items.value.find((item) => item.id === activeId.value)) {
       activeId.value = items.value[0]?.id || null
     }

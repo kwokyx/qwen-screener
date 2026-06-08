@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NAvatar,
@@ -27,7 +27,17 @@ const notif = useNotificationsStore()
 
 const menuOptions = [
   { label: '行情', key: 'dashboard' },
-  { label: 'AI选股', key: 'chat' },
+  {
+    label: () => h('a', {
+      class: 'nav-menu-link',
+      href: '/chat?fresh=nav',
+      onClick: (e) => {
+        e.preventDefault()
+        openChatHome()
+      },
+    }, 'AI选股'),
+    key: 'chat',
+  },
   { label: '结果', key: 'results' },
   { label: '自选', key: 'portfolio' },
   { label: '策略', key: 'strategy' },
@@ -53,12 +63,18 @@ function handleMenuSelect(key) {
 }
 
 function openChatHome() {
+  window.dispatchEvent(new CustomEvent('qwen-chat-home'))
   router.push({ name: 'chat', query: { fresh: Date.now().toString(36) } })
 }
 
 function handleNavMenuClick(e) {
-  const item = e.target?.closest?.('.n-menu-item-content, .n-menu-item, [role="menuitem"]')
-  const label = (item?.innerText || item?.textContent || '').replace(/\s+/g, '').trim()
+  const target = e.target?.nodeType === Node.TEXT_NODE ? e.target.parentElement : e.target
+  const item = target?.closest?.('.n-menu-item-content, .n-menu-item, [role="menuitem"], .nav-menu-link')
+  const pathText = (e.composedPath?.() || [])
+    .slice(0, 5)
+    .map((node) => node?.innerText || node?.textContent || '')
+    .join('')
+  const label = (item?.innerText || item?.textContent || pathText || '').replace(/\s+/g, '').trim()
   if (!label.includes('AI选股')) return
   e.preventDefault()
   e.stopPropagation()
@@ -183,8 +199,14 @@ function onDocMouseDown(e) {
 }
 
 document.addEventListener('mousedown', onDocMouseDown)
+document.addEventListener('mousedown', handleNavMenuClick, true)
+document.addEventListener('mouseup', handleNavMenuClick, true)
+document.addEventListener('click', handleNavMenuClick, true)
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocMouseDown)
+  document.removeEventListener('mousedown', handleNavMenuClick, true)
+  document.removeEventListener('mouseup', handleNavMenuClick, true)
+  document.removeEventListener('click', handleNavMenuClick, true)
   if (searchDebounce) clearTimeout(searchDebounce)
 })
 
@@ -221,7 +243,7 @@ function handleUserMenu(key) {
           </span>
         </div>
 
-        <div class="nav-menu-wrap" @click.capture="handleNavMenuClick">
+        <div class="nav-menu-wrap" @mousedown.capture="handleNavMenuClick" @mouseup.capture="handleNavMenuClick" @click.capture="handleNavMenuClick">
           <n-menu
             mode="horizontal"
             :value="activeKey"
@@ -391,6 +413,15 @@ function handleUserMenu(key) {
 
 .nav-menu-wrap :deep(.n-menu-item-content-header) {
   color: #52525B;
+}
+
+.nav-menu-wrap :deep(.nav-menu-link) {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
 }
 
 .nav-menu-wrap :deep(.n-menu-item-content--selected .n-menu-item-content-header),

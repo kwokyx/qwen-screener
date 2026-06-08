@@ -5,6 +5,7 @@ import pytest
 
 from app.models.stock import StockBasic, StockDaily
 from app.services import strategy_selector
+from app.services.strategies import STRATEGIES, STRATEGY_REGISTRY
 
 
 def _point(
@@ -153,6 +154,53 @@ def test_strategy_templates_include_six_daily_strategies():
         "limit_up_shakeout",
         "uptrend_limit_down",
     } <= ids
+
+
+def test_strategy_classes_return_empty_for_empty_histories():
+    for strategy in STRATEGIES:
+        assert strategy.run({}) == []
+
+
+def test_strategy_registry_matches_templates_and_history_options():
+    template_ids = [template.id for template in strategy_selector.list_templates()]
+
+    assert template_ids == [strategy.id for strategy in STRATEGIES]
+    assert set(STRATEGY_REGISTRY) == set(template_ids)
+    for strategy in STRATEGIES:
+        assert strategy_selector._STRATEGY_HISTORY_OPTIONS[strategy.id] == (
+            strategy.history_days,
+            strategy.max_codes,
+        )
+
+
+def test_run_strategy_selection_supports_all_registered_strategies(db, monkeypatch):
+    strategy_selector.clear_strategy_cache()
+    monkeypatch.setattr(strategy_selector, "_latest_strategy_trade_date", lambda _db: date(2026, 6, 4))
+    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: {})
+
+    for strategy in STRATEGIES:
+        response = strategy_selector.run_strategy_selection(db, strategy.id, limit=5)
+
+        assert response.strategy.id == strategy.id
+        assert response.total == 0
+        assert response.items == []
+
+
+def test_run_strategy_selection_rejects_unknown_strategy(db):
+    with pytest.raises(ValueError, match="未知策略"):
+        strategy_selector.run_strategy_selection(db, "unknown_strategy", limit=5)
+
+
+def test_strategy_notes_explain_score_is_internal_strength(db, monkeypatch):
+    strategy_selector.clear_strategy_cache()
+    monkeypatch.setattr(strategy_selector, "_latest_strategy_trade_date", lambda _db: date(2026, 6, 4))
+    monkeypatch.setattr(strategy_selector, "_load_histories", lambda *_args, **_kwargs: {})
+
+    response = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=5)
+    notes = " ".join(response.notes)
+
+    assert "命中强度" in notes
+    assert "综合评分" not in notes
 
 
 def test_strategy_cache_reuses_full_result_across_limits(db, monkeypatch):
