@@ -175,7 +175,7 @@ function historyTitle(c) {
 }
 function historyMeta(c) {
   const ts = c.updatedAt || c.ts
-  return [ts ? fmtRelTime(ts) : '', `${c.turnCount || 1}轮`].filter(Boolean).join(' · ')
+  return fmtRelTime(ts) || ''
 }
 function traceDisplay(trace) {
   return String(trace || '')
