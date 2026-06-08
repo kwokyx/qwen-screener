@@ -506,16 +506,6 @@ watch([
           <h1>策略选股</h1>
           <span>交易日 {{ displayTradeDate }}</span>
         </div>
-        <n-button
-          size="small"
-          type="primary"
-          secondary
-          :disabled="workspaceMode !== 'strategy' || !activeId || isBusy"
-          :loading="loading"
-          @click="runSelection()"
-        >
-          执行策略筛选
-        </n-button>
       </section>
 
       <n-card size="small" :bordered="false" class="workspace-card">
