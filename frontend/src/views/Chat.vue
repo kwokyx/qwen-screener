@@ -170,15 +170,6 @@ const conditionIntro = computed(() => {
   return result.value ? `筛选条件 · 命中 ${result.value.total} 只` : '识别条件'
 })
 const resultTitle = computed(() => agentPlan.value?.tool === 'strategy_select' ? '策略选股结果' : '筛选结果')
-function historyBadge(c) {
-  if (c.status) return c.status
-  const tool = c.agentPlan?.tool
-  if (tool === 'strategy_design') return '策略'
-  if (tool === 'ask_clarification') return c.agentPlan?.tool_label === '普通回复' ? '对话' : '追问'
-  if (tool === 'explain_result') return '解释'
-  if (tool === 'stock_detail') return '详情'
-  return `${c.total} 只`
-}
 function historyTitle(c) {
   return c.title || c.query || '新建对话'
 }
@@ -465,7 +456,6 @@ const stageColor = (s) => ({
                 >
                   <div class="session-item-top">
                     <span class="session-name">{{ historyTitle(c) }}</span>
-                    <span class="session-badge">{{ historyBadge(c) }}</span>
                   </div>
                   <span class="session-meta">{{ historyMeta(c) }}</span>
                 </button>
@@ -1609,22 +1599,6 @@ const stageColor = (s) => ({
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.history-badge {
-  min-width: 30px;
-  flex-shrink: 0;
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: rgba(14, 14, 12, 0.05);
-  color: #71717A;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 9px;
-  font-weight: 600;
-  text-align: center;
-}
-.history-item.active .history-badge {
-  background: rgba(36, 86, 216, 0.10);
-  color: #2456D8;
-}
 .history-del {
   background: transparent;
   border: none;
@@ -2124,17 +2098,6 @@ const stageColor = (s) => ({
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-badge {
-  flex-shrink: 0;
-  padding: 2px 5px;
-  border-radius: 999px;
-  background: #FFFFFF;
-  color: #71717A;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 9px;
-  font-weight: 700;
 }
 
 .session-meta {
