@@ -638,9 +638,12 @@ watch([
             :disabled="isBusy"
             @click="chooseStrategy(tpl.id)"
           >
-            <span>
+            <span class="strategy-item-body">
               <strong>{{ tpl.name }}</strong>
               <small>{{ tpl.description }}</small>
+              <ul v-if="tpl.id === activeId" class="strategy-rules-inline">
+                <li v-for="rule in tpl.rules" :key="rule">{{ rule }}</li>
+              </ul>
             </span>
             <n-tag size="small" :bordered="false">{{ tpl.tag }}</n-tag>
           </button>
@@ -697,13 +700,6 @@ watch([
             </div>
           </div>
         </n-card>
-
-        <details v-if="workspaceMode === 'strategy' && activeTemplate" class="details-panel">
-          <summary>查看策略规则</summary>
-          <ul class="rules">
-            <li v-for="rule in activeTemplate.rules" :key="rule">{{ rule }}</li>
-          </ul>
-        </details>
 
         <details v-if="result?.notes?.length" class="details-panel">
           <summary>查看数据说明</summary>
@@ -905,6 +901,19 @@ h1 {
   display: block;
   color: #111111;
   margin-bottom: 4px;
+}
+
+.strategy-item .strategy-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.strategy-rules-inline {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  color: #71717A;
+  font-size: 11px;
+  line-height: 1.6;
 }
 
 .strategy-item small {
