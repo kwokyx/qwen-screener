@@ -2559,8 +2559,8 @@ def _load_histories(
         if not date_rows:
             return pd.DataFrame()
         dates = [r[0] for r in date_rows]
-        start_date = min(dates)
-        end_date = max(dates)
+        start_date = dates[-1]
+        end_date = dates[0]
 
         df = pd.read_sql(
             """
@@ -2574,7 +2574,7 @@ def _load_histories(
             ORDER BY d.code, d.trade_date
             """,
             conn,
-            params=(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")),
+            params=(start_date, end_date),
             parse_dates=["date"],
         )
     finally:
