@@ -638,7 +638,6 @@ watch([
             <n-tag size="small" :bordered="false">{{ tpl.tag }}</n-tag>
           </button>
           <div class="strategy-action">
-            <span>选择策略后不会自动筛选，确认规则后再执行。</span>
             <n-button type="primary" size="small" strong :disabled="!activeId || isBusy" :loading="loading" @click="runSelection()">
               执行策略筛选
             </n-button>
@@ -658,7 +657,6 @@ watch([
                 <strong>{{ displayTitle }}</strong>
                 <span v-if="hasResult">{{ displayTotal }} 只命中</span>
                 <span v-else-if="tableLoading">请稍候，正在计算</span>
-                <span v-else>点击筛选后显示结果</span>
               </div>
               <n-tag :bordered="false" size="small" :type="resultSourceType">
                 {{ resultSourceLabel }}
@@ -677,7 +675,7 @@ watch([
           />
           <n-empty
             v-else-if="!tableLoading"
-            :description="hasResult ? '当前条件没有命中股票' : '请选择策略或输入条件，点击筛选后显示结果'"
+            :description="hasResult ? '当前条件没有命中股票' : '请选择策略或输入条件'"
           />
           <div v-else class="table-loading">
             <div class="loading-title">{{ tableLoadingText }}</div>
