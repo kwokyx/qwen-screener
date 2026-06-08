@@ -74,7 +74,8 @@ function sessionStatus(session) {
   if (tool === 'ask_clarification') return turn?.agentPlan?.tool_label === '普通回复' ? '对话' : '追问'
   if (tool === 'explain_result') return '解释'
   if (turn?.result) return `${turn.result.total || 0}只`
-  return `${session.turns?.length || 0}轮`
+  if (turn?.query) return turn.query.length > 12 ? turn.query.slice(0, 12) + '…' : turn.query
+  return '对话'
 }
 
 function applyLatestSnapshot(session) {
