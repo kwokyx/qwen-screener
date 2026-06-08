@@ -513,10 +513,7 @@ watch([
   <Shell>
     <div class="strategy-page">
       <section class="page-head">
-        <div>
-          <h1>策略选股</h1>
-          <span>交易日 {{ displayTradeDate }}</span>
-        </div>
+        <h1>策略选股</h1>
       </section>
 
       <n-card size="small" :bordered="false" class="workspace-card">
