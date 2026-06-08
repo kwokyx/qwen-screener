@@ -25,6 +25,7 @@ from app.schemas.strategy import (
     StrategyToolInfo,
 )
 from app.services import qwen_client, screener_engine
+from app.services.feishu import notifier as feishu
 from app.services.strategies import (
     STRATEGIES,
     STRATEGY_REGISTRY,
@@ -214,6 +215,24 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         if _RESULT_INFLIGHT.get(cache_key) is inflight:
             _RESULT_INFLIGHT.pop(cache_key, None)
         inflight.event.set()
+
+    if response.items:
+        strategy_name = TEMPLATE_MAP[strategy_id].name
+        items_data = [
+            {
+                "code": item.code,
+                "name": item.name,
+                "close": item.close,
+                "change_pct": item.change_pct,
+            }
+            for item in response.items[:20]
+        ]
+        threading.Thread(
+            target=feishu.push_strategy_result,
+            args=(strategy_name, items_data),
+            daemon=True,
+        ).start()
+
     return _slice_strategy_response(response, limit)
 
 

@@ -36,6 +36,12 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:5173"
 
+    # 飞书通知（webhook 或企业自建应用二选一，都不填则不推送）
+    feishu_webhook_url: str = ""
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_chat_id: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
