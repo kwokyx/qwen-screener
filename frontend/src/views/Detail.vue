@@ -884,10 +884,6 @@ function peerRowProps(row) {
               <NDescriptionsItem label="板块">{{ market }}</NDescriptionsItem>
               <NDescriptionsItem label="交易日">{{ detail.latest?.trade_date || '—' }}</NDescriptionsItem>
             </NDescriptions>
-            <NButton block type="primary" size="small" :loading="loading" style="margin-top:12px;" @click="load">
-              <template #icon><Icon name="refresh" :size="12" /></template>
-              刷新数据
-            </NButton>
           </NCard>
 
           <NAlert type="warning" :bordered="false" class="risk-note">
