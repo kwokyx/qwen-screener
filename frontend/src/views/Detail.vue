@@ -615,19 +615,81 @@ function peerRowProps(row) {
 <template>
   <Shell>
     <!-- Loading -->
-    <div v-if="loading && !detail" class="detail-loading">
-      <NSpin size="large">
-        <NCard :bordered="false" style="width: min(800px, 100%);">
-          <NSpace vertical size="large">
-            <NSpace align="center">
+    <div v-if="loading && !detail" class="detail-page detail-loading-page" aria-busy="true">
+      <div class="stock-header skeleton-stock-header">
+        <div class="stock-header-left">
+          <NSkeleton text :width="92" :sharp="false" />
+          <NSkeleton text :width="120" :sharp="false" class="skeleton-stock-name" />
+          <NSkeleton text :width="54" :sharp="false" />
+          <NSkeleton text :width="54" :sharp="false" />
+          <div class="stock-price-inline">
+            <NSkeleton :width="170" height="44px" :sharp="false" />
+            <NSkeleton text :width="72" :sharp="false" />
+            <NSkeleton text :width="64" :sharp="false" />
+          </div>
+        </div>
+        <div class="stock-header-right skeleton-actions">
+          <NSkeleton :width="86" height="28px" :sharp="false" />
+          <NSkeleton :width="86" height="28px" :sharp="false" />
+          <NSkeleton :width="92" height="28px" :sharp="false" />
+        </div>
+      </div>
+
+      <div class="detail-main">
+        <div class="detail-left">
+          <NCard class="section-card chart-card skeleton-card" size="small">
+            <template #header>
+              <div class="chart-header">
+                <NSkeleton text :width="92" :sharp="false" />
+                <NSkeleton text :width="160" :sharp="false" />
+              </div>
+            </template>
+            <div class="chart-toolbar skeleton-toolbar">
+              <NSkeleton :width="170" height="28px" :sharp="false" />
+              <NSkeleton :width="150" height="28px" :sharp="false" />
+              <NSkeleton :width="130" height="28px" :sharp="false" />
+            </div>
+            <div class="kline-meta">
+              <NSkeleton text :width="96" :sharp="false" />
+              <NSkeleton text :width="220" :sharp="false" />
               <NSkeleton text :width="120" :sharp="false" />
-              <NSkeleton text :width="80" :sharp="false" />
-              <NSkeleton text :width="180" :sharp="false" />
-            </NSpace>
-            <NSkeleton height="430px" :sharp="false" />
-          </NSpace>
-        </NCard>
-      </NSpin>
+            </div>
+            <NSkeleton height="390px" :sharp="false" class="skeleton-chart" />
+          </NCard>
+
+          <div class="stats-ribbon skeleton-ribbon">
+            <div v-for="n in 6" :key="'metric-sk-' + n" class="stat-cell">
+              <NSkeleton text :width="54" :sharp="false" />
+              <NSkeleton text :width="86" :sharp="false" />
+            </div>
+          </div>
+
+          <NCard class="section-card skeleton-card" size="small" style="margin-top:12px;">
+            <template #header>
+              <div class="skeleton-tabs">
+                <NSkeleton v-for="n in 4" :key="'tab-sk-' + n" text :width="70" :sharp="false" />
+              </div>
+            </template>
+            <div class="skeleton-fin-grid">
+              <NSkeleton v-for="n in 6" :key="'fin-sk-' + n" height="54px" :sharp="false" />
+            </div>
+          </NCard>
+        </div>
+
+        <div class="detail-right">
+          <NCard title="千问解读" size="small" class="section-card skeleton-card">
+            <div class="skeleton-copy">
+              <NSkeleton v-for="n in 4" :key="'ai-sk-' + n" text :sharp="false" />
+            </div>
+          </NCard>
+          <NCard title="股票信息" size="small" class="section-card skeleton-card">
+            <div class="skeleton-info-list">
+              <NSkeleton v-for="n in 4" :key="'info-sk-' + n" text :width="n === 1 ? 130 : 100" :sharp="false" />
+            </div>
+          </NCard>
+          <NSkeleton height="42px" :sharp="false" />
+        </div>
+      </div>
     </div>
 
     <!-- Error -->
@@ -902,12 +964,6 @@ function peerRowProps(row) {
   padding-top: 0;
 }
 
-.detail-loading {
-  display: grid;
-  place-items: center;
-  padding: 60px 0;
-}
-
 /* ---- Stock Header ---- */
 .stock-header {
   display: flex;
@@ -980,6 +1036,63 @@ function peerRowProps(row) {
 
 .stock-header-right {
   flex-shrink: 0;
+}
+
+/* ---- Skeleton ---- */
+.detail-loading-page {
+  min-height: 640px;
+}
+
+.skeleton-stock-header {
+  min-height: 112px;
+}
+
+.skeleton-stock-name {
+  height: 22px;
+}
+
+.skeleton-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.skeleton-card :deep(.n-card-header) {
+  min-height: 44px;
+}
+
+.skeleton-toolbar {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.skeleton-chart {
+  display: block;
+  margin-top: 10px;
+}
+
+.skeleton-ribbon {
+  margin-top: 8px;
+}
+
+.skeleton-tabs {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 32px;
+}
+
+.skeleton-fin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.skeleton-copy,
+.skeleton-info-list {
+  display: grid;
+  gap: 8px;
 }
 
 /* ---- Main Layout ---- */
@@ -1233,6 +1346,15 @@ function peerRowProps(row) {
 
   .stats-ribbon {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .skeleton-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .skeleton-fin-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
