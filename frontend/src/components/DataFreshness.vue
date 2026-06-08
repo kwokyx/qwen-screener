@@ -40,7 +40,9 @@ const hasIssue = computed(() => {
 })
 let poller = null
 
+const MARKET_REFRESH_JOB = 'market_refresh'
 const JOBS = [
+  { name: MARKET_REFRESH_JOB,       label: '行情更新',   desc: '按顺序更新日线行情和估值数据', eta: '后台约数分钟' },
   { name: 'daily_market',           label: '日线行情',   desc: '最新交易日行情覆盖', eta: '后台约数分钟' },
   { name: 'daily_value',            label: '估值数据',   desc: '估值、市值、股息率补全', eta: '后台约数分钟' },
   { name: 'weekly_fundamentals',    label: '财务指标',   desc: 'ROE、营收、净利等指标', eta: '后台耗时较长' },
@@ -49,6 +51,7 @@ const JOBS = [
   { name: 'weekly_kline_backfill',  label: 'K线回填',    desc: '补齐近期历史 K 线', eta: '后台耗时较长' },
   { name: 'db_backup',              label: '数据备份',   desc: '备份当前本地数据库', eta: '后台约数秒' },
 ]
+const visibleJobs = computed(() => JOBS.filter((j) => j.name !== MARKET_REFRESH_JOB))
 
 async function refresh() {
   loading.value = true
@@ -229,6 +232,21 @@ const activeSyncJobLabels = computed(() =>
   activeSyncJobs.value.map(labelOf).join('、')
 )
 
+const marketRefreshRunning = computed(() => isJobActive(MARKET_REFRESH_JOB))
+const marketRefreshLabel = computed(() => marketRefreshRunning.value ? '更新中' : '更新行情')
+const marketRefreshTitle = computed(() => {
+  if (!canSync.value) return '登录后可手动同步'
+  if (activeSyncJobLabels.value && !marketRefreshRunning.value) return `已有同步任务执行中：${activeSyncJobLabels.value}`
+  return '按顺序执行日线行情和估值数据同步'
+})
+
+const syncWindowNote = computed(() => {
+  if (fresh.value && latestDate.value && expectedDate.value) {
+    return `当前应至 ${expectedDate.value}。交易日日线通常在 16:00 后才尝试同步当天；16:00 前显示上一交易日是正常的。任务更新时间不是行情日期，以上方最新交易日和覆盖率为准。`
+  }
+  return '点击“更新行情”会先同步日线行情，再补估值、市值和股息率；任务更新时间不是行情日期，以上方最新交易日和覆盖率为准。'
+})
+
 const retryableWarnings = computed(() =>
   JOBS
     .map((j) => warnings.value.find((w) => w.job === j.name))
@@ -312,6 +330,18 @@ async function retryNextWarningJob() {
   }
   await runJob(nextRetryJob.value)
 }
+
+async function runMarketRefresh() {
+  if (!canSync.value) {
+    goLogin()
+    return
+  }
+  if (activeSyncJobLabels.value && !marketRefreshRunning.value) {
+    toast.info(`已有同步任务执行中：${activeSyncJobLabels.value}`)
+    return
+  }
+  await runJob(MARKET_REFRESH_JOB)
+}
 function onDoc(e) {
   if (!open.value) return
   if (!e.target.closest('[data-data-freshness]')) close()
@@ -350,9 +380,20 @@ onBeforeUnmount(() => {
               {{ freshness.message }}
             </div>
           </div>
-          <button class="btn-ghost" :style="{ width: '28px', height: '28px' }" @click="refresh" title="刷新状态">
-            <Icon name="refresh" :size="13" :style="{ animation: loading ? 'spin 1s linear infinite' : 'none' }" />
-          </button>
+          <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
+            <button v-if="canSync"
+                    class="btn-outline"
+                    :disabled="Boolean(activeSyncJobLabels) && !marketRefreshRunning"
+                    :title="marketRefreshTitle"
+                    :style="{ padding: '5px 9px', fontSize: '11px', whiteSpace: 'nowrap', background: A2.surface }"
+                    @click="runMarketRefresh">
+              <Icon name="refresh" :size="11" :style="{ animation: marketRefreshRunning ? 'spin 1s linear infinite' : 'none' }" />
+              {{ marketRefreshLabel }}
+            </button>
+            <button class="btn-ghost" :style="{ width: '28px', height: '28px' }" @click="refresh" title="刷新状态">
+              <Icon name="refresh" :size="13" :style="{ animation: loading ? 'spin 1s linear infinite' : 'none' }" />
+            </button>
+          </div>
         </div>
 
         <!-- 数据覆盖度 -->
@@ -419,7 +460,7 @@ onBeforeUnmount(() => {
 
         <!-- 任务列表 -->
         <div :style="{ padding: '6px 0', maxHeight: '380px', overflowY: 'auto' }">
-          <div v-for="j in JOBS" :key="j.name" :style="{ padding: '10px 14px', borderTop: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', gap: '10px' }">
+          <div v-for="j in visibleJobs" :key="j.name" :style="{ padding: '10px 14px', borderTop: `1px solid ${A2.borderHair}`, display: 'flex', alignItems: 'center', gap: '10px' }">
             <div :style="{ flex: 1, minWidth: 0 }">
               <div :style="{ display: 'flex', alignItems: 'center', gap: '6px' }">
                 <span :style="{ fontSize: '12px', fontWeight: 600, color: A2.text }">{{ j.label }}</span>
@@ -443,7 +484,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div :style="{ padding: '8px 14px', fontSize: '10.5px', color: A2.textDim, lineHeight: 1.5, background: '#FBFBF9', borderTop: `1px solid ${A2.borderHair}` }">
-          自动同步按交易日和周末任务执行；任务更新时间不是行情日期，以上方“最新”交易日和覆盖率为准。
+          {{ syncWindowNote }}
         </div>
       </div>
     </Transition>

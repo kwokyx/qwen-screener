@@ -126,6 +126,22 @@ def test_successful_data_job_clears_runtime_caches(db, monkeypatch):
     ]
 
 
+def test_market_refresh_runs_daily_market_then_daily_value(monkeypatch):
+    calls = []
+
+    def fake_run_now(name):
+        calls.append(name)
+        return {"status": "success", "detail": f"{name} ok"}
+
+    monkeypatch.setattr(scheduler, "run_now", fake_run_now)
+
+    detail = scheduler.job_market_refresh()
+
+    assert calls == ["daily_market", "daily_value"]
+    assert "日线行情成功: daily_market ok" in detail
+    assert "估值数据成功: daily_value ok" in detail
+
+
 def _seed_basic(db, n=120):
     for i in range(n):
         db.add(StockBasic(code=f"60{i:04d}.SH", name=f"测试股{i}", industry="测试"))

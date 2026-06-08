@@ -212,17 +212,6 @@ const klineVisibleBars = computed(() => {
   if (klineFrequency.value === 'week') return 64
   return 90
 })
-const klineCaption = computed(() => {
-  const range = activeKlineRanges.value[klineRange.value]?.label || ''
-  const freq = activeKlineFrequency.value?.label || '日线'
-  return `${freq} · ${range} · ${isIntradayFrequency.value ? '不复权' : '前复权'}`
-})
-const klineDataType = computed(() => {
-  if (isIntradayFrequency.value) return '分钟K · baostock 分钟线 · 不用日线替代'
-  if (klineFrequency.value === 'week') return '周线 · 每根蜡烛代表一个交易周'
-  if (klineFrequency.value === 'month') return '月线 · 每根蜡烛代表一个交易月'
-  return '日线 · 每根蜡烛代表一个交易日，不是 24h 分时'
-})
 const klineEmptyText = computed(() => {
   if (klineLoading.value) return ''
   if (klineError.value) return '当前周期数据加载失败'
@@ -650,7 +639,6 @@ function peerRowProps(row) {
               <NSkeleton :width="130" height="28px" :sharp="false" />
             </div>
             <div class="kline-meta">
-              <NSkeleton text :width="96" :sharp="false" />
               <NSkeleton text :width="220" :sharp="false" />
               <NSkeleton text :width="120" :sharp="false" />
             </div>
@@ -759,7 +747,6 @@ function peerRowProps(row) {
               <div class="chart-header">
                 <div>
                   <strong>K 线走势</strong>
-                  <span class="chart-sub">{{ klineCaption }}</span>
                 </div>
               </div>
             </template>
@@ -808,7 +795,6 @@ function peerRowProps(row) {
               </div>
             </div>
             <div class="kline-meta">
-              <span class="kline-mode">{{ klineDataType }}</span>
               <span class="kline-indicator">
                 指标 <strong>{{ activeIndicatorName }}</strong> · {{ activeIndicatorHint }}
               </span>
@@ -1146,12 +1132,6 @@ function peerRowProps(row) {
   color: #111111;
 }
 
-.chart-sub {
-  font-size: 11px;
-  color: #71717A;
-  margin-left: 10px;
-}
-
 .chart-toolbar {
   display: flex;
   align-items: center;
@@ -1180,17 +1160,11 @@ function peerRowProps(row) {
   border-bottom: 1px solid #ECEFF3;
 }
 
-.kline-mode,
 .kline-indicator,
 .kline-stat {
   font-size: 10.5px;
   color: #71717A;
   line-height: 1.4;
-}
-
-.kline-mode {
-  flex-basis: 100%;
-  color: #52525B;
 }
 
 .kline-stat {

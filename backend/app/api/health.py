@@ -409,6 +409,7 @@ def _data_health_payload(db: Session):
 
 def _sync_warnings(sync_meta: dict[str, dict], *, db: Session | None = None, fresh: bool = False) -> list[dict]:
     labels = {
+        "market_refresh": "行情更新",
         "daily_market": "日线行情",
         "daily_value": "估值数据",
         "weekly_fundamentals": "财务指标",
@@ -465,7 +466,7 @@ def trigger_sync(
     需要登录。默认 async（守护线程后台跑，立即返回）。对全市场 60d K 线回填这种 45 分钟级别
     的任务必须 async，否则 HTTP 会超时。前端可隔几秒查 /health/data 看 sync_meta
     里该任务的状态。
-    可选 job_name：daily_market / daily_value / weekly_fundamentals / weekly_dividend
+    可选 job_name：market_refresh / daily_market / daily_value / weekly_fundamentals / weekly_dividend
                 / weekly_basic / weekly_kline_backfill / db_backup
     传 ?wait=true 退回同步模式（短任务用，比如 db_backup 几秒就完）。
     """

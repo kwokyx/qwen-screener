@@ -44,6 +44,7 @@ _meta_revision_lock = threading.Lock()
 
 _DEFAULT_STUCK_MINUTES = 60
 _JOB_STUCK_MINUTES = {
+    "market_refresh": 90,
     "daily_market": 45,
     "daily_value": 45,
     "weekly_fundamentals": 180,
@@ -604,7 +605,7 @@ def _run_with_meta(name: str, fn, *, reserved: bool = False, allow_shortcut: boo
         else:
             rv = fn()
             if rv is not None:
-                detail = f"affected={rv}"
+                detail = rv if isinstance(rv, str) else f"affected={rv}"
     except Exception as e:
         status = "failed"
         detail = str(e)[:240]
@@ -692,6 +693,43 @@ def job_daily_value():
             return cnt
     finally:
         db.close()
+
+
+def job_market_refresh():
+    """One-click market refresh: update daily bars first, then valuation factors."""
+    parts: list[str] = []
+    failed: list[str] = []
+    for job_name, label in (
+        ("daily_market", "日线行情"),
+        ("daily_value", "估值数据"),
+    ):
+        meta = run_now(job_name)
+        status = meta.get("display_status") or meta.get("status") or "unknown"
+        detail = meta.get("detail") or "无详情"
+        already_running = meta.get("already_running") is True
+        if already_running:
+            parts.append(f"{label}已在执行中")
+            continue
+        parts.append(f"{label}{_display_job_status(status)}: {detail}")
+        if status in {"failed", "stuck"}:
+            failed.append(f"{label}: {detail}")
+    if failed:
+        raise RuntimeError("；".join(failed))
+    return "；".join(parts)
+
+
+def _display_job_status(status: str) -> str:
+    if status == "success":
+        return "成功"
+    if status == "failed":
+        return "失败"
+    if status == "stuck":
+        return "异常"
+    if status == "queued":
+        return "已排队"
+    if status == "running":
+        return "执行中"
+    return status
 
 
 def job_weekly_fundamentals():
@@ -791,6 +829,7 @@ def job_weekly_kline_backfill():
 
 
 JOBS = {
+    "market_refresh":          job_market_refresh,
     "daily_market":           job_daily_market,
     "daily_value":            job_daily_value,
     "weekly_fundamentals":    job_weekly_fundamentals,
