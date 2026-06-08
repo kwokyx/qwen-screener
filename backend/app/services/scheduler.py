@@ -906,6 +906,37 @@ def run_async(job_name: str) -> dict:
     return {"queued": True, "running": False, "job": job_name, "meta": get_meta().get(job_name, {})}
 
 
+def job_strategy_push() -> None:
+    """收盘后执行全量策略扫描，有命中则推飞书。"""
+    from app.services.feishu import notifier as feishu
+    from app.services.strategies import STRATEGIES, STRATEGY_REGISTRY
+    from app.services.strategy_selector import _load_histories, _STRATEGY_HISTORY_OPTIONS
+
+    db = SessionLocal()
+    try:
+        for strategy in STRATEGIES:
+            try:
+                days = _STRATEGY_HISTORY_OPTIONS[strategy.id]
+                df = _load_histories(db, days=days)
+                items = strategy.run(df)
+                if items:
+                    items_data = [
+                        {
+                            "code": item.code,
+                            "name": item.name,
+                            "close": item.close,
+                            "change_pct": item.change_pct,
+                        }
+                        for item in items[:20]
+                    ]
+                    feishu.push_strategy_result(strategy.name, items_data)
+                    logger.info(f"[SCHED] 策略推送 {strategy.name}: {len(items)} 只")
+            except Exception:
+                logger.exception(f"[SCHED] 策略执行失败 {strategy.id}")
+    finally:
+        db.close()
+
+
 def start():
     global _scheduler
     if _scheduler is not None:
@@ -925,6 +956,12 @@ def start():
         lambda: _run_with_meta("daily_value", job_daily_value, allow_shortcut=False),
         CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
         id="daily_value",
+    )
+    # 周一-周五 19:00：全策略扫描 + 飞书推送
+    _scheduler.add_job(
+        lambda: _run_with_meta("strategy_push", job_strategy_push, allow_shortcut=False),
+        CronTrigger(day_of_week="mon-fri", hour=19, minute=0),
+        id="strategy_push",
     )
     # 周六 02:00：全量财务指标
     _scheduler.add_job(
