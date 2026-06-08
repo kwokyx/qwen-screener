@@ -225,7 +225,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
                 "close": item.close,
                 "change_pct": item.change_pct,
             }
-            for item in response.items[:20]
+            for item in response.items
         ]
         threading.Thread(
             target=feishu.push_strategy_result,

@@ -127,7 +127,7 @@ class FeishuNotifier:
     def _build_card(strategy_name: str, items: list[dict]) -> dict:
         today = date.today().strftime("%Y-%m-%d")
         lines = []
-        for i, s in enumerate(items[:20], 1):
+        for i, s in enumerate(items, 1):
             code = s.get("code", "")
             name = s.get("name") or code
             close = s.get("close")
@@ -165,7 +165,7 @@ class FeishuNotifier:
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**选股列表（前 20）：**\n{stock_text}",
+                            "content": f"**选股列表：**\n{stock_text}",
                         },
                     },
                 ],

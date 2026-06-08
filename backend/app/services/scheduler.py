@@ -927,7 +927,7 @@ def job_strategy_push() -> None:
                             "close": item.close,
                             "change_pct": item.change_pct,
                         }
-                        for item in items[:20]
+                        for item in items
                     ]
                     feishu.push_strategy_result(strategy.name, items_data)
                     logger.info(f"[SCHED] 策略推送 {strategy.name}: {len(items)} 只")
