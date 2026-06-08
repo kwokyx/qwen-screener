@@ -42,7 +42,7 @@ const canSubmit = computed(() => Boolean(input.value.trim()) && !isStreaming.val
 const presetPrompts = [
   '帮我找近期强势突破的股票',
   '低估值高分红的银行股',
-  '帮我设计一个稳健的选股策略，只要条件不执行',
+  '帮我找RPS强势突破的股票',
   '半导体行业市值 500 亿以上的龙头',
 ]
 
