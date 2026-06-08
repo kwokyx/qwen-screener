@@ -348,7 +348,7 @@ onMounted(loadAll)
         </div>
       </NAlert>
 
-      <NGrid :cols="24" :x-gap="12" :y-gap="12" responsive="screen" class="main-grid">
+      <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" class="main-grid">
         <NGi :span="16">
           <NCard class="terminal-card table-card" :bordered="false">
             <template #header>
@@ -360,7 +360,7 @@ onMounted(loadAll)
               </div>
             </template>
             <template #header-extra>
-              <NTabs v-model:value="moverTab" type="segment" size="small" animated>
+              <NTabs v-model:value="moverTab" type="segment" size="medium" animated>
                 <NTabPane v-for="t in moverTabs" :key="t.id" :name="t.id" :tab="t.label" />
               </NTabs>
             </template>
@@ -519,7 +519,7 @@ onMounted(loadAll)
 }
 
 .terminal-card :deep(.n-card__content) {
-  padding: 14px 18px 18px;
+  padding: 18px 22px 22px;
 }
 
 .index-card {
@@ -790,7 +790,7 @@ onMounted(loadAll)
 .strength-card :deep(.n-data-table-td) {
   background: transparent;
   font-size: 13px;
-  padding: 10px 8px;
+  padding: 14px 12px;
 }
 
 .table-card :deep(.n-data-table-tr:hover td),
