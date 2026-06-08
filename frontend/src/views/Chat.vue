@@ -236,7 +236,7 @@ function restoreFromHistory(id) {
 async function openFullResults(turn = latestTurn.value) {
   const plan = turn?.agentPlan || agentPlan.value
   if (plan?.tool === 'strategy_select') {
-    router.push('/strategy')
+    router.push({ path: '/strategy', query: { strategy: plan.strategy_id || 'rps_breakout' } })
     return
   }
   const turnResult = turn?.result || result.value || null

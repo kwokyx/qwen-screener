@@ -142,6 +142,6 @@ def push_alert(
     tag = payload.get("tag", "")
 
     feishu.push_strategy_result(
-        strategy_name=f"价格预警{'📈' if tone == 'up' else '📉'}",
+        strategy_name=f"预警触发{'📈' if tone == 'up' else '📉'}",
         items=[{"code": code, "name": f"{tag}: {stock}", "close": None, "change_pct": None}],
     )
