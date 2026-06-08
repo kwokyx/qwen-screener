@@ -61,12 +61,20 @@ class FeishuNotifier:
             logger.error(f"飞书推送跳过 [app] {strategy_name}: 无法获取 token")
             return
 
+        if settings.feishu_chat_id:
+            receive_id, id_type = settings.feishu_chat_id, "chat_id"
+        elif settings.feishu_open_id:
+            receive_id, id_type = settings.feishu_open_id, "open_id"
+        else:
+            logger.error(f"飞书推送跳过 [app] {strategy_name}: 未配置 feishu_chat_id 或 feishu_open_id")
+            return
+
         payload = self._build_card(strategy_name, items)
         try:
             resp = httpx.post(
-                "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+                "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=" + id_type,
                 json={
-                    "receive_id": settings.feishu_chat_id,
+                    "receive_id": receive_id,
                     "msg_type": "interactive",
                     "content": json.dumps(payload["card"]),
                 },
