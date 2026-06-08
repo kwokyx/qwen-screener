@@ -27,24 +27,14 @@ from app.schemas.strategy import (
 from app.services import qwen_client, screener_engine
 from app.services.strategies import (
     STRATEGIES,
-    STRATEGY_CANDIDATE_LIMIT,
     STRATEGY_REGISTRY,
-)
-from app.services.strategies.base import (
-    LONG_STRATEGY_CANDIDATE_LIMIT,
-    DailyPoint,
-    amount_yi as _amount_yi,
-    avg as _avg,
-    base_item as _base_item,
-    pct as _pct,
-    pct_rank as _pct_rank,
 )
 
 
 TEMPLATES = [strategy.template for strategy in STRATEGIES]
 
 TEMPLATE_MAP = {tpl.id: tpl for tpl in TEMPLATES}
-_StrategyCacheKey = tuple[str, object | None, int, int | None]
+_StrategyCacheKey = tuple[str, object | None]
 _RESULT_CACHE: dict[_StrategyCacheKey, tuple[float, StrategySelectResponse]] = {}
 _RESULT_CACHE_TTL = 300
 _RESULT_CACHE_LOCK = threading.Lock()
@@ -53,10 +43,8 @@ _RESULT_CACHE_GENERATION = 0
 _SINGLEFLIGHT_WAIT_SECONDS = 120.0
 _AI_STATUS_CACHE: tuple[float, dict] | None = None
 _AI_STATUS_TTL = 120
-_STRATEGY_CANDIDATE_LIMIT = STRATEGY_CANDIDATE_LIMIT
-_LONG_STRATEGY_CANDIDATE_LIMIT = LONG_STRATEGY_CANDIDATE_LIMIT
-_STRATEGY_HISTORY_OPTIONS: dict[str, tuple[int, int | None]] = {
-    strategy.id: (strategy.history_days, strategy.max_codes)
+_STRATEGY_HISTORY_OPTIONS: dict[str, int] = {
+    strategy.id: strategy.history_days
     for strategy in STRATEGIES
 }
 
@@ -179,9 +167,8 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
     if strategy_id not in TEMPLATE_MAP:
         raise ValueError(f"未知策略: {strategy_id}")
 
-    history_days, max_codes = _STRATEGY_HISTORY_OPTIONS[strategy_id]
     latest_trade_date = _latest_strategy_trade_date(db)
-    cache_key: _StrategyCacheKey = (strategy_id, latest_trade_date, history_days, max_codes)
+    cache_key: _StrategyCacheKey = (strategy_id, latest_trade_date)
 
     while True:
         with _RESULT_CACHE_LOCK:
@@ -206,11 +193,11 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
             return _slice_strategy_response(inflight.response, limit)
 
     try:
+        history_days = _STRATEGY_HISTORY_OPTIONS[strategy_id]
         response = _compute_strategy_selection(
             db,
             strategy_id=strategy_id,
             history_days=history_days,
-            max_codes=max_codes,
         )
     except BaseException as exc:
         with _RESULT_CACHE_LOCK:
@@ -252,17 +239,16 @@ def _compute_strategy_selection(
     *,
     strategy_id: str,
     history_days: int,
-    max_codes: int | None,
 ) -> StrategySelectResponse:
-    histories = _load_histories(db, days=history_days, max_codes=max_codes)
-    items = _run_registered_strategy(strategy_id, histories)
+    import pandas as pd
+
+    strategy = STRATEGY_REGISTRY[strategy_id]
+    df = _load_histories(db, days=history_days)
+    items = strategy.run(df)
     items.sort(key=lambda item: item.score, reverse=True)
     latest_date = max((item.trade_date for item in items if item.trade_date), default=None)
-    scope_note = (
-        "该策略使用全市场最近日线数据计算，不代表收益回测。"
-        if max_codes is None
-        else f"为控制响应时间，该策略默认在最新成交额前 {max_codes} 只流动性股票池内计算，不代表全市场回测。"
-    )
+    scope_note = "该策略使用全市场最近日线数据计算，不代表收益回测。"
+
     response = StrategySelectResponse(
         strategy=TEMPLATE_MAP[strategy_id],
         trade_date=latest_date,
@@ -271,7 +257,6 @@ def _compute_strategy_selection(
         notes=[
             "策略选股只基于本地日线与估值数据做条件筛选，结果表示当前条件命中。",
             scope_note,
-            "命中强度仅用于当前策略内部排序，不代表跨策略统一评分或投资评级。",
             "策略计算以接口实时执行为主，便于前端查看当前命中股票。",
         ],
     )
@@ -2562,24 +2547,12 @@ def _format_condition_value(value) -> str:
 def _load_histories(
     db: Session,
     days: int,
-    max_codes: int | None = _STRATEGY_CANDIDATE_LIMIT,
-) -> dict[str, list[DailyPoint]]:
+) -> "pd.DataFrame":
+    import pandas as pd
+
     latest_date = db.query(StockDaily.trade_date).order_by(desc(StockDaily.trade_date)).limit(1).scalar()
     if latest_date is None:
-        return {}
-
-    codes: list[str] | None = None
-    if max_codes is not None:
-        latest_rows = (
-            db.query(StockDaily.code)
-            .filter(StockDaily.trade_date == latest_date)
-            .order_by(desc(StockDaily.amount))
-            .limit(max_codes)
-            .all()
-        )
-        codes = [row[0] for row in latest_rows]
-        if not codes:
-            return {}
+        return pd.DataFrame()
 
     date_rows = (
         db.query(StockDaily.trade_date)
@@ -2590,24 +2563,17 @@ def _load_histories(
     )
     dates = [r[0] for r in date_rows]
     if not dates:
-        return {}
+        return pd.DataFrame()
     start_date = min(dates)
     end_date = max(dates)
 
-    filters = [
-        StockDaily.trade_date >= start_date,
-        StockDaily.trade_date <= end_date,
-    ]
-    if codes is not None:
-        filters.append(StockDaily.code.in_(codes))
-
     rows = (
         db.query(
-            StockBasic.code,
+            StockBasic.code.label("symbol"),
             StockBasic.name,
             StockBasic.industry,
             StockBasic.market,
-            StockDaily.trade_date,
+            StockDaily.trade_date.label("date"),
             StockDaily.open,
             StockDaily.high,
             StockDaily.low,
@@ -2616,57 +2582,24 @@ def _load_histories(
             StockDaily.amount,
         )
         .join(StockDaily, StockDaily.code == StockBasic.code)
-        .filter(*filters)
+        .filter(
+            StockDaily.trade_date >= start_date,
+            StockDaily.trade_date <= end_date,
+        )
         .order_by(StockDaily.code.asc(), StockDaily.trade_date.asc())
         .all()
     )
-    histories: dict[str, list[DailyPoint]] = defaultdict(list)
-    for row in rows:
-        if row.close is None or row.high is None or row.low is None:
-            continue
-        histories[row.code].append(
-            DailyPoint(
-                code=row.code,
-                name=row.name,
-                industry=row.industry,
-                market=row.market,
-                trade_date=row.trade_date,
-                open=row.open,
-                high=row.high,
-                low=row.low,
-                close=row.close,
-                volume=row.volume,
-                amount=row.amount,
-            )
-        )
-    expected_dates = set(dates)
-    return {
-        code: points
-        for code, points in histories.items()
-        if len(points) == len(expected_dates)
-        and {point.trade_date for point in points} == expected_dates
-    }
+    if not rows:
+        return pd.DataFrame()
 
+    from sqlalchemy import inspect
+    cols = [desc["name"] for desc in inspect(rows[0]).parent._all_columns if hasattr(rows[0], desc["name"])]
+    data = [{col: getattr(row, col) for col in cols} for row in rows]
+    df = pd.DataFrame(data)
+    df = df.dropna(subset=["close", "high", "low"])
+    df = df[df["volume"] > 0]
 
-def _eval_turtle_breakout(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
-    return STRATEGY_REGISTRY["turtle_breakout"].run(histories)
-
-
-def _eval_ma_volume(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
-    return STRATEGY_REGISTRY["ma_volume"].run(histories)
-
-
-def _eval_rps_breakout(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
-    return STRATEGY_REGISTRY["rps_breakout"].run(histories)
-
-
-def _eval_limit_up_shakeout(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
-    return STRATEGY_REGISTRY["limit_up_shakeout"].run(histories)
-
-
-def _eval_uptrend_limit_down(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
-    return STRATEGY_REGISTRY["uptrend_limit_down"].run(histories)
-
-
-def _eval_high_tight_flag(histories: dict[str, list[DailyPoint]]) -> list[StrategyPickItem]:
-    return STRATEGY_REGISTRY["high_tight_flag"].run(histories)
+    expected_count = len(dates)
+    counts = df.groupby("symbol")["date"].nunique()
+    valid = counts[counts == expected_count].index
+    return df[df["symbol"].isin(valid)].copy()
