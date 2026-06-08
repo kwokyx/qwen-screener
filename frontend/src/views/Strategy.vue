@@ -298,21 +298,6 @@ const columns = [
       return h('div', { class: 'metrics-line' }, metrics.join(' / ') || '-')
     },
   },
-  {
-    title: '数据状态',
-    key: 'data_status',
-    width: 100,
-    render(row) {
-      if (!row.missingMetrics) return '-'
-      const missing = row.missingMetrics
-      return h(NTag, {
-        size: 'small',
-        bordered: false,
-        type: missing.length ? 'warning' : 'success',
-        title: missing.length ? `缺失：${missing.join('、')}` : '关键字段完整',
-      }, { default: () => missing.length === 1 ? `缺${missing[0]}` : missing.length ? `缺失 ${missing.length} 项` : '字段完整' })
-    },
-  },
 ]
 
 function gotoDetail(code) {
