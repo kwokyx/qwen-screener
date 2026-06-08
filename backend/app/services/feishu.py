@@ -65,8 +65,10 @@ class FeishuNotifier:
             receive_id, id_type = settings.feishu_chat_id, "chat_id"
         elif settings.feishu_open_id:
             receive_id, id_type = settings.feishu_open_id, "open_id"
+        elif settings.feishu_email:
+            receive_id, id_type = settings.feishu_email, "email"
         else:
-            logger.error(f"飞书推送跳过 [app] {strategy_name}: 未配置 feishu_chat_id 或 feishu_open_id")
+            logger.error(f"飞书推送跳过 [app] {strategy_name}: 未配置 feishu_chat_id、feishu_open_id 或 feishu_email")
             return
 
         payload = self._build_card(strategy_name, items)

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     feishu_app_secret: str = ""
     feishu_chat_id: str = ""
     feishu_open_id: str = ""
+    feishu_email: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:
