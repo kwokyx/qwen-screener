@@ -194,7 +194,7 @@ async function setViewport(cdp, width, height, mobile = false) {
 
 async function navigate(cdp, url) {
   await cdp.send('Page.navigate', { url })
-  await waitForExpression(cdp, 'document.body && document.body.innerText.includes("智能选股")', `page load ${url}`)
+  await waitForExpression(cdp, 'document.body && document.body.innerText.includes("策略选股")', `page load ${url}`)
 }
 
 async function seedAuth(cdp, loginData) {
@@ -361,7 +361,7 @@ async function run() {
 
     await setViewport(cdp, 1440, 900)
     await navigate(cdp, `${BASE_URL}/strategy`)
-    await clickByText(cdp, '策略库', { selector: 'label,button' })
+    await clickByText(cdp, '策略选股', { selector: 'label,button' })
     await waitForExpression(
       cdp,
       `(() => ${JSON.stringify(STRATEGY_NAMES)}.every((name) => document.body.innerText.includes(name)))()`,
@@ -413,7 +413,7 @@ async function run() {
 
     await setViewport(cdp, 390, 844, true)
     await navigate(cdp, `${BASE_URL}/strategy`)
-    await clickByText(cdp, '策略库', { selector: 'label,button' })
+    await clickByText(cdp, '策略选股', { selector: 'label,button' })
     await waitForExpression(cdp, 'document.querySelectorAll(".strategy-item:not(.skeleton-card)").length === 6', 'mobile strategy cards')
     const mobile = await mobileLayoutSnapshot(cdp)
     if (mobile.overflowers.length) fail('Mobile strategy layout has visible overflow.', mobile)

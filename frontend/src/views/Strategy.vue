@@ -17,25 +17,19 @@ import {
 } from 'naive-ui'
 import Shell from '../components/Shell.vue'
 import { screen as screenStocks } from '../api/screener'
-import { getStrategyTemplates, getStrategyTools, runStrategyAgent, selectStrategy } from '../api/strategy'
-import { useAiStatusStore } from '../stores/aiStatus'
+import { getStrategyTemplates, getStrategyTools, selectStrategy } from '../api/strategy'
 
 const router = useRouter()
-const aiStatus = useAiStatusStore()
 
 const templates = ref([])
 const tools = ref([])
 const activeId = ref('')
 const result = ref(null)
-const agentResult = ref(null)
 const structuredResult = ref(null)
-const agentQuery = ref('低估值高分红的银行股')
 const loading = ref(false)
 const bootstrapLoading = ref(true)
-const agentLoading = ref(false)
 const structuredLoading = ref(false)
 const errorMsg = ref('')
-const agentError = ref('')
 const structuredError = ref('')
 let structuredConditionId = 2
 const structuredConditions = ref([
@@ -45,26 +39,21 @@ const structuredConditions = ref([
 const structuredLogic = ref('AND')
 const structuredSortBy = ref('market_cap')
 const structuredSortDesc = ref(true)
-const workspaceMode = ref('agent')
+const workspaceMode = ref('structured')
 const storageReady = ref(false)
 const STATE_STORAGE_KEY = 'qwen-stock:strategy-page-state:v1'
 
 const activeTemplate = computed(() => templates.value.find((item) => item.id === activeId.value))
-const isAgentDesign = computed(() => agentResult.value?.plan?.tool === 'strategy_design')
 const rows = computed(() => {
-  const screen = agentResult.value?.screen_result || structuredResult.value
+  const screen = structuredResult.value
   if (screen) {
-    const labels = agentResult.value?.plan?.condition_labels?.length
-      ? agentResult.value.plan.condition_labels
-      : structuredConditionLabels.value
-    return mapScreenRows(screen.items || [], labels)
+    return mapScreenRows(screen.items || [], structuredConditionLabels.value)
   }
-  return agentResult.value?.strategy_result?.items || result.value?.items || []
+  return result.value?.items || []
 })
-const displayTotal = computed(() => agentResult.value?.screen_result?.total ?? structuredResult.value?.total ?? agentResult.value?.strategy_result?.total ?? result.value?.total ?? 0)
-const displayTradeDate = computed(() => agentResult.value?.screen_result?.items?.[0]?.trade_date
+const displayTotal = computed(() => structuredResult.value?.total ?? result.value?.total ?? 0)
+const displayTradeDate = computed(() => structuredResult.value?.items?.[0]?.trade_date
   || structuredResult.value?.items?.[0]?.trade_date
-  || agentResult.value?.strategy_result?.trade_date
   || result.value?.trade_date
   || '-')
 const displayTitle = computed(() => {
@@ -75,14 +64,12 @@ const displayTitle = computed(() => {
     if (workspaceMode.value === 'strategy' && activeTemplate.value) return `待筛选：${activeTemplate.value.name}`
     return '待筛选'
   }
-  if (agentResult.value) return `Agent：${agentResult.value.plan?.tool_label || '智能选股'}`
   if (structuredResult.value) return '结构化条件筛选'
   return activeTemplate.value?.name || '策略'
 })
 const stockScreenTool = computed(() => tools.value.find((item) => item.id === 'stock_screen'))
 const strategyTool = computed(() => tools.value.find((item) => item.id === 'strategy_select'))
 const activeTool = computed(() => {
-  if (agentResult.value?.plan?.tool) return tools.value.find((item) => item.id === agentResult.value.plan.tool)
   if (structuredResult.value) return stockScreenTool.value
   return strategyTool.value || tools.value[0]
 })
@@ -98,7 +85,7 @@ const structuredSortOptions = computed(() => [
     .filter((field) => field.data_type === 'number')
     .map((field) => ({ label: field.label, value: field.key })),
 ])
-const isBusy = computed(() => loading.value || agentLoading.value || structuredLoading.value)
+const isBusy = computed(() => loading.value || structuredLoading.value)
 const operatorLabels = {
   gt: '大于',
   gte: '大于等于',
@@ -109,11 +96,10 @@ const operatorLabels = {
   in: '包含任一',
 }
 const structuredConditionLabels = computed(() => structuredConditions.value.map(formatStructuredCondition))
-const tableLoading = computed(() => loading.value || agentLoading.value || structuredLoading.value)
-const hasResult = computed(() => Boolean(agentResult.value || structuredResult.value || result.value))
+const tableLoading = computed(() => loading.value || structuredLoading.value)
+const hasResult = computed(() => Boolean(structuredResult.value || result.value))
 const resultSourceLabel = computed(() => {
   if (loading.value && workspaceMode.value === 'strategy') return '计算中'
-  if (agentResult.value) return agentResult.value.plan.ai_used ? 'AI 规划' : '本地规划'
   if (structuredResult.value) return '条件筛选'
   if (result.value) return '内置策略'
   return '待筛选'
@@ -121,69 +107,13 @@ const resultSourceLabel = computed(() => {
 const resultSourceType = computed(() => {
   if (loading.value && workspaceMode.value === 'strategy') return 'info'
   if (!hasResult.value) return 'default'
-  if (agentResult.value && !agentResult.value.plan.ai_used) return 'warning'
   return 'success'
 })
-const agentConditionList = computed(() => {
-  if (!agentResult.value) return []
-  const labels = agentResult.value.plan?.condition_labels || []
-  if (labels.length) return labels
-  if (agentResult.value.plan?.tool === 'strategy_select') {
-    return activeTemplate.value?.rules || []
-  }
-  return ['未指定细分条件，使用默认股票池约束']
-})
-const agentSortText = computed(() => {
-  const plan = agentResult.value?.plan
-  if (!plan?.sort_by) return '默认排序'
-  const label = fieldLabelMap.value[plan.sort_by] || plan.sort_by
-  return `${label}${plan.sort_desc ? '从高到低' : '从低到高'}`
-})
-const agentRiskNotes = computed(() => {
-  if (!agentResult.value) return []
-  if (isAgentDesign.value) {
-    return [
-      ...(agentResult.value.warnings || []),
-      ...activeToolNotes.value,
-      '这是策略草案，不是已执行的股票池结果。',
-    ]
-  }
-  const notes = [
-    ...(agentResult.value.warnings || []),
-    ...activeToolNotes.value,
-    '选股结果只表示当前数据命中条件，不构成买卖建议。',
-  ]
-  return [...new Set(notes)]
-})
-const agentToolTrace = computed(() => agentResult.value?.tool_trace || [])
-const aiStatusText = computed(() => {
-  if (!aiStatus.lastChecked) return 'AI 检测中'
-  if (aiStatus.pending) return 'AI 检测中 · 本地规则可用'
-  if (aiStatus.stale) return 'AI 状态刷新中'
-  if (aiStatus.isUp) return 'AI 可用'
-  return aiStatus.reason ? `AI 降级：${aiStatus.reason}` : 'AI 降级运行'
-})
-const aiStatusType = computed(() => {
-  if (!aiStatus.lastChecked) return 'default'
-  if (aiStatus.pending || aiStatus.stale) return 'default'
-  return aiStatus.isUp ? 'success' : 'warning'
-})
-const agentSummary = computed(() => agentResult.value?.answer || '')
 const tableLoadingText = computed(() => {
   if (loading.value && workspaceMode.value === 'strategy') return '正在计算策略'
-  if (agentLoading.value) return '正在执行智能选股'
   if (structuredLoading.value) return '正在执行条件筛选'
   return '正在加载选股结果'
 })
-
-const agentExamples = [
-  '低估值高分红的银行股',
-  '找最近强势突破的股票',
-  '找涨停后承接的股票',
-  '找上升趋势急跌的股票',
-  '半导体行业里的大市值龙头',
-  '白马股，ROE 高，估值不要太贵',
-]
 
 function getStructuredField(field) {
   return stockScreenTool.value?.fields?.find((item) => item.key === field)
@@ -362,7 +292,6 @@ async function runSelection(id = activeId.value) {
   if (!id || isBusy.value) return
   loading.value = true
   errorMsg.value = ''
-  agentResult.value = null
   structuredResult.value = null
   result.value = null
   try {
@@ -376,35 +305,12 @@ async function runSelection(id = activeId.value) {
   }
 }
 
-async function runAgent() {
-  const query = agentQuery.value.trim()
-  if (!query || isBusy.value) return
-  agentLoading.value = true
-  agentError.value = ''
-  errorMsg.value = ''
-  agentResult.value = null
-  structuredResult.value = null
-  result.value = null
-  try {
-    const data = await runStrategyAgent(query, { limit: 80 })
-    agentResult.value = data
-    if (data.plan?.strategy_id) activeId.value = data.plan.strategy_id
-    if (data.strategy_result) result.value = data.strategy_result
-    persistState()
-  } catch (err) {
-    agentError.value = err.response?.data?.detail || err.message || 'Agent 选股失败'
-  } finally {
-    agentLoading.value = false
-  }
-}
-
 async function runStructuredScreen() {
   if (isBusy.value) return
   structuredLoading.value = true
   structuredError.value = ''
   errorMsg.value = ''
   structuredResult.value = null
-  agentResult.value = null
   result.value = null
   try {
     const conditions = structuredConditions.value.map(normalizeStructuredCondition)
@@ -415,7 +321,6 @@ async function runStructuredScreen() {
       limit: 80,
     })
     structuredResult.value = data
-    agentResult.value = null
     result.value = null
     persistState()
   } catch (err) {
@@ -425,15 +330,10 @@ async function runStructuredScreen() {
   }
 }
 
-function useExample(text) {
-  agentQuery.value = text
-}
-
 function chooseStrategy(id) {
   if (isBusy.value) return
   workspaceMode.value = 'strategy'
   activeId.value = id
-  agentResult.value = null
   structuredResult.value = null
   result.value = null
   errorMsg.value = ''
@@ -452,11 +352,8 @@ function restoreSavedState() {
   const saved = readSavedState()
   if (!saved || saved.version !== 1) return
 
-  if (['agent', 'structured', 'strategy'].includes(saved.workspaceMode)) {
+  if (['structured', 'strategy'].includes(saved.workspaceMode)) {
     workspaceMode.value = saved.workspaceMode
-  }
-  if (typeof saved.agentQuery === 'string') {
-    agentQuery.value = saved.agentQuery
   }
   if (saved.activeId && templates.value.some((item) => item.id === saved.activeId)) {
     activeId.value = saved.activeId
@@ -476,7 +373,6 @@ function restoreSavedState() {
   }
 
   result.value = saved.result || null
-  agentResult.value = saved.agentResult || null
   structuredResult.value = saved.structuredResult || null
 }
 
@@ -487,13 +383,11 @@ function persistState() {
       version: 1,
       workspaceMode: workspaceMode.value,
       activeId: activeId.value,
-      agentQuery: agentQuery.value,
       structuredConditions: structuredConditions.value,
       structuredLogic: structuredLogic.value,
       structuredSortBy: structuredSortBy.value,
       structuredSortDesc: structuredSortDesc.value,
       result: result.value,
-      agentResult: agentResult.value,
       structuredResult: structuredResult.value,
     }))
   } catch (err) {
@@ -530,13 +424,11 @@ onMounted(bootstrap)
 watch([
   workspaceMode,
   activeId,
-  agentQuery,
   structuredConditions,
   structuredLogic,
   structuredSortBy,
   structuredSortDesc,
   result,
-  agentResult,
   structuredResult,
 ], persistState, { deep: true })
 </script>
@@ -546,7 +438,7 @@ watch([
     <div class="strategy-page">
       <section class="page-head">
         <div>
-          <h1>智能选股</h1>
+          <h1>策略选股</h1>
           <span>交易日 {{ displayTradeDate }}</span>
         </div>
         <n-button
@@ -564,40 +456,12 @@ watch([
       <n-card size="small" :bordered="true" class="workspace-card">
         <div class="workspace-bar">
           <n-radio-group v-model:value="workspaceMode" size="small" :disabled="isBusy">
-            <n-radio-button value="agent">智能选股</n-radio-button>
-            <n-radio-button value="structured">条件筛选</n-radio-button>
-            <n-radio-button value="strategy">策略库</n-radio-button>
+            <n-radio-button value="structured">条件选股</n-radio-button>
+            <n-radio-button value="strategy">策略选股</n-radio-button>
           </n-radio-group>
-          <n-tag size="small" :bordered="false" :type="aiStatusType">
-            {{ aiStatusText }}
-          </n-tag>
         </div>
 
-        <div v-if="workspaceMode === 'agent'" class="mode-panel">
-          <div class="agent-input">
-            <n-input
-              v-model:value="agentQuery"
-              clearable
-              :disabled="isBusy"
-              placeholder="例如：低估值高分红的银行股"
-              @keydown.enter.exact.prevent="runAgent"
-            />
-            <n-button type="primary" strong :disabled="!agentQuery.trim() || isBusy" :loading="agentLoading" @click="runAgent">筛选</n-button>
-          </div>
-          <div class="quick-examples">
-            <button v-for="item in agentExamples" :key="item" type="button" :disabled="isBusy" @click="useExample(item)">
-              {{ item }}
-            </button>
-          </div>
-          <n-alert v-if="agentError" type="error" :bordered="false" class="notice compact">
-            {{ agentError }}
-          </n-alert>
-          <n-alert v-else-if="agentResult?.warnings?.length" type="warning" :bordered="false" class="notice compact">
-            {{ agentResult.warnings[0] }}
-          </n-alert>
-        </div>
-
-        <div v-else-if="workspaceMode === 'structured'" class="mode-panel">
+        <div v-if="workspaceMode === 'structured'" class="mode-panel">
           <div class="structured-toolbar">
             <div class="structured-control">
               <span>关系</span>
@@ -714,8 +578,7 @@ watch([
             <div class="table-head">
               <div>
                 <strong>{{ displayTitle }}</strong>
-                <span v-if="isAgentDesign">未执行筛选 · 显示策略条件</span>
-                <span v-else-if="hasResult">{{ displayTotal }} 只命中</span>
+                <span v-if="hasResult">{{ displayTotal }} 只命中</span>
                 <span v-else-if="tableLoading">请稍候，正在计算</span>
                 <span v-else>点击筛选后显示结果</span>
               </div>
@@ -724,10 +587,6 @@ watch([
               </n-tag>
             </div>
           </template>
-
-          <div v-if="agentSummary" class="agent-summary">
-            {{ agentSummary }}
-          </div>
 
           <n-data-table
             v-if="rows.length"
@@ -740,7 +599,7 @@ watch([
           />
           <n-empty
             v-else-if="!tableLoading"
-            :description="isAgentDesign ? '策略设计请求未执行筛选' : (hasResult ? '当前条件没有命中股票' : '请选择策略或输入条件，点击筛选后显示结果')"
+            :description="hasResult ? '当前条件没有命中股票' : '请选择策略或输入条件，点击筛选后显示结果'"
           />
           <div v-else class="table-loading">
             <div class="loading-title">{{ tableLoadingText }}</div>
@@ -753,33 +612,6 @@ watch([
             </div>
           </div>
         </n-card>
-
-        <details v-if="agentResult" class="details-panel">
-          <summary>{{ isAgentDesign ? '查看策略说明' : '查看筛选说明' }}</summary>
-          <div class="details-grid">
-            <div>
-              <strong>筛选条件</strong>
-              <div class="condition-list">
-                <n-tag v-for="condition in agentConditionList" :key="condition" size="small" :bordered="false">
-                  {{ condition }}
-                </n-tag>
-              </div>
-              <small v-if="!isAgentDesign">排序：{{ agentSortText }}</small>
-            </div>
-            <div>
-              <strong>工具调用</strong>
-              <div class="tool-trace">
-                <code v-for="trace in agentToolTrace" :key="trace">{{ trace }}</code>
-              </div>
-            </div>
-            <div>
-              <strong>说明</strong>
-              <ul class="risk-list">
-                <li v-for="note in agentRiskNotes" :key="note">{{ note }}</li>
-              </ul>
-            </div>
-          </div>
-        </details>
 
         <details v-if="workspaceMode === 'strategy' && activeTemplate" class="details-panel">
           <summary>查看策略规则</summary>
@@ -837,33 +669,6 @@ watch([
   padding-top: 10px;
 }
 
-.quick-examples {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-
-.quick-examples button {
-  padding: 3px 7px;
-  border: 1px solid #E5E7EB;
-  border-radius: 4px;
-  background: #FFFFFF;
-  color: #52525B;
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.quick-examples button:hover {
-  border-color: #A1A1AA;
-  color: #111111;
-}
-
-.quick-examples button:disabled {
-  cursor: wait;
-  opacity: 0.56;
-}
-
 .strategy-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -887,45 +692,9 @@ watch([
   font-weight: 700;
 }
 
-.details-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding: 0 10px 10px;
-}
-
-.details-grid > div {
-  min-width: 0;
-  padding: 8px;
-  border: 1px solid #F0F0F0;
-  border-radius: 4px;
-}
-
-.details-grid strong {
-  display: block;
-  margin-bottom: 7px;
-  color: #111111;
-}
-
-.details-grid small {
-  display: block;
-  margin-top: 7px;
-}
-
 .detail-note {
   padding: 0 10px 8px;
   line-height: 1.6;
-}
-
-.agent-summary {
-  margin-bottom: 8px;
-  padding: 7px 9px;
-  border: 1px solid #EDEDED;
-  border-radius: 4px;
-  background: #FAFAFA;
-  color: #3F3F46;
-  font-size: 12px;
-  line-height: 1.55;
 }
 
 h1 {
@@ -933,21 +702,6 @@ h1 {
   font-size: 28px;
   line-height: 1.15;
   color: #111111;
-}
-
-.agent-input {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 108px;
-  gap: 10px;
-  align-items: stretch;
-}
-
-.agent-input :deep(.n-input) {
-  border-radius: 6px;
-}
-
-.agent-input :deep(.n-button) {
-  border-radius: 6px;
 }
 
 .structured-toolbar,
@@ -1020,37 +774,6 @@ h1 {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-}
-
-.condition-list {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.risk-list {
-  margin: 0;
-  padding-left: 16px;
-  color: #52525B;
-  font-size: 12px;
-  line-height: 1.65;
-}
-
-.tool-trace {
-  display: grid;
-  gap: 8px;
-}
-
-.tool-trace code {
-  display: block;
-  padding: 5px 6px;
-  border-radius: 4px;
-  background: #FAFAFA;
-  border: 1px solid #E5E7EB;
-  color: #3F3F46;
-  font-size: 11px;
-  white-space: normal;
-  word-break: break-all;
 }
 
 .strategy-item {
@@ -1258,10 +981,6 @@ h1 {
 }
 
 @media (max-width: 960px) {
-  .details-grid {
-    grid-template-columns: 1fr;
-  }
-
   .structured-toolbar,
   .structured-foot {
     align-items: flex-start;
@@ -1288,9 +1007,6 @@ h1 {
     width: 100%;
   }
 
-  .agent-input {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 640px) {
