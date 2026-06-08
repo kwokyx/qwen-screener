@@ -235,10 +235,6 @@ function restoreFromHistory(id) {
 
 async function openFullResults(turn = latestTurn.value) {
   const plan = turn?.agentPlan || agentPlan.value
-  if (plan?.tool === 'strategy_select') {
-    router.push({ path: '/strategy', query: { strategy: plan.strategy_id || 'rps_breakout' } })
-    return
-  }
   const turnResult = turn?.result || result.value || null
   const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'market_cap'
   const sortDesc = (turn?.screenMeta?.sort_desc ?? plan?.sort_desc ?? screenMeta.value?.sort_desc) !== false
