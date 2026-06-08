@@ -453,9 +453,6 @@ onBeforeUnmount(() => {
           <div :style="{ fontSize: '11.5px', color: A2.textSub, lineHeight: 1.6, marginBottom: '10px' }">
             数据状态可公开查看。手动同步需要登录后执行，避免误触发耗时任务。
           </div>
-          <button class="btn-outline" :style="{ padding: '6px 10px', fontSize: '11px' }" @click="goLogin">
-            登录后同步
-          </button>
         </div>
 
         <!-- 任务列表 -->
