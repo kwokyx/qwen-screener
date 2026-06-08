@@ -360,7 +360,7 @@ onMounted(loadAll)
               </div>
             </template>
             <template #header-extra>
-              <NTabs v-model:value="moverTab" type="segment" size="medium" animated>
+              <NTabs v-model:value="moverTab" type="bar" size="medium" animated>
                 <NTabPane v-for="t in moverTabs" :key="t.id" :name="t.id" :tab="t.label" />
               </NTabs>
             </template>
