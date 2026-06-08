@@ -40,10 +40,10 @@ const chatScroll = ref(null)
 const canSubmit = computed(() => Boolean(input.value.trim()) && !isStreaming.value)
 
 const presetPrompts = [
+  '帮我找近期强势突破的股票',
   '低估值高分红的银行股',
-  'ROE 大于 15 且最新季度净利润同比正增长的成长股',
+  '帮我设计一个稳健的选股策略，只要条件不执行',
   '半导体行业市值 500 亿以上的龙头',
-  '股息率超过 5% 的大蓝筹',
 ]
 
 const fieldLabel = {
