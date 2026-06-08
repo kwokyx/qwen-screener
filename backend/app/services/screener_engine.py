@@ -219,9 +219,7 @@ def _quality_score(daily: StockDaily | None, previous: StockDaily | None, fin: S
     pb = daily.pb if daily else None
     roe = fin.roe if fin else None
     dividend_yield = daily.dividend_yield if daily else None
-    market_cap = daily.market_cap if (daily and daily.market_cap is not None) else None
-    if market_cap is None and daily and daily.close and basic and basic.total_share:
-        market_cap = daily.close * basic.total_share
+    market_cap = daily.market_cap if daily else None
 
     pe_score = 0.0
     if pe is not None and pe > 0:
