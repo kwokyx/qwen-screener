@@ -1,6 +1,6 @@
 <script setup>
 import { computed, h, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import {
   NAlert,
   NButton,
@@ -21,6 +21,7 @@ import { getStrategyTemplates, getStrategyTools, selectStrategy } from '../api/s
 import { industries as fetchIndustries } from '../api/market'
 
 const router = useRouter()
+const route = useRoute()
 
 const templates = ref([])
 const tools = ref([])
@@ -458,6 +459,16 @@ async function bootstrap() {
     tools.value = toolData
     activeId.value = templates.value.find((item) => item.id === 'rps_breakout')?.id || templates.value[0]?.id || ''
     restoreSavedState()
+
+    const strategyFromQuery = route.query.strategy
+    if (strategyFromQuery && templates.value.some((item) => item.id === strategyFromQuery)) {
+      workspaceMode.value = 'strategy'
+      structuredResult.value = null
+      result.value = null
+      activeId.value = strategyFromQuery
+      runSelection(strategyFromQuery)
+    }
+
     didLoad = true
   } catch (err) {
     errorMsg.value = err.response?.data?.detail || err.message || '策略加载失败'
