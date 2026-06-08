@@ -2549,57 +2549,55 @@ def _load_histories(
     days: int,
 ) -> "pd.DataFrame":
     import pandas as pd
+    from urllib.parse import urlparse
 
-    latest_date = db.query(StockDaily.trade_date).order_by(desc(StockDaily.trade_date)).limit(1).scalar()
-    if latest_date is None:
+    db_url = str(settings.database_url)
+    if db_url.startswith("sqlite"):
+        parsed = urlparse(db_url)
+        db_path = parsed.path.lstrip("/")
+        if not db_path or db_path == ":memory:":
+            return pd.DataFrame()
+    else:
         return pd.DataFrame()
 
-    date_rows = (
-        db.query(StockDaily.trade_date)
-        .distinct()
-        .order_by(desc(StockDaily.trade_date))
-        .limit(days)
-        .all()
-    )
-    dates = [r[0] for r in date_rows]
-    if not dates:
-        return pd.DataFrame()
-    start_date = min(dates)
-    end_date = max(dates)
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    try:
+        date_rows = conn.execute(
+            "SELECT DISTINCT trade_date FROM stock_daily ORDER BY trade_date DESC LIMIT ?",
+            (days,),
+        ).fetchall()
+        if not date_rows:
+            return pd.DataFrame()
+        dates = [r[0] for r in date_rows]
+        start_date = min(dates)
+        end_date = max(dates)
 
-    rows = (
-        db.query(
-            StockBasic.code.label("symbol"),
-            StockBasic.name,
-            StockBasic.industry,
-            StockBasic.market,
-            StockDaily.trade_date.label("date"),
-            StockDaily.open,
-            StockDaily.high,
-            StockDaily.low,
-            StockDaily.close,
-            StockDaily.volume,
-            StockDaily.amount,
+        df = pd.read_sql(
+            """
+            SELECT
+                d.code AS symbol, b.name, b.industry, b.market,
+                d.trade_date AS date,
+                d.open, d.high, d.low, d.close, d.volume, d.amount
+            FROM stock_daily d
+            JOIN stock_basic b ON b.code = d.code
+            WHERE d.trade_date >= ? AND d.trade_date <= ?
+            ORDER BY d.code, d.trade_date
+            """,
+            conn,
+            params=(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")),
+            parse_dates=["date"],
         )
-        .join(StockDaily, StockDaily.code == StockBasic.code)
-        .filter(
-            StockDaily.trade_date >= start_date,
-            StockDaily.trade_date <= end_date,
-        )
-        .order_by(StockDaily.code.asc(), StockDaily.trade_date.asc())
-        .all()
-    )
-    if not rows:
-        return pd.DataFrame()
+    finally:
+        conn.close()
 
-    from sqlalchemy import inspect
-    cols = [desc["name"] for desc in inspect(rows[0]).parent._all_columns if hasattr(rows[0], desc["name"])]
-    data = [{col: getattr(row, col) for col in cols} for row in rows]
-    df = pd.DataFrame(data)
+    if df.empty:
+        return df
+
     df = df.dropna(subset=["close", "high", "low"])
     df = df[df["volume"] > 0]
 
-    expected_count = len(dates)
+    expected = len(dates)
     counts = df.groupby("symbol")["date"].nunique()
-    valid = counts[counts == expected_count].index
+    valid = counts[counts == expected].index
     return df[df["symbol"].isin(valid)].copy()
