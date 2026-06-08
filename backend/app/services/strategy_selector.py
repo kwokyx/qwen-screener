@@ -2550,19 +2550,20 @@ def _load_histories(
 ) -> "pd.DataFrame":
     import pandas as pd
 
-    conn = db.connection().connection
-    try:
-        date_rows = conn.execute(
-            "SELECT DISTINCT trade_date FROM stock_daily ORDER BY trade_date DESC LIMIT ?",
-            (days,),
-        ).fetchall()
-        if not date_rows:
-            return pd.DataFrame()
-        dates = [r[0] for r in date_rows]
-        start_date = dates[-1]
-        end_date = dates[0]
+    from sqlalchemy import text
 
-        df = pd.read_sql(
+    date_rows = db.execute(
+        text("SELECT DISTINCT trade_date FROM stock_daily ORDER BY trade_date DESC LIMIT :days"),
+        {"days": days},
+    ).fetchall()
+    if not date_rows:
+        return pd.DataFrame()
+    dates = [r[0] for r in date_rows]
+    start_date = dates[-1]
+    end_date = dates[0]
+
+    df = pd.read_sql(
+        text(
             """
             SELECT
                 d.code AS symbol, b.name, b.industry, b.market,
@@ -2570,15 +2571,14 @@ def _load_histories(
                 d.open, d.high, d.low, d.close, d.volume, d.amount
             FROM stock_daily d
             JOIN stock_basic b ON b.code = d.code
-            WHERE d.trade_date >= ? AND d.trade_date <= ?
+            WHERE d.trade_date >= :start AND d.trade_date <= :end
             ORDER BY d.code, d.trade_date
-            """,
-            conn,
-            params=(start_date, end_date),
-            parse_dates=["date"],
-        )
-    finally:
-        pass  # don't close — SQLAlchemy manages the connection
+            """
+        ),
+        db.bind,
+        params={"start": start_date, "end": end_date},
+        parse_dates=["date"],
+    )
 
     if df.empty:
         return df
