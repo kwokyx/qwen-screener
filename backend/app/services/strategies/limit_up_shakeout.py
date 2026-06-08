@@ -18,9 +18,9 @@ class LimitUpShakeoutStrategy(BaseStrategy):
         df = df.sort_values(["symbol", "date"]).copy()
         g = df.groupby("symbol", sort=False)
 
-        df["prev_close"] = g["close"].shift(1)
-        df["prev2_close"] = g["close"].shift(2)
-        df["prev_volume"] = g["volume"].shift(1)
+        df["prev_close"] = g["close"].shift(1).values
+        df["prev2_close"] = g["close"].shift(2).values
+        df["prev_volume"] = g["volume"].shift(1).values
 
         last = df.groupby("symbol", sort=False).tail(1).dropna(
             subset=["prev_close", "prev2_close", "prev_volume", "open", "low", "close", "volume"]

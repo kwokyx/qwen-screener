@@ -18,9 +18,9 @@ class RpsBreakoutStrategy(BaseStrategy):
         df = df.sort_values(["symbol", "date"]).copy()
         g = df.groupby("symbol", sort=False)
 
-        df["close_120"] = g["close"].shift(120)
-        df["high_120"] = g["high"].rolling(120, min_periods=60).max()
-        df["prev_close"] = g["close"].shift(1)
+        df["close_120"] = g["close"].shift(120).values
+        df["high_120"] = g["high"].rolling(120, min_periods=60).max().values
+        df["prev_close"] = g["close"].shift(1).values
 
         last = df.groupby("symbol", sort=False).tail(1).dropna(subset=["close_120", "high_120"])
         if last.empty:

@@ -18,8 +18,8 @@ class TurtleBreakoutStrategy(BaseStrategy):
         df = df.sort_values(["symbol", "date"]).copy()
         g = df.groupby("symbol", sort=False)
 
-        df["high_20"] = g["high"].shift(1).rolling(20, min_periods=20).max()
-        df["prev_close"] = g["close"].shift(1)
+        df["high_20"] = g["high"].shift(1).rolling(20, min_periods=20).max().values
+        df["prev_close"] = g["close"].shift(1).values
         df["amount_yi"] = df["amount"] / 1e8
 
         last = df.groupby("symbol", sort=False).tail(1)

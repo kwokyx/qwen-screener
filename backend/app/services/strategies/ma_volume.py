@@ -18,12 +18,12 @@ class MaVolumeStrategy(BaseStrategy):
         df = df.sort_values(["symbol", "date"]).copy()
         g = df.groupby("symbol", sort=False)
 
-        df["ma5"] = g["close"].rolling(5, min_periods=5).mean()
-        df["ma20"] = g["close"].rolling(20, min_periods=20).mean()
-        df["vol20"] = g["volume"].rolling(20, min_periods=20).mean()
-        df["ma5_prev"] = g["ma5"].shift(1)
-        df["ma20_prev"] = g["ma20"].shift(1)
-        df["prev_close"] = g["close"].shift(1)
+        df["ma5"] = g["close"].rolling(5, min_periods=5).mean().values
+        df["ma20"] = g["close"].rolling(20, min_periods=20).mean().values
+        df["vol20"] = g["volume"].rolling(20, min_periods=20).mean().values
+        df["ma5_prev"] = g["ma5"].shift(1).values
+        df["ma20_prev"] = g["ma20"].shift(1).values
+        df["prev_close"] = g["close"].shift(1).values
 
         last = df.groupby("symbol", sort=False).tail(1)
         mask = (

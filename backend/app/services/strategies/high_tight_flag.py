@@ -18,12 +18,12 @@ class HighTightFlagStrategy(BaseStrategy):
         df = df.sort_values(["symbol", "date"]).copy()
         g = df.groupby("symbol", sort=False)
 
-        df["high_40"] = g["high"].rolling(40, min_periods=40).max()
-        df["low_40"] = g["low"].rolling(40, min_periods=40).min()
-        df["high_10"] = g["high"].rolling(10, min_periods=10).max()
-        df["low_10"] = g["low"].rolling(10, min_periods=10).min()
-        df["vol20"] = g["volume"].rolling(20, min_periods=20).mean()
-        df["prev_close"] = g["close"].shift(1)
+        df["high_40"] = g["high"].rolling(40, min_periods=40).max().values
+        df["low_40"] = g["low"].rolling(40, min_periods=40).min().values
+        df["high_10"] = g["high"].rolling(10, min_periods=10).max().values
+        df["low_10"] = g["low"].rolling(10, min_periods=10).min().values
+        df["vol20"] = g["volume"].rolling(20, min_periods=20).mean().values
+        df["prev_close"] = g["close"].shift(1).values
 
         last = df.groupby("symbol", sort=False).tail(1).dropna(
             subset=["high_40", "low_40", "high_10", "low_10", "vol20"]

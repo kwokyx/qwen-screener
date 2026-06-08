@@ -18,13 +18,13 @@ class UptrendLimitDownStrategy(BaseStrategy):
         df = df.sort_values(["symbol", "date"]).copy()
         g = df.groupby("symbol", sort=False)
 
-        df["ma20"] = g["close"].rolling(20, min_periods=20).mean()
-        df["ma60"] = g["close"].rolling(60, min_periods=60).mean()
-        df["vol20"] = g["volume"].rolling(20, min_periods=20).mean()
-        df["prev_close"] = g["close"].shift(1)
-        df["prev_ma20"] = g["ma20"].shift(1)
-        df["prev_ma60"] = g["ma60"].shift(1)
-        df["prev_vol20"] = g["vol20"].shift(1)
+        df["ma20"] = g["close"].rolling(20, min_periods=20).mean().values
+        df["ma60"] = g["close"].rolling(60, min_periods=60).mean().values
+        df["vol20"] = g["volume"].rolling(20, min_periods=20).mean().values
+        df["prev_close"] = g["close"].shift(1).values
+        df["prev_ma20"] = g["ma20"].shift(1).values
+        df["prev_ma60"] = g["ma60"].shift(1).values
+        df["prev_vol20"] = g["vol20"].shift(1).values
 
         last = df.groupby("symbol", sort=False).tail(1).dropna(
             subset=["prev_ma20", "prev_ma60", "prev_vol20", "prev_close", "close", "volume"]
