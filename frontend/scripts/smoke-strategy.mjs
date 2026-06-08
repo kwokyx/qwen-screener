@@ -250,6 +250,75 @@ async function clickFirst(cdp, selector) {
   return result
 }
 
+async function verifyIndustryConditionDropdown(cdp) {
+  await waitForExpression(
+    cdp,
+    'document.querySelectorAll(".condition-row").length > 0 && document.body.innerText.includes("条件选股")',
+    'structured condition builder',
+  )
+  await waitForExpression(
+    cdp,
+    `[...document.querySelectorAll('.condition-row .n-select')]
+      .some((el) => (el.innerText || el.textContent || '').includes('市盈率'))`,
+    'structured field metadata',
+  )
+  const openedField = await evaluate(cdp, `(() => {
+    const row = document.querySelector('.condition-row');
+    const fieldSelect = row?.querySelector('.n-select .n-base-selection');
+    if (!fieldSelect) return { ok: false, reason: 'field select not found' };
+    fieldSelect.click();
+    return { ok: true };
+  })()`)
+  if (!openedField?.ok) fail('Could not open condition field selector.', openedField)
+  await waitForExpression(
+    cdp,
+    `[...document.querySelectorAll('.n-base-select-option')]
+      .some((el) => (el.innerText || el.textContent || '').trim() === '行业')`,
+    'industry field option',
+  )
+  const choseIndustry = await evaluate(cdp, `(() => {
+    const option = [...document.querySelectorAll('.n-base-select-option')]
+      .find((el) => (el.innerText || el.textContent || '').trim() === '行业');
+    if (!option) return { ok: false, reason: 'industry option not found' };
+    option.click();
+    return { ok: true };
+  })()`)
+  if (!choseIndustry?.ok) fail('Could not choose industry field.', choseIndustry)
+
+  await waitForExpression(cdp, 'document.querySelector(".condition-row .condition-value-control")', 'industry value select')
+  const openedIndustry = await evaluate(cdp, `(() => {
+    const valueSelect = document.querySelector('.condition-row .condition-value-control .n-base-selection');
+    if (!valueSelect) return { ok: false, reason: 'industry select not found' };
+    valueSelect.click();
+    return { ok: true, text: (valueSelect.innerText || valueSelect.textContent || '').trim() };
+  })()`)
+  if (!openedIndustry?.ok) fail('Could not open industry value selector.', openedIndustry)
+  await waitForExpression(
+    cdp,
+    `[...document.querySelectorAll('.n-base-select-option')]
+      .some((el) => (el.innerText || el.textContent || '').includes('半导体'))`,
+    'industry dropdown options',
+  )
+  const selected = await evaluate(cdp, `(() => {
+    const option = [...document.querySelectorAll('.n-base-select-option')]
+      .find((el) => (el.innerText || el.textContent || '').includes('半导体'));
+    if (!option) return { ok: false, reason: 'semiconductor industry option not found' };
+    option.click();
+    return { ok: true };
+  })()`)
+  if (!selected?.ok) {
+    fail('Industry condition did not use a selectable dropdown value.', selected)
+  }
+  await waitForExpression(
+    cdp,
+    `(document.querySelector('.condition-row .condition-value-control')?.innerText || '').includes('半导体')`,
+    'selected industry value',
+  )
+  const valueText = await evaluate(cdp, `(document.querySelector('.condition-row .condition-value-control')?.innerText || '').replace(/\\s+/g, ' ').trim()`)
+  selected.text = valueText
+  return selected
+}
+
 async function strategySnapshot(cdp) {
   return evaluate(cdp, `(() => {
     const rows = document.querySelectorAll('.n-data-table tbody tr').length;
@@ -361,6 +430,7 @@ async function run() {
 
     await setViewport(cdp, 1440, 900)
     await navigate(cdp, `${BASE_URL}/strategy`)
+    const industryDropdown = await verifyIndustryConditionDropdown(cdp)
     await clickByText(cdp, '策略选股', { selector: 'label,button' })
     await waitForExpression(
       cdp,
@@ -422,6 +492,7 @@ async function run() {
       status: 'ok',
       baseUrl: BASE_URL,
       desktop: {
+        industryDropdown,
         strategyCards: beforeRun.strategyCards,
         loadingSeen,
         heading: afterRun.heading,

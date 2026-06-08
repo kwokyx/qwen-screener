@@ -20,6 +20,11 @@ class SectorQuote(BaseModel):
     leader_pct: float | None = None  # 涨幅
 
 
+class IndustryOption(BaseModel):
+    name: str
+    count: int
+
+
 class MoverItem(BaseModel):
     code: str
     name: str

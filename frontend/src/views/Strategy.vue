@@ -18,6 +18,7 @@ import {
 import Shell from '../components/Shell.vue'
 import { screen as screenStocks } from '../api/screener'
 import { getStrategyTemplates, getStrategyTools, selectStrategy } from '../api/strategy'
+import { industries as fetchIndustries } from '../api/market'
 
 const router = useRouter()
 
@@ -41,6 +42,8 @@ const structuredSortBy = ref('market_cap')
 const structuredSortDesc = ref(true)
 const workspaceMode = ref('structured')
 const storageReady = ref(false)
+const industryOptions = ref([])
+const industryLoading = ref(false)
 const STATE_STORAGE_KEY = 'qwen-stock:strategy-page-state:v1'
 
 const activeTemplate = computed(() => templates.value.find((item) => item.id === activeId.value))
@@ -85,6 +88,10 @@ const structuredSortOptions = computed(() => [
     .filter((field) => field.data_type === 'number')
     .map((field) => ({ label: field.label, value: field.key })),
 ])
+const industrySelectOptions = computed(() => industryOptions.value.map((item) => ({
+  label: `${item.name}（${item.count}）`,
+  value: item.name,
+})))
 const isBusy = computed(() => loading.value || structuredLoading.value)
 const operatorLabels = {
   gt: '大于',
@@ -126,14 +133,28 @@ function getStructuredOperatorOptions(condition) {
   }))
 }
 
+function isIndustryCondition(condition) {
+  return condition.field === 'industry'
+}
+
 function updateStructuredField(condition, field) {
   const meta = getStructuredField(field)
   condition.field = field
   condition.op = meta?.data_type === 'text' && meta.operators.includes('in')
     ? 'in'
     : (meta?.operators?.[0] || 'eq')
-  condition.value = meta?.data_type === 'text' ? '' : null
+  condition.value = field === 'industry' && condition.op === 'in'
+    ? []
+    : (meta?.data_type === 'text' ? '' : null)
   condition.value2 = null
+}
+
+function updateStructuredOperator(condition, op) {
+  condition.op = op
+  condition.value2 = null
+  if (!isIndustryCondition(condition)) return
+  const values = normalizeIndustryValues(condition.value)
+  condition.value = op === 'in' ? values : (values[0] || null)
 }
 
 function addStructuredCondition() {
@@ -156,12 +177,22 @@ function formatStructuredCondition(condition) {
   const field = fieldLabelMap.value[condition.field] || condition.field
   const op = operatorLabels[condition.op] || condition.op
   if (condition.op === 'between') return `${field}${op}${condition.value ?? '—'} 至 ${condition.value2 ?? '—'}`
-  return `${field}${op}${condition.value ?? '—'}`
+  return `${field}${op}${formatConditionValue(condition.value)}`
 }
 
 function normalizeStructuredCondition(condition) {
   const meta = getStructuredField(condition.field)
   if (!meta) throw new Error(`不支持的筛选字段：${condition.field}`)
+
+  if (condition.field === 'industry') {
+    const values = normalizeIndustryValues(condition.value)
+    if (!values.length) throw new Error('行业不能为空')
+    return {
+      field: condition.field,
+      op: condition.op,
+      value: condition.op === 'in' ? values : values[0],
+    }
+  }
 
   if (meta.data_type === 'text') {
     const text = String(condition.value || '').trim()
@@ -184,6 +215,17 @@ function normalizeStructuredCondition(condition) {
   const value = Number(condition.value)
   if (!Number.isFinite(value)) throw new Error(`${meta.label}必须填写数字`)
   return { field: condition.field, op: condition.op, value }
+}
+
+function normalizeIndustryValues(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean)
+  const text = String(value || '').trim()
+  return text ? text.split(/[,，、\s]+/).filter(Boolean) : []
+}
+
+function formatConditionValue(value) {
+  if (Array.isArray(value)) return value.length ? value.join('、') : '—'
+  return value ?? '—'
 }
 
 function mapScreenRows(items, labels) {
@@ -359,7 +401,7 @@ function restoreSavedState() {
     activeId.value = saved.activeId
   }
   if (Array.isArray(saved.structuredConditions) && saved.structuredConditions.length) {
-    structuredConditions.value = saved.structuredConditions
+    structuredConditions.value = saved.structuredConditions.map(normalizeRestoredCondition)
     structuredConditionId = Math.max(...saved.structuredConditions.map((item) => Number(item.id) || 0), structuredConditionId)
   }
   if (['AND', 'OR'].includes(saved.structuredLogic)) {
@@ -374,6 +416,15 @@ function restoreSavedState() {
 
   result.value = saved.result || null
   structuredResult.value = saved.structuredResult || null
+}
+
+function normalizeRestoredCondition(condition) {
+  if (condition?.field !== 'industry') return condition
+  const values = normalizeIndustryValues(condition.value)
+  return {
+    ...condition,
+    value: condition.op === 'in' ? values : (values[0] || null),
+  }
 }
 
 function persistState() {
@@ -419,7 +470,21 @@ async function bootstrap() {
   }
 }
 
-onMounted(bootstrap)
+async function loadIndustries() {
+  industryLoading.value = true
+  try {
+    industryOptions.value = await fetchIndustries()
+  } catch (err) {
+    industryOptions.value = []
+  } finally {
+    industryLoading.value = false
+  }
+}
+
+onMounted(() => {
+  bootstrap()
+  loadIndustries()
+})
 
 watch([
   workspaceMode,
@@ -490,9 +555,29 @@ watch([
                 :disabled="isBusy"
                 @update:value="updateStructuredField(condition, $event)"
               />
-              <n-select v-model:value="condition.op" :options="getStructuredOperatorOptions(condition)" size="small" :disabled="isBusy" />
+              <n-select
+                :value="condition.op"
+                :options="getStructuredOperatorOptions(condition)"
+                size="small"
+                :disabled="isBusy"
+                @update:value="updateStructuredOperator(condition, $event)"
+              />
+              <n-select
+                v-if="isIndustryCondition(condition)"
+                class="condition-value-control"
+                v-model:value="condition.value"
+                :options="industrySelectOptions"
+                :multiple="condition.op === 'in'"
+                :max-tag-count="2"
+                filterable
+                clearable
+                size="small"
+                :loading="industryLoading"
+                :disabled="isBusy || industryLoading"
+                :placeholder="industryLoading ? '加载行业列表' : (condition.op === 'in' ? '选择一个或多个行业' : '选择行业')"
+              />
               <n-input
-                v-if="getStructuredField(condition.field)?.data_type === 'text'"
+                v-else-if="getStructuredField(condition.field)?.data_type === 'text'"
                 v-model:value="condition.value"
                 size="small"
                 :disabled="isBusy"
@@ -765,6 +850,10 @@ h1 {
   font-size: 10px;
 }
 
+.condition-value-control {
+  min-width: 0;
+}
+
 .structured-foot {
   margin-top: 8px;
 }
@@ -1002,7 +1091,8 @@ h1 {
   }
 
   .condition-row :deep(.n-input),
-  .condition-row :deep(.n-input-number) {
+  .condition-row :deep(.n-input-number),
+  .condition-row .condition-value-control {
     grid-column: 2 / span 2;
     width: 100%;
   }

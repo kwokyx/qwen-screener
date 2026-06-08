@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.stock import StockBasic, StockDaily
 from app.schemas.market import (
+    IndustryOption,
     IndexQuote,
     MoverItem,
     MoversResponse,
@@ -333,6 +334,36 @@ def get_indices(db: Session = Depends(get_db)):
 
 
 # ---------------------- /market/sectors ----------------------
+
+@router.get("/industries", response_model=list[IndustryOption])
+def get_industries(db: Session = Depends(get_db)):
+    """Return all known local industry names for structured screen dropdowns."""
+    cache_key = ("industries",)
+    cached = _local_cache_get(cache_key)
+    if cached is not None:
+        return [IndustryOption(**item) for item in cached]
+
+    rows = (
+        db.query(
+            StockBasic.industry.label("name"),
+            func.count(StockBasic.code).label("count"),
+        )
+        .filter(StockBasic.industry.isnot(None))
+        .filter(func.trim(StockBasic.industry) != "")
+        .group_by(StockBasic.industry)
+        .order_by(func.count(StockBasic.code).desc(), StockBasic.industry.asc())
+        .all()
+    )
+    payload = []
+    for row in rows:
+        item = row._mapping
+        name = item.get("name")
+        if not name:
+            continue
+        payload.append({"name": str(name), "count": int(item.get("count") or 0)})
+    _local_cache_set(cache_key, payload)
+    return [IndustryOption(**item) for item in payload]
+
 
 @router.get("/sectors", response_model=list[SectorQuote])
 def get_sectors(limit: int = Query(default=8, ge=1, le=30), db: Session = Depends(get_db)):

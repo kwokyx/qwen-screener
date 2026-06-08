@@ -17,3 +17,17 @@ def test_market_indices_local_fallback_uses_seed_data(db, seed_stocks):
     assert all(item["spark"] for item in payload)
     assert all(item["constituents"] > 0 for item in payload)
 
+
+def test_market_industries_returns_distinct_local_industries(db, seed_stocks):
+    market_api._local_market_cache.clear()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/market/industries")
+
+    assert response.status_code == 200
+    payload = response.json()
+    by_name = {item["name"]: item["count"] for item in payload}
+    assert by_name["银行"] == 1
+    assert by_name["白酒"] == 1
+    assert by_name["半导体"] == 1
+    assert all(item["name"] for item in payload)
