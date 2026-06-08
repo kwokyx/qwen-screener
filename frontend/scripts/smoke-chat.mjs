@@ -259,6 +259,27 @@ async function nativeClickByText(cdp, text, options = {}) {
   return target
 }
 
+async function waitForChatHome(cdp, label, clickInfo = null) {
+  const deadline = Date.now() + 15000
+  let state = null
+  while (Date.now() < deadline) {
+    state = await evaluate(cdp, `(() => ({
+      href: location.href,
+      pathname: location.pathname,
+      hasHome: document.body.innerText.includes('用自然语言筛选 A 股'),
+      turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
+      menuItems: [...document.querySelectorAll('.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a')]
+        .map((node) => (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim())
+        .filter(Boolean)
+        .slice(0, 20),
+      bodyStart: document.body.innerText.slice(0, 300),
+    }))()`)
+    if (state.pathname === '/chat' && state.hasHome) return state
+    await delay(100)
+  }
+  fail(`Timed out waiting for ${label}.`, { clickInfo, state })
+}
+
 const CHAT_SSE_MOCK_SOURCE = `(() => {
       if (window.__chatSmokeMockInstalled) return;
       window.__chatSmokeMockInstalled = true;
@@ -884,31 +905,18 @@ async function run() {
     if (mobile.overflowers.length) fail('Mobile chat layout has visible overflow.', mobile)
 
     await setViewport(cdp, 1440, 900)
+    const activeNavClick = await nativeClickByText(cdp, 'AI选股', {
+      selector: '.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a',
+    })
+    const activeFreshHome = await waitForChatHome(cdp, 'active AI stock picker nav opens home', activeNavClick)
+    if (activeFreshHome.turns !== 0) fail('Active AI stock picker nav did not clear the current chat.', activeFreshHome)
+
     await cdp.send('Page.navigate', { url: `${BASE_URL}/dashboard` })
     await waitForExpression(cdp, 'location.pathname === "/dashboard"', 'dashboard before AI stock picker nav')
     const navClick = await nativeClickByText(cdp, 'AI选股', {
       selector: '.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a',
     })
-    const navDeadline = Date.now() + 15000
-    let navState = null
-    while (Date.now() < navDeadline) {
-      navState = await evaluate(cdp, `(() => ({
-        href: location.href,
-        pathname: location.pathname,
-        hasHome: document.body.innerText.includes('用自然语言筛选 A 股'),
-        turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
-        menuItems: [...document.querySelectorAll('.n-menu-item-content, .n-menu-item, [role="menuitem"], button, a')]
-          .map((node) => (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim())
-          .filter(Boolean)
-          .slice(0, 20),
-        bodyStart: document.body.innerText.slice(0, 300),
-      }))()`)
-      if (navState.pathname === '/chat' && navState.hasHome) break
-      await delay(100)
-    }
-    if (navState?.pathname !== '/chat' || !navState?.hasHome) {
-      fail('Timed out waiting for AI stock picker nav opens home.', { navClick, navState })
-    }
+    await waitForChatHome(cdp, 'AI stock picker nav opens home', navClick)
     const freshHome = await evaluate(cdp, `(() => ({
       href: location.href,
       turns: document.querySelectorAll('.conversation-turn, .msg-pair').length,
@@ -933,6 +941,7 @@ async function run() {
         })),
       },
       mobile,
+      activeFreshHome,
       freshHome,
     }, null, 2))
   } finally {

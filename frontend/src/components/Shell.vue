@@ -46,10 +46,23 @@ const userMenuOptions = computed(() => [
 
 function handleMenuSelect(key) {
   if (key === 'chat') {
-    router.push({ name: 'chat', query: { fresh: Date.now().toString(36) } })
+    openChatHome()
     return
   }
   router.push({ name: key })
+}
+
+function openChatHome() {
+  router.push({ name: 'chat', query: { fresh: Date.now().toString(36) } })
+}
+
+function handleNavMenuClick(e) {
+  const item = e.target?.closest?.('.n-menu-item-content, .n-menu-item, [role="menuitem"]')
+  const label = (item?.innerText || item?.textContent || '').replace(/\s+/g, '').trim()
+  if (!label.includes('AI选股')) return
+  e.preventDefault()
+  e.stopPropagation()
+  openChatHome()
 }
 
 const searchQuery = ref('')
@@ -208,7 +221,7 @@ function handleUserMenu(key) {
           </span>
         </div>
 
-        <div class="nav-menu-wrap">
+        <div class="nav-menu-wrap" @click.capture="handleNavMenuClick">
           <n-menu
             mode="horizontal"
             :value="activeKey"
