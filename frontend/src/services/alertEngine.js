@@ -10,6 +10,7 @@
 import { useWatchlistStore } from '../stores/watchlist'
 import { useNotificationsStore } from '../stores/notifications'
 import * as stockApi from '../api/stock'
+import client from '../api/client'
 
 const POLL_MS = 30_000          // 真实数据 30s 一次（不烧 API）
 const DEMO_TICK_MS = 8_000      // demo 模式 8s 一次
@@ -74,15 +75,17 @@ async function tick() {
     const fired = wl.evaluateAlerts(item.code, quote)
     for (const f of fired) {
       const tone = f.alert.type.includes('down') || f.alert.type === 'price_lt' ? 'down' : 'up'
+      const tag = alertTag(f.alert)
       notif.push({
         kind: 'alert',
         tone,
-        tag: alertTag(f.alert),
+        tag,
         stock: item.name || item.code,
         code: item.code,
         desc: f.detail,
       })
       wl.markTriggered(item.code, f.alert.id)
+      client.post('/notifications/push-alert', { tone, tag, stock: item.name || item.code, code: item.code, desc: f.detail }).catch(() => {})
     }
   }
 }

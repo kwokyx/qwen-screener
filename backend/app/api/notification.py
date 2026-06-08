@@ -125,3 +125,23 @@ def clear_all(
 ):
     db.query(Notification).filter(Notification.user_id == user.id).delete()
     db.commit()
+
+
+@router.post("/push-alert", status_code=204)
+def push_alert(
+    payload: dict,
+    db: Session = Depends(get_db),
+):
+    """前端预警触发后推飞书。不需要登录。"""
+    from app.services.feishu import notifier as feishu
+
+    tone = payload.get("tone", "up")
+    stock = payload.get("stock", "")
+    code = payload.get("code", "")
+    desc = payload.get("desc", "")
+    tag = payload.get("tag", "")
+
+    feishu.push_strategy_result(
+        strategy_name=f"价格预警{'📈' if tone == 'up' else '📉'}",
+        items=[{"code": code, "name": f"{tag}: {stock}", "close": None, "change_pct": None}],
+    )
