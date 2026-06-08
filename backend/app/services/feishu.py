@@ -24,36 +24,52 @@ class FeishuNotifier:
     _app_token_lock = threading.Lock()
 
     def push_strategy_result(self, strategy_name: str, items: list[dict]) -> None:
-        """推策略选股结果到飞书。
-
-        Args:
-            strategy_name: 策略名称。
-            items: 每项包含 code, name, close, change_pct 等字段。
-        """
         if not items:
             return
 
-        if settings.feishu_webhook_url:
+        is_alert = strategy_name.startswith("价格预警")
+        if is_alert:
+            self._push_alert_card(strategy_name, items)
+        elif settings.feishu_webhook_url:
             self._push_via_webhook(strategy_name, items)
         elif settings.feishu_app_id and settings.feishu_app_secret:
             self._push_via_app(strategy_name, items)
 
+    def _push_alert_card(self, strategy_name: str, items: list[dict]) -> None:
+        s = items[0]
+        card = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": strategy_name},
+                    "template": "red" if "📉" in strategy_name else "green",
+                },
+                "elements": [
+                    {"tag": "div", "text": {"tag": "lark_md", "content": f"**{s.get('name', '')}**（{s.get('code', '')}）"}},
+                    {"tag": "hr"},
+                    {"tag": "div", "text": {"tag": "lark_md", "content": s.get("desc", s.get("tag", "预警触发"))}},
+                ],
+            },
+        }
+        if settings.feishu_webhook_url:
+            self._post_card(settings.feishu_webhook_url, card)
+        elif settings.feishu_app_id and settings.feishu_app_secret:
+            token = self._get_app_token()
+            if not token:
+                return
+            if settings.feishu_chat_id:
+                rid, rt = settings.feishu_chat_id, "chat_id"
+            elif settings.feishu_open_id:
+                rid, rt = settings.feishu_open_id, "open_id"
+            elif settings.feishu_email:
+                rid, rt = settings.feishu_email, "email"
+            else:
+                return
+            self._post_app_card(card, rid, rt, token, strategy_name)
+
     def _push_via_webhook(self, strategy_name: str, items: list[dict]) -> None:
         payload = self._build_card(strategy_name, items)
-        try:
-            resp = httpx.post(
-                settings.feishu_webhook_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=10,
-            )
-            body = resp.json()
-            if resp.status_code == 200 and body.get("code") == 0:
-                logger.info(f"飞书推送成功 [webhook] {strategy_name}: {len(items)} 只")
-            else:
-                logger.error(f"飞书推送失败 [webhook] {strategy_name}: {resp.text}")
-        except Exception as exc:
-            logger.error(f"飞书推送异常 [webhook] {strategy_name}: {exc}")
+        self._post_card(settings.feishu_webhook_url, payload)
 
     def _push_via_app(self, strategy_name: str, items: list[dict]) -> None:
         token = self._get_app_token()
@@ -61,6 +77,7 @@ class FeishuNotifier:
             logger.error(f"飞书推送跳过 [app] {strategy_name}: 无法获取 token")
             return
 
+        payload = self._build_card(strategy_name, items)
         if settings.feishu_chat_id:
             receive_id, id_type = settings.feishu_chat_id, "chat_id"
         elif settings.feishu_open_id:
@@ -71,7 +88,20 @@ class FeishuNotifier:
             logger.error(f"飞书推送跳过 [app] {strategy_name}: 未配置 feishu_chat_id、feishu_open_id 或 feishu_email")
             return
 
-        payload = self._build_card(strategy_name, items)
+        self._post_app_card(payload, receive_id, id_type, token, strategy_name)
+
+    def _post_card(self, url: str, payload: dict) -> None:
+        try:
+            resp = httpx.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+            body = resp.json()
+            if resp.status_code == 200 and body.get("code") == 0:
+                logger.info(f"飞书推送成功: {body.get('code')}")
+            else:
+                logger.error(f"飞书推送失败: {resp.text}")
+        except Exception as exc:
+            logger.error(f"飞书推送异常: {exc}")
+
+    def _post_app_card(self, payload: dict, receive_id: str = "", id_type: str = "", token: str = "", name: str = "") -> None:
         try:
             resp = httpx.post(
                 "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=" + id_type,
@@ -80,19 +110,16 @@ class FeishuNotifier:
                     "msg_type": "interactive",
                     "content": json.dumps(payload["card"]),
                 },
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 timeout=10,
             )
             body = resp.json()
             if body.get("code") == 0:
-                logger.info(f"飞书推送成功 [app] {strategy_name}: {len(items)} 只")
+                logger.info(f"飞书推送成功 [app] {name}: 1 只")
             else:
-                logger.error(f"飞书推送失败 [app] {strategy_name}: {body}")
+                logger.error(f"飞书推送失败 [app] {name}: {body}")
         except Exception as exc:
-            logger.error(f"飞书推送异常 [app] {strategy_name}: {exc}")
+            logger.error(f"飞书推送异常 [app] {name}: {exc}")
 
     @classmethod
     def _get_app_token(cls) -> str | None:
