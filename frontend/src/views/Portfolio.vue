@@ -11,6 +11,7 @@ import {
   NGrid,
   NProgress,
   NSpace,
+  NSwitch,
   NTag,
 } from 'naive-ui'
 import Shell from '../components/Shell.vue'
@@ -235,13 +236,22 @@ const alertColumns = computed(() => [
     title: '状态',
     key: 'enabled',
     align: 'right',
-    width: 84,
-    render: row => h(NTag, {
-      size: 'small',
-      type: row.enabled === false ? 'default' : 'success',
-      bordered: false,
-      round: true,
-    }, { default: () => row.enabled === false ? '暂停' : '启用' }),
+    width: 112,
+    render(row) {
+      const enabled = row.enabled !== false
+      return h('div', {
+        class: 'alert-status-control',
+        onClick: e => e.stopPropagation(),
+        onMousedown: e => e.stopPropagation(),
+      }, [
+        h(NSwitch, {
+          value: enabled,
+          size: 'small',
+          'onUpdate:value': value => wl.setAlertEnabled(row.code, row.id, value),
+        }),
+        h('span', { class: enabled ? 'alert-enabled' : 'muted' }, enabled ? '启用' : '暂停'),
+      ])
+    },
   },
 ])
 
@@ -492,6 +502,16 @@ const rowProps = (row) => ({
   flex-direction: column;
   align-items: flex-end;
   gap: 3px;
+}
+.alert-status-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 86px;
+}
+.alert-enabled {
+  color: #16a35c;
 }
 .empty-panel {
   padding: 44px 0;
