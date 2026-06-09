@@ -141,7 +141,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       const local = localByCode.get(r.code)
       merged.push({
         code: r.code,
-        name: local?.name || '',
+        name: local?.name || r.name || '',
         sector: local?.sector || '',
         refPrice: r.ref_price ?? local?.refPrice ?? null,
         addedAt: toUnixSeconds(r.created_at) || local?.addedAt || Math.floor(Date.now() / 1000),

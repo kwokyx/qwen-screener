@@ -381,7 +381,19 @@ def intraday(
 
 @router.get("/me/watchlist", response_model=list[WatchlistOut])
 def list_watch(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(Watchlist).filter(Watchlist.user_id == user.id).all()
+    rows = (
+        db.query(Watchlist, StockBasic.name)
+        .join(StockBasic, StockBasic.code == Watchlist.code)
+        .filter(Watchlist.user_id == user.id)
+        .all()
+    )
+    return [
+        WatchlistOut(
+            **{col.name: getattr(row.Watchlist, col.name) for col in Watchlist.__table__.columns},
+            name=row.name,
+        )
+        for row in rows
+    ]
 
 
 @router.post("/me/watchlist", response_model=WatchlistOut)

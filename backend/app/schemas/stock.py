@@ -84,6 +84,7 @@ class WatchlistOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     code: str
+    name: str | None = None
     note: str | None = None
     alerts: list | None = None
     ref_price: float | None = None
