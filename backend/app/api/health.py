@@ -472,14 +472,14 @@ def trigger_sync(
     """
     try:
         if wait:
-            meta = scheduler.run_now(job_name)
+            meta = scheduler.run_now(job_name, force=True)
             return {
                 "job": job_name,
                 "queued": False,
                 "running": meta.get("already_running") is True or meta.get("status") == "running",
                 "meta": meta,
             }
-        rv = scheduler.run_async(job_name)
+        rv = scheduler.run_async(job_name, force=True)
         queued = rv.get("queued", False) or rv.get("status") == "queued"
         running = rv.get("running", False) or rv.get("status") == "running"
         return {

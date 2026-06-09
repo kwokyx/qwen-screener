@@ -695,7 +695,7 @@ def job_daily_value():
         db.close()
 
 
-def job_market_refresh():
+def job_market_refresh(force: bool = False):
     """One-click market refresh: update daily bars first, then valuation factors."""
     parts: list[str] = []
     failed: list[str] = []
@@ -703,7 +703,7 @@ def job_market_refresh():
         ("daily_market", "日线行情"),
         ("daily_value", "估值数据"),
     ):
-        meta = run_now(job_name)
+        meta = run_now(job_name, force=force)
         status = meta.get("display_status") or meta.get("status") or "unknown"
         detail = meta.get("detail") or "无详情"
         already_running = meta.get("already_running") is True
@@ -840,8 +840,8 @@ JOBS = {
 }
 
 
-def run_now(job_name: str) -> dict:
-    """同步执行一个任务，返回 meta 信息。"""
+def run_now(job_name: str, *, force: bool = False) -> dict:
+    """同步执行一个任务，返回 meta 信息。force=True 时跳过数据达标检查，强制远程同步。"""
     _ensure_meta_table()
     fn = JOBS.get(job_name)
     if not fn:
@@ -852,15 +852,11 @@ def run_now(job_name: str) -> dict:
     if not _reserve_job(job_name):
         meta = get_meta().get(job_name, {})
         return {"already_running": True, **meta}
-    return _run_with_meta(job_name, fn, reserved=True)
+    return _run_with_meta(job_name, fn, reserved=True, allow_shortcut=not force)
 
 
-def run_async(job_name: str) -> dict:
-    """非阻塞触发：开个守护线程跑，HTTP 立即返回。
-
-    全市场 K 线回填 ≈ 45 分钟，比 HTTP 默认 timeout（10 分钟）长得多，必须 async。
-    前端可以隔几秒拉 /health/data 看 sync_meta 里这个任务的最新状态。
-    """
+def run_async(job_name: str, *, force: bool = False) -> dict:
+    """非阻塞触发：开个守护线程跑，HTTP 立即返回。force=True 跳过数据达标检查。"""
     _ensure_meta_table()
     fn = JOBS.get(job_name)
     if not fn:
@@ -872,27 +868,28 @@ def run_async(job_name: str) -> dict:
         meta = get_meta().get(job_name, {})
         return {"queued": False, "running": True, "job": job_name, "meta": meta}
 
-    shortcut_started = datetime.utcnow()
-    try:
-        shortcut_detail = _shortcut_detail_if_ready(job_name)
-    except Exception as exc:
-        shortcut_detail = None
-        logger.warning("[SCHED] {} 数据达标检查失败，转入后台同步: {}", job_name, str(exc)[:120])
-    if shortcut_detail:
-        dur = int((datetime.utcnow() - shortcut_started).total_seconds() * 1000)
+    if not force:
+        shortcut_started = datetime.utcnow()
         try:
-            _record(job_name, "success", dur, shortcut_detail)
-            _clear_runtime_caches_after_data_job(job_name, "success")
-            meta = get_meta().get(job_name, {})
-            return {
-                "queued": False,
-                "running": False,
-                "job": job_name,
-                "shortcut": True,
-                "meta": meta,
-            }
-        finally:
-            _release_job(job_name)
+            shortcut_detail = _shortcut_detail_if_ready(job_name)
+        except Exception as exc:
+            shortcut_detail = None
+            logger.warning("[SCHED] {} 数据达标检查失败，转入后台同步: {}", job_name, str(exc)[:120])
+        if shortcut_detail:
+            dur = int((datetime.utcnow() - shortcut_started).total_seconds() * 1000)
+            try:
+                _record(job_name, "success", dur, shortcut_detail)
+                _clear_runtime_caches_after_data_job(job_name, "success")
+                meta = get_meta().get(job_name, {})
+                return {
+                    "queued": False,
+                    "running": False,
+                    "job": job_name,
+                    "shortcut": True,
+                    "meta": meta,
+                }
+            finally:
+                _release_job(job_name)
 
     _record(job_name, "queued", 0, "任务已排队，后台执行")
     t = threading.Thread(
