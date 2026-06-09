@@ -9,6 +9,7 @@ import copy
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date as Date
 
 from fastapi import APIRouter, Depends, Query
@@ -37,12 +38,14 @@ _local_market_cache_lock = threading.Lock()
 _local_market_cache: dict[tuple, tuple[float, object]] = {}
 
 
-# 4 大指数：内部 code → akshare symbol
+# Dashboard 宽基指数：真实点位来自新浪指数日线，local_prefixes 只用于源站失败时的页面降级。
 INDEX_DEFS = [
-    {"name": "上证指数", "code": "SH000001", "ak": "sh000001", "prefixes": ("60", "68"), "constituents_match": lambda c: c.startswith("60") or c.startswith("68")},
-    {"name": "深证成指", "code": "SZ399001", "ak": "sz399001", "prefixes": ("00", "30"), "constituents_match": lambda c: c.startswith("00") or c.startswith("30")},
-    {"name": "创业板指", "code": "SZ399006", "ak": "sz399006", "prefixes": ("30",), "constituents_match": lambda c: c.startswith("30")},
-    {"name": "科创50",   "code": "SH000688", "ak": "sh000688", "prefixes": ("688",), "constituents_match": lambda c: c.startswith("688")},
+    {"name": "上证指数", "code": "SH000001", "ak": "sh000001", "local_prefixes": ("60", "68"), "constituents_match": lambda c: c.startswith("60") or c.startswith("68")},
+    {"name": "沪深300", "code": "SH000300", "ak": "sh000300", "local_prefixes": ("60", "68", "00", "30"), "constituents": 300, "constituents_match": lambda c: c.startswith(("60", "68", "00", "30"))},
+    {"name": "中证500", "code": "SH000905", "ak": "sh000905", "local_prefixes": ("60", "68", "00", "30"), "constituents": 500, "constituents_match": lambda c: c.startswith(("60", "68", "00", "30"))},
+    {"name": "中证1000", "code": "SH000852", "ak": "sh000852", "local_prefixes": ("60", "68", "00", "30"), "constituents": 1000, "constituents_match": lambda c: c.startswith(("60", "68", "00", "30"))},
+    {"name": "创业板指", "code": "SZ399006", "ak": "sz399006", "local_prefixes": ("30",), "constituents": 100, "constituents_match": lambda c: c.startswith("30")},
+    {"name": "科创50", "code": "SH000688", "ak": "sh000688", "local_prefixes": ("688",), "constituents": 50, "constituents_match": lambda c: c.startswith("688")},
 ]
 
 
@@ -116,6 +119,8 @@ def clear_market_cache() -> None:
     with _local_market_cache_lock:
         _local_market_cache.clear()
     _cache.delete_prefix("qwen:indices_local_v2:")
+    _cache.delete_prefix("qwen:indices_local_v3:")
+    _cache.delete_prefix("qwen:indices_real_v2:")
 
 
 def _change_pct(open_p: float | None, close_p: float | None, prev_close: float | None = None) -> float | None:
@@ -125,20 +130,51 @@ def _change_pct(open_p: float | None, close_p: float | None, prev_close: float |
     return (close_p - base) / base * 100.0
 
 
-def _fetch_index_real(ak_symbol: str, days: int = 30) -> dict | None:
-    """直连 akshare 拉真实指数日线，返回 {value, change, change_pct, spark, count}。
-    数据由 1h Redis 缓存包裹，调用方走 _real_indices()。
+def _fetch_index_real(ak_symbol: str, days: int = 30, timeout: float = 5.0) -> dict | None:
+    """Fetch real index daily closes from Sina, matching akshare's source.
+
+    akshare's ``stock_zh_index_daily`` works here, but its internal request does
+    not set a timeout. Dashboard requests need a bounded network path, so this
+    wrapper uses the same source/decode logic with an explicit timeout.
     """
     try:
+        import requests
         import akshare as ak
-        df = ak.stock_zh_index_daily(symbol=ak_symbol)
+        from py_mini_racer import py_mini_racer
+
+        url = ak.stock_zh_index_daily.__globals__.get("zh_sina_index_stock_hist_url")
+        decoder = ak.stock_zh_index_daily.__globals__.get("hk_js_decode")
+        if not url or not decoder:
+            return None
+        resp = requests.get(
+            url.format(ak_symbol),
+            params={"d": "2020_2_4"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        encoded = resp.text.split("=", 1)[1].split(";", 1)[0].replace('"', "")
+        js_code = py_mini_racer.MiniRacer()
+        js_code.eval(decoder)
+        rows = js_code.call("d", encoded)
     except Exception as e:
         logger.warning("[INDEX] {} 拉取失败: {}", ak_symbol, str(e)[:120])
         return None
-    if df is None or df.empty or len(df) < 2:
+
+    if not rows or len(rows) < 2:
         return None
-    tail = df.tail(days)
-    closes = [round(float(v), 2) for v in tail["close"].tolist()]
+    points = []
+    for row in rows:
+        try:
+            close = float(row.get("close"))
+            trade_date = Date.fromisoformat(str(row.get("date"))[:10])
+        except (TypeError, ValueError):
+            continue
+        points.append((trade_date, round(close, 2)))
+    if len(points) < 2:
+        return None
+    points.sort(key=lambda item: item[0])
+    closes = [v for _, v in points[-days:]]
     if len(closes) < 2:
         return None
     latest = closes[-1]
@@ -150,16 +186,35 @@ def _fetch_index_real(ak_symbol: str, days: int = 30) -> dict | None:
         "change": change,
         "change_pct": change_pct,
         "spark": closes,
+        "trade_date": points[-1][0].isoformat(),
     }
 
 
 def _real_indices() -> dict[str, dict]:
-    """4 大指数完整快照，1h Redis 缓存。"""
-    key = _cache.make_key("indices_real_v1", "all")
+    """Return real index snapshots for the dashboard's six broad indices."""
+    key = _cache.make_key("indices_real_v2", "six_broad")
     cached = _cache.get_json(key)
     if cached:
         return cached
-    return {}
+
+    out: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=len(INDEX_DEFS)) as pool:
+        futures = {
+            pool.submit(_fetch_index_real, d["ak"]): d
+            for d in INDEX_DEFS
+        }
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                snap = future.result()
+            except Exception as exc:
+                logger.warning("[INDEX] {} 拉取失败: {}", item["ak"], str(exc)[:120])
+                continue
+            if snap:
+                out[item["code"]] = snap
+    if out:
+        _cache.set_json(key, out, ttl=3600)
+    return out
 
 
 def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
@@ -179,7 +234,7 @@ def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
     prev = prev_dates[-1] if prev_dates else None
 
     for d in INDEX_DEFS:
-        stats = _index_prefix_stats(db, dates, d["prefixes"])
+        stats = _index_prefix_stats(db, dates, d["local_prefixes"])
         spark: list[float] = []
         latest_value = None
         prev_value = None
@@ -216,7 +271,7 @@ def _local_indices(db: Session, days: int = 30) -> list[IndexQuote]:
             value=latest_value,
             change=change,
             change_pct=change_pct,
-            constituents=constituents,
+            constituents=int(d.get("constituents") or constituents),
             spark=spark[-days:],
         ))
 
@@ -285,50 +340,62 @@ def _prefix_upper_bound(prefix: str) -> str:
 
 @router.get("/indices", response_model=list[IndexQuote])
 def get_indices(db: Session = Depends(get_db)):
-    """4 大指数：优先返回已缓存的真实指数；没有缓存时用本地 DB 快速估算。
+    """6 个宽基指数：优先返回真实指数；源站失败时用本地 DB 快速估算。
 
-    不在页面请求链路里实时访问 akshare，避免外部源站慢导致前端一直 loading。
+    真实点位通过短超时网络请求和 1h Redis 缓存保护。fallback 只保证页面可用，
+    不作为真实指数成分/权重口径。
     """
     real = _real_indices()
-    if not real:
-        latest = _latest_trade_date(db)
+    latest = _latest_trade_date(db)
+    local_by_code: dict[str, IndexQuote] = {}
+    if len(real) < len(INDEX_DEFS):
         local_key = ("indices", str(latest))
         local_cached = _local_cache_get(local_key)
         if local_cached is not None:
-            return [IndexQuote(**item) for item in local_cached]
-        cache_key = _cache.make_key("indices_local_v2", str(latest))
-        cached = _cache.get_json(cache_key)
-        if cached:
-            _local_cache_set(local_key, cached)
-            return [IndexQuote(**item) for item in cached]
-        local = _local_indices(db)
-        if local:
-            payload = [item.model_dump() for item in local]
-            _local_cache_set(local_key, payload)
-            _cache.set_json(cache_key, payload, ttl=600)
-        return local
+            local_by_code = {item["code"]: IndexQuote(**item) for item in local_cached}
+        else:
+            cache_key = _cache.make_key("indices_local_v3", str(latest))
+            cached = _cache.get_json(cache_key)
+            if cached:
+                _local_cache_set(local_key, cached)
+                local_by_code = {item["code"]: IndexQuote(**item) for item in cached}
+            else:
+                local = _local_indices(db)
+                if local:
+                    payload = [item.model_dump() for item in local]
+                    _local_cache_set(local_key, payload)
+                    _cache.set_json(cache_key, payload, ttl=600)
+                local_by_code = {item.code: item for item in local}
 
-    # constituents 数（基于内部 DB，按代码前缀粗略统计）
-    latest = _latest_trade_date(db)
-    real_key = ("indices_real", str(latest))
+    if not real:
+        return list(local_by_code.values())
+
+    # constituents 数（基于内部 DB，按代码范围粗略统计；点位和 spark 使用真实指数）
+    real_key = ("indices_real", str(latest), tuple(sorted(real.keys())))
     real_cached = _local_cache_get(real_key)
     if real_cached is not None:
         return [IndexQuote(**item) for item in real_cached]
-    rows = db.query(StockDaily.code).filter(StockDaily.trade_date == latest).all() if real else []
+    rows = db.query(StockDaily.code).filter(StockDaily.trade_date == latest).all() if latest else []
     codes = [r[0] for r in rows]
 
     out: list[IndexQuote] = []
     for d in INDEX_DEFS:
         snap = real.get(d["code"])
-        if not snap:
+        if snap:
+            constituents = int(
+                d.get("constituents")
+                or sum(1 for c in codes if d["constituents_match"](c.split(".")[0]))
+            )
+            out.append(IndexQuote(
+                name=d["name"], code=d["code"],
+                value=snap["value"], change=snap["change"], change_pct=snap["change_pct"],
+                constituents=constituents,
+                spark=snap["spark"],
+            ))
             continue
-        constituents = sum(1 for c in codes if d["constituents_match"](c.split(".")[0]))
-        out.append(IndexQuote(
-            name=d["name"], code=d["code"],
-            value=snap["value"], change=snap["change"], change_pct=snap["change_pct"],
-            constituents=constituents,
-            spark=snap["spark"],
-        ))
+        local = local_by_code.get(d["code"])
+        if local:
+            out.append(local)
     _local_cache_set(real_key, [item.model_dump() for item in out])
     return out
 

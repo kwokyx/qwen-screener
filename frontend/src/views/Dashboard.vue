@@ -274,7 +274,7 @@ onMounted(loadAll)
     <div class="dashboard-page">
       <div class="market-overview-grid">
         <template v-if="loadingIndices && !indices.length">
-          <NCard v-for="(_, n) in 4" :key="'idx-sk-' + n" class="terminal-card index-card" :bordered="false">
+          <NCard v-for="(_, n) in 6" :key="'idx-sk-' + n" class="terminal-card index-card" :bordered="false">
             <div class="index-skeleton">
               <span class="sk-line short"></span>
               <span class="sk-line value"></span>
@@ -871,8 +871,44 @@ onMounted(loadAll)
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   }
 
+  .main-grid {
+    display: flex !important;
+    flex-direction: column;
+    gap: 20px;
+  }
+
   .main-grid > * {
     grid-column: span 24 / span 24 !important;
+  }
+
+  .main-grid :deep(.n-gi) {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex: 0 0 auto !important;
+  }
+
+  .table-card,
+  .sector-card,
+  .strength-card {
+    width: min(100%, calc(100vw - 24px));
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .table-card :deep(.n-card__content),
+  .sector-card :deep(.n-card__content),
+  .strength-card :deep(.n-card__content) {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .table-card :deep(.n-data-table),
+  .sector-card :deep(.n-data-table),
+  .strength-card :deep(.n-data-table) {
+    max-width: 100%;
+    min-width: 0;
   }
 }
 </style>
