@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from app.models.stock import StockBasic, StockDaily, StockDividend, StockFinancial
 from app.api import market as market_api
-from app.services import scheduler, strategy_selector
+from app.services import data_sync, scheduler, strategy_selector
 
 
 def _wait_until(predicate, timeout=5.0):
@@ -129,7 +129,8 @@ def test_successful_data_job_clears_runtime_caches(db, monkeypatch):
 def test_market_refresh_runs_daily_market_then_daily_value(monkeypatch):
     calls = []
 
-    def fake_run_now(name):
+    def fake_run_now(name, force=False):
+        assert force is False
         calls.append(name)
         return {"status": "success", "detail": f"{name} ok"}
 
@@ -287,6 +288,53 @@ def test_run_async_repairs_stuck_weekly_basic_when_stock_list_ready(db, monkeypa
     assert "weekly_basic" not in scheduler._running_jobs
 
 
+def test_market_refresh_repairs_when_daily_market_and_value_ready(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            volume=100,
+            pe=8.5,
+            pb=0.9,
+            market_cap=300,
+            dividend_yield=3.2,
+        ))
+    db.commit()
+
+    def should_not_call():
+        raise AssertionError("ready market_refresh should not run remote jobs")
+
+    monkeypatch.setitem(scheduler.JOBS, "market_refresh", should_not_call)
+    scheduler._ensure_meta_table()
+    old = datetime.utcnow() - timedelta(hours=2)
+    with scheduler.engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+            "VALUES (:n, :t, :s, :d, :x)"
+        ), {
+            "n": "market_refresh",
+            "t": old,
+            "s": "failed",
+            "d": 0,
+            "x": "服务重启，上一轮后台任务未完成",
+        })
+
+    rv = scheduler.run_async("market_refresh")
+
+    assert rv["queued"] is False
+    assert rv["running"] is False
+    assert rv["shortcut"] is True
+    assert rv["repaired"] is True
+    assert rv["meta"]["status"] == "success"
+    assert "日线" in rv["meta"]["detail"]
+    assert "估值" in rv["meta"]["detail"]
+
+
 def test_failed_job_state_does_not_block_retry(db, monkeypatch):
     scheduler._running_jobs.clear()
 
@@ -364,6 +412,41 @@ def test_run_now_executes_daily_market_when_data_not_ready(db, monkeypatch):
 
     assert meta["status"] == "success"
     assert meta["detail"] == "affected=7"
+
+
+def test_job_daily_market_prefers_fast_quote_snapshot(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    monkeypatch.setattr(scheduler, "USE_BAOSTOCK", True)
+    _seed_basic(db, 120)
+
+    def fake_fast_snapshot(session, trade_date=None):
+        assert trade_date == expected
+        for code, in session.query(StockBasic.code).all():
+            session.add(StockDaily(
+                code=code,
+                trade_date=trade_date,
+                open=10,
+                high=11,
+                low=9,
+                close=10.5,
+                volume=1000,
+                pe=12,
+                pb=1.1,
+            ))
+        session.commit()
+        return 120
+
+    def should_not_call_baostock(*_args, **_kwargs):
+        raise AssertionError("baostock full-market sync should not run after fast snapshot is ready")
+
+    monkeypatch.setattr(data_sync, "sync_full_valuation_tx", fake_fast_snapshot)
+    monkeypatch.setattr(data_sync, "sync_daily_bs", should_not_call_baostock)
+    monkeypatch.setattr(data_sync, "refresh_dividend_yield_bs", lambda session: 0)
+
+    assert scheduler.job_daily_market() == 120
+    assert scheduler.job_data_status("daily_market", db=db)["ready"] is True
 
 
 def test_run_now_short_circuits_weekly_fundamentals_when_data_ready(db, monkeypatch):

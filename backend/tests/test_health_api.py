@@ -201,7 +201,7 @@ def test_data_health_reports_fresh_data_with_repairable_sync_warning(db, monkeyp
 
 
 def test_data_health_is_public_but_manual_sync_requires_login(db, monkeypatch):
-    monkeypatch.setattr(health.scheduler, "run_async", lambda job: {"status": "queued"})
+    monkeypatch.setattr(health.scheduler, "run_async", lambda job, force=False: {"status": "queued"})
 
     with TestClient(app) as c:
         assert c.get("/api/v1/health/data").status_code == 200

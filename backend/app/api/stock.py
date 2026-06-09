@@ -224,13 +224,6 @@ def quote(code: str, db: Session = Depends(get_db)):
     from app.services.providers.quote_provider import fetch_realtime_quote_budgeted
     from app.services.screener_engine import _ttm_dividend_yield
 
-    live = fetch_realtime_quote_budgeted(code)
-    if live:
-        live["name"] = live.get("name") or basic.name
-        if not live.get("dividend_yield") and latest and latest.close:
-            live["dividend_yield"] = _ttm_dividend_yield(db, basic.code, latest.close)
-        return live
-
     last2 = (
         db.query(StockDaily)
         .filter(StockDaily.code == code)
@@ -240,6 +233,14 @@ def quote(code: str, db: Session = Depends(get_db)):
     )
     latest = last2[0] if last2 else None
     prev_close = last2[1].close if len(last2) > 1 else None
+
+    live = fetch_realtime_quote_budgeted(code)
+    if live:
+        live["name"] = live.get("name") or basic.name
+        if not live.get("dividend_yield") and latest and latest.close:
+            live["dividend_yield"] = _ttm_dividend_yield(db, basic.code, latest.close)
+        return live
+
     change = None
     change_pct = None
     if latest and latest.close is not None and prev_close:

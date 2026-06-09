@@ -82,6 +82,36 @@ def test_quote_falls_back_to_local_daily_when_live_unavailable(db, monkeypatch):
     assert abs(body["change_pct"] - 10.0) < 0.001
 
 
+def test_quote_live_response_uses_local_latest_for_dividend_without_500(db, monkeypatch):
+    today = date.today()
+    db.add(StockBasic(code="123456.SH", name="测试股", industry="测试"))
+    db.add(StockDaily(
+        code="123456.SH",
+        trade_date=today,
+        close=110.0,
+        volume=12345,
+    ))
+    db.commit()
+
+    from app.services.providers import quote_provider
+
+    monkeypatch.setattr(quote_provider, "fetch_realtime_quote_budgeted", lambda code: {
+        "code": code,
+        "name": None,
+        "close": 111.0,
+        "source": "tencent",
+    })
+
+    with TestClient(app) as c:
+        r = c.get("/api/v1/stock/123456.SH/quote")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source"] == "tencent"
+    assert body["name"] == "测试股"
+    assert body["close"] == 111.0
+
+
 def test_kline_returns_chronological_daily_rows(db):
     """日 K 接口对外返回旧到新，避免前端小图趋势反向。"""
     db.add(StockBasic(code="123456.SH", name="测试股", industry="测试"))

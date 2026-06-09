@@ -133,6 +133,25 @@ def _clear_runtime_caches_after_data_job(name: str, status: str):
         ).start()
     except Exception as exc:
         logger.warning("[SCHED] 行情概览缓存清理失败: {}", str(exc)[:120])
+    _repair_market_refresh_if_ready(changed_job=name)
+
+
+def _repair_market_refresh_if_ready(*, changed_job: str):
+    if changed_job not in {"daily_market", "daily_value"}:
+        return
+    try:
+        meta = get_meta().get("market_refresh", {})
+        display_status = meta.get("display_status") or meta.get("status")
+        if display_status not in {"failed", "stuck", "queued", "running"}:
+            return
+        status = job_data_status("market_refresh")
+        if not status.get("ready"):
+            return
+        detail = status.get("detail") or "行情更新数据已达标"
+        _record("market_refresh", "success", 0, detail)
+        logger.info("[SCHED] market_refresh 状态已随 {} 修复: {}", changed_job, detail)
+    except Exception as exc:
+        logger.warning("[SCHED] market_refresh 状态修复失败: {}", str(exc)[:120])
 
 
 def _reserve_job(name: str) -> bool:
@@ -423,6 +442,30 @@ def _daily_value_status(db: Session) -> dict:
     }
 
 
+def _market_refresh_status(db: Session) -> dict:
+    market_status = _daily_market_status(db)
+    value_status = _daily_value_status(db)
+    ready = bool(market_status.get("ready") and value_status.get("ready"))
+    detail = (
+        "数据已达标，跳过远程同步："
+        f"日线 {market_status.get('latest_trade_date')}/{market_status.get('expected_trade_date')}；"
+        f"估值 {value_status.get('valuation_rows')}/{value_status.get('covered_rows')}；"
+        f"股息率 {value_status.get('dividend_yield_rows')}/{value_status.get('covered_rows')}"
+    )
+    return {
+        "ready": ready,
+        "reason": detail if ready else (
+            "行情更新未达标："
+            f"{market_status.get('reason') or '日线状态未知'}；"
+            f"{value_status.get('reason') or '估值状态未知'}"
+        ),
+        "detail": detail,
+        "data_impact": "data_available" if ready else "needs_sync",
+        "daily_market": market_status,
+        "daily_value": value_status,
+    }
+
+
 def _weekly_dividend_status(db: Session) -> dict:
     basic_cnt, latest, expected, latest_cnt, market_threshold = _latest_daily_counts(db)
     if not basic_cnt:
@@ -500,6 +543,7 @@ def _weekly_kline_backfill_status(db: Session) -> dict:
 
 
 _JOB_DATA_STATUS = {
+    "market_refresh": _market_refresh_status,
     "daily_market": _daily_market_status,
     "daily_value": _daily_value_status,
     "weekly_fundamentals": _weekly_fundamentals_status,
@@ -628,12 +672,38 @@ def job_daily_market():
     logger.info("[SCHED] daily_market 开始 (provider={})", settings.data_provider)
     db = SessionLocal()
     try:
-        if USE_BAOSTOCK:
-            affected = data_sync.sync_daily_bs(db, days_back=3)
-        else:
-            affected = data_sync.sync_daily_sina(db)
+        expected = _latest_expected_weekday()
+        affected = 0
+
+        # First try the fast all-market quote path. The old default pulled
+        # 5500+ baostock K-line requests and could run for close to an hour.
+        # Tencent's batched quote endpoint gives enough OHLC/valuation coverage
+        # for the current market snapshot; use baostock only when this does not
+        # satisfy the freshness check.
+        try:
+            affected += data_sync.sync_full_valuation_tx(db, trade_date=expected) or 0
+        except Exception as e:
+            logger.warning("[SCHED] daily_market tx-fast 失败: {}", str(e)[:120])
+
+        status = _daily_market_status(db)
+        if not status.get("ready"):
+            logger.warning("[SCHED] daily_market 快路径未达标: {}", status.get("reason"))
+            if USE_BAOSTOCK:
+                start = expected - timedelta(days=3)
+                affected += data_sync.sync_daily_bs(
+                    db,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=expected.strftime("%Y-%m-%d"),
+                    days_back=3,
+                ) or 0
+            else:
+                affected += data_sync.sync_daily_sina(db, trade_date=expected) or 0
+
+        status = _daily_market_status(db)
         if not affected:
             raise RuntimeError("daily_market 未写入任何行情数据")
+        if not status.get("ready"):
+            raise RuntimeError(f"daily_market 同步后仍未达标：{status.get('reason')}")
         if USE_BAOSTOCK:
             try:
                 data_sync.refresh_dividend_yield_bs(db)
