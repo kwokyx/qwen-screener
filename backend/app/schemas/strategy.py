@@ -39,7 +39,8 @@ class StrategyToolInfo(BaseModel):
 
 class StrategySelectRequest(BaseModel):
     strategy_id: str = Field(default="turtle_breakout")
-    limit: int = Field(default=50, ge=1, le=200)
+    limit: int = Field(default=50, ge=1, le=1000)
+    notify: bool = Field(default=True, description="是否推送策略选股结果到飞书")
 
 
 class StrategyPickItem(BaseModel):

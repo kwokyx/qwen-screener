@@ -32,7 +32,7 @@ def tools():
 def select(req: StrategySelectRequest, db: Session = Depends(get_db)):
     """执行策略选股，返回当前命中的股票列表。"""
     try:
-        return strategy_selector.run_strategy_selection(db, req.strategy_id, req.limit)
+        return strategy_selector.run_strategy_selection(db, req.strategy_id, req.limit, notify=req.notify)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

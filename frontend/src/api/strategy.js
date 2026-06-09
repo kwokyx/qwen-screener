@@ -14,6 +14,7 @@ export async function selectStrategy(strategyId, opts = {}) {
   const { data } = await client.post('/strategy/select', {
     strategy_id: strategyId,
     limit: opts.limit || 50,
+    notify: opts.notify !== false,
   })
   return data
 }

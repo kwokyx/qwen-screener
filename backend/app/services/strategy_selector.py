@@ -164,7 +164,13 @@ def list_agent_tools() -> list[StrategyToolInfo]:
     ]
 
 
-def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> StrategySelectResponse:
+def run_strategy_selection(
+    db: Session,
+    strategy_id: str,
+    limit: int = 50,
+    *,
+    notify: bool = True,
+) -> StrategySelectResponse:
     if strategy_id not in TEMPLATE_MAP:
         raise ValueError(f"未知策略: {strategy_id}")
 
@@ -175,7 +181,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         with _RESULT_CACHE_LOCK:
             cached = _RESULT_CACHE.get(cache_key)
             if cached and time.monotonic() < cached[0]:
-                return _notify_and_slice_strategy_response(strategy_id, cached[1], limit)
+                return _notify_and_slice_strategy_response(strategy_id, cached[1], limit, notify=notify)
             inflight = _RESULT_INFLIGHT.get(cache_key)
             if inflight is None:
                 inflight = _StrategyInflight(event=threading.Event())
@@ -191,7 +197,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         if inflight.error is not None:
             raise inflight.error
         if inflight.response is not None:
-            return _notify_and_slice_strategy_response(strategy_id, inflight.response, limit)
+            return _notify_and_slice_strategy_response(strategy_id, inflight.response, limit, notify=notify)
 
     try:
         history_days = _STRATEGY_HISTORY_OPTIONS[strategy_id]
@@ -216,7 +222,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
             _RESULT_INFLIGHT.pop(cache_key, None)
         inflight.event.set()
 
-    return _notify_and_slice_strategy_response(strategy_id, response, limit)
+    return _notify_and_slice_strategy_response(strategy_id, response, limit, notify=notify)
 
 
 def _start_daemon_thread(target, *args) -> None:
@@ -227,8 +233,12 @@ def _notify_and_slice_strategy_response(
     strategy_id: str,
     response: StrategySelectResponse,
     limit: int,
+    *,
+    notify: bool = True,
 ) -> StrategySelectResponse:
     sliced = _slice_strategy_response(response, limit)
+    if not notify:
+        return sliced
     strategy_name = TEMPLATE_MAP[strategy_id].name
     items_data = [
         {

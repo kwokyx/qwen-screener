@@ -216,10 +216,12 @@ def test_strategy_selection_pushes_feishu_for_each_call_including_cache(db, monk
 
     first = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=1)
     second = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=2)
+    third = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=2, notify=False)
 
     assert load_calls == 1
     assert [item.code for item in first.items] == ["000001.SZ"]
     assert [item.code for item in second.items] == ["000001.SZ", "000002.SZ"]
+    assert [item.code for item in third.items] == ["000001.SZ", "000002.SZ"]
     assert len(pushes) == 2
     assert [item["code"] for item in pushes[0][1]] == ["000001.SZ"]
     assert [item["code"] for item in pushes[1][1]] == ["000001.SZ", "000002.SZ"]

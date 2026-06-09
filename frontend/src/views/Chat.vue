@@ -7,6 +7,8 @@ import Sparkline from '../components/charts/Sparkline.vue'
 import EmptyState from '../components/EmptyState.vue'
 import AiMarkdown from '../components/AiMarkdown.vue'
 import { A2 } from '../shared/theme.js'
+import { screen } from '../api/screener'
+import { selectStrategy } from '../api/strategy'
 import { useKlineCache } from '../composables/useKlineCache.js'
 import { useNlStream } from '../composables/useNlStream.js'
 import { useAiStatusStore } from '../stores/aiStatus'
@@ -88,6 +90,66 @@ function resultFacts(s) {
     s.roe != null ? `ROE ${fmtMetric(s.roe)}%` : null,
     s.dividend_yield != null ? `股息 ${fmtMetric(s.dividend_yield)}%` : null,
   ].filter(Boolean)
+}
+
+const fullResultsOpen = ref(false)
+const fullResultsLoading = ref(false)
+const fullResultsError = ref('')
+const fullResultsTurn = ref(null)
+const fullResultsMode = ref('screen')
+const fullResultsItems = ref([])
+const fullResultsTotal = ref(0)
+const fullResultsPage = ref(1)
+const fullResultsPageSize = ref(50)
+const fullResultsTradeDate = ref(null)
+
+const fullResultsEffectiveTotal = computed(() => (
+  fullResultsMode.value === 'strategy'
+    ? fullResultsItems.value.length
+    : fullResultsTotal.value
+))
+const fullResultsPageCount = computed(() => Math.max(1, Math.ceil((fullResultsEffectiveTotal.value || 0) / fullResultsPageSize.value)))
+const fullResultsStart = computed(() => fullResultsEffectiveTotal.value ? (fullResultsPage.value - 1) * fullResultsPageSize.value + 1 : 0)
+const fullResultsEnd = computed(() => Math.min(fullResultsPage.value * fullResultsPageSize.value, fullResultsEffectiveTotal.value))
+const fullResultsPageItems = computed(() => {
+  if (fullResultsMode.value !== 'strategy') return fullResultsItems.value
+  const start = (fullResultsPage.value - 1) * fullResultsPageSize.value
+  return fullResultsItems.value.slice(start, start + fullResultsPageSize.value)
+})
+const fullResultsTitle = computed(() => {
+  const turn = fullResultsTurn.value
+  if (turn?.agentPlan?.tool === 'strategy_select' || turn?.result?.strategy) return '策略完整列表'
+  return '筛选完整列表'
+})
+const fullResultsSub = computed(() => {
+  const total = fullResultsTotal.value || 0
+  const loaded = fullResultsItems.value.length
+  if (fullResultsMode.value === 'strategy' && total > loaded) return `已加载前 ${loaded} / ${total} 只`
+  return `共 ${total} 只`
+})
+const showResultsPageLink = computed(() => fullResultsMode.value === 'screen')
+
+function strategyIdForTurn(turn) {
+  return turn?.result?.strategy?.id || turn?.agentPlan?.strategy_id || null
+}
+
+function conditionsForTurn(turn) {
+  return turn?.result?.parsed_conditions || turn?.parsedConditions || parsedConditions.value || []
+}
+
+function closeFullResults() {
+  fullResultsOpen.value = false
+  fullResultsError.value = ''
+}
+
+function pageSizeClass(size) {
+  return size === fullResultsPageSize.value ? 'active' : ''
+}
+
+async function setFullResultsPageSize(size) {
+  if (size === fullResultsPageSize.value) return
+  fullResultsPageSize.value = size
+  await loadFullResultsPage(1)
 }
 
 // 0 命中时给具体可操作建议，根据已解析的条件挑最严的一条
@@ -234,6 +296,67 @@ function restoreFromHistory(id) {
 }
 
 async function openFullResults(turn = latestTurn.value) {
+  if (!turn?.result) return
+  fullResultsTurn.value = turn
+  fullResultsOpen.value = true
+  fullResultsError.value = ''
+  fullResultsItems.value = []
+  fullResultsTotal.value = turn.result.total || 0
+  fullResultsTradeDate.value = turn.result.trade_date || null
+  fullResultsPage.value = 1
+  fullResultsMode.value = strategyIdForTurn(turn) ? 'strategy' : 'screen'
+  await loadFullResultsPage(1)
+}
+
+async function loadFullResultsPage(nextPage = fullResultsPage.value) {
+  const turn = fullResultsTurn.value
+  if (!turn?.result) return
+  fullResultsLoading.value = true
+  fullResultsError.value = ''
+  try {
+    const strategyId = strategyIdForTurn(turn)
+    fullResultsPage.value = Math.max(1, nextPage)
+    if (strategyId) {
+      const wanted = Math.min(Math.max(turn.result.total || fullResultsPageSize.value, fullResultsPageSize.value), 1000)
+      const data = await selectStrategy(strategyId, { limit: wanted, notify: false })
+      fullResultsMode.value = 'strategy'
+      fullResultsItems.value = data.items || []
+      fullResultsTotal.value = data.total || fullResultsItems.value.length
+      fullResultsTradeDate.value = data.trade_date || turn.result.trade_date || null
+      return
+    }
+
+    const plan = turn.agentPlan || agentPlan.value
+    const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'market_cap'
+    const sortDesc = (turn?.screenMeta?.sort_desc ?? plan?.sort_desc ?? screenMeta.value?.sort_desc) !== false
+    const conditions = conditionsForTurn(turn)
+    const data = await screen(conditions, {
+      sort_by: sortBy,
+      sort_desc: sortDesc,
+      offset: (fullResultsPage.value - 1) * fullResultsPageSize.value,
+      limit: fullResultsPageSize.value,
+    })
+    fullResultsMode.value = 'screen'
+    fullResultsItems.value = data.items || []
+    fullResultsTotal.value = data.total || 0
+    fullResultsTradeDate.value = data.trade_date || turn.result.trade_date || null
+  } catch (e) {
+    fullResultsError.value = e?.response?.data?.detail || e?.message || '完整列表加载失败'
+  } finally {
+    fullResultsLoading.value = false
+  }
+}
+
+async function changeFullResultsPage(nextPage) {
+  const safePage = Math.min(Math.max(1, nextPage), fullResultsPageCount.value)
+  if (fullResultsMode.value === 'strategy') {
+    fullResultsPage.value = safePage
+    return
+  }
+  await loadFullResultsPage(safePage)
+}
+
+async function openResultsPage(turn = latestTurn.value) {
   const plan = turn?.agentPlan || agentPlan.value
   const turnResult = turn?.result || result.value || null
   const sortBy = turn?.screenMeta?.sort_by || plan?.sort_by || screenMeta.value?.sort_by || 'market_cap'
@@ -371,6 +494,13 @@ watch(
     })
   },
   { flush: 'post' }
+)
+
+watch(
+  () => fullResultsPageItems.value.map((s) => s.code).join('|'),
+  () => {
+    if (fullResultsOpen.value) loadSparks(fullResultsPageItems.value.map((s) => s.code))
+  }
 )
 
 // ---- 右侧 inspector：每阶段对应一行 ----
@@ -720,6 +850,126 @@ const stageColor = (s) => ({
           </template>
         </main>
       </section>
+
+      <Transition name="full-results-fade">
+        <div v-if="fullResultsOpen" class="full-results-overlay" @click.self="closeFullResults">
+          <section class="full-results-modal" role="dialog" aria-modal="true" :aria-label="fullResultsTitle">
+            <header class="full-results-head">
+              <div>
+                <p class="full-results-eyebrow">{{ fullResultsMode === 'strategy' ? 'BUILT-IN STRATEGY' : 'STRUCTURED SCREEN' }}</p>
+                <h3>{{ fullResultsTitle }}</h3>
+                <div class="full-results-meta">
+                  <span>{{ fullResultsSub }}</span>
+                  <span v-if="fullResultsTradeDate">数据日期 {{ fullResultsTradeDate }}</span>
+                </div>
+              </div>
+              <div class="full-results-actions">
+                <button v-if="showResultsPageLink" type="button" class="full-results-secondary" @click="openResultsPage(fullResultsTurn)">
+                  打开结果页
+                </button>
+                <button type="button" class="full-results-close" aria-label="关闭完整列表" @click="closeFullResults">
+                  <Icon name="x" :size="16" />
+                </button>
+              </div>
+            </header>
+
+            <div class="full-results-toolbar">
+              <div class="full-results-query">{{ fullResultsTurn?.query || lastQuery }}</div>
+              <div class="full-results-page-sizes">
+                <button
+                  v-for="size in [50, 100]"
+                  :key="size"
+                  type="button"
+                  :class="pageSizeClass(size)"
+                  :disabled="fullResultsLoading"
+                  @click="setFullResultsPageSize(size)"
+                >
+                  {{ size }} / 页
+                </button>
+              </div>
+            </div>
+
+            <div v-if="fullResultsError" class="full-results-error">
+              <Icon name="alert" :size="14" />
+              <span>{{ fullResultsError }}</span>
+              <button type="button" @click="loadFullResultsPage(fullResultsPage)">重试</button>
+            </div>
+
+            <div class="full-results-table-wrap" :class="{ loading: fullResultsLoading }">
+              <div class="full-results-table-head">
+                <span>#</span>
+                <span>名称 / 代码</span>
+                <span>行业 / 信号</span>
+                <span>关键指标</span>
+                <span>价格</span>
+                <span>走势</span>
+              </div>
+
+              <div v-if="fullResultsLoading && !fullResultsPageItems.length" class="full-results-loading">
+                <div v-for="n in 8" :key="n" class="full-results-skeleton"></div>
+              </div>
+
+              <div v-else-if="fullResultsPageItems.length" class="full-results-table-body">
+                <button
+                  v-for="(s, i) in fullResultsPageItems"
+                  :key="s.code"
+                  type="button"
+                  class="full-results-row"
+                  @click="router.push(`/detail/${s.code}`)"
+                >
+                  <span class="full-results-rank mono">
+                    {{ String(fullResultsStart + i).padStart(2, '0') }}
+                  </span>
+                  <span class="full-results-stock">
+                    <strong>{{ s.name || s.code }}</strong>
+                    <small>{{ s.code }}</small>
+                  </span>
+                  <span class="full-results-industry">
+                    <em>{{ s.industry || s.market || '—' }}</em>
+                    <small v-if="s.signals?.length">{{ s.signals.slice(0, 2).join(' / ') }}</small>
+                  </span>
+                  <span class="full-results-facts">
+                    <small v-for="fact in resultFacts(s)" :key="fact">{{ fact }}</small>
+                  </span>
+                  <span class="full-results-price">
+                    <strong>{{ fmtMetric(s.close) }}</strong>
+                    <small :class="{ up: s.change_pct > 0, down: s.change_pct < 0 }">{{ fmtChange(s.change_pct) }}</small>
+                  </span>
+                  <span class="full-results-spark">
+                    <Sparkline
+                      :data="spark(s.code)"
+                      :color="s.change_pct >= 0 ? '#C8312A' : '#0E8A66'"
+                      :fill="s.change_pct >= 0 ? '#C8312A22' : '#0E8A6622'"
+                      :width="84"
+                      :height="22"
+                    />
+                  </span>
+                </button>
+              </div>
+
+              <EmptyState v-else icon="filter" title="没有命中任何股票" subtitle="可以调整条件或返回对话继续收窄/放宽目标" />
+            </div>
+
+            <footer class="full-results-foot">
+              <span>
+                第 {{ fullResultsStart }}–{{ fullResultsEnd }} 条
+                <template v-if="fullResultsMode === 'strategy' && fullResultsTotal > fullResultsItems.length">
+                  · 当前最多载入 {{ fullResultsItems.length }} 条
+                </template>
+              </span>
+              <div class="full-results-pager">
+                <button type="button" :disabled="fullResultsLoading || fullResultsPage <= 1" @click="changeFullResultsPage(fullResultsPage - 1)">
+                  上一页
+                </button>
+                <span>{{ fullResultsPage }} / {{ fullResultsPageCount }}</span>
+                <button type="button" :disabled="fullResultsLoading || fullResultsPage >= fullResultsPageCount" @click="changeFullResultsPage(fullResultsPage + 1)">
+                  下一页
+                </button>
+              </div>
+            </footer>
+          </section>
+        </div>
+      </Transition>
     </div>
   </Shell>
 </template>
@@ -1564,6 +1814,343 @@ const stageColor = (s) => ({
   font-size: 12px;
 }
 
+.full-results-fade-enter-active,
+.full-results-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.full-results-fade-enter-from,
+.full-results-fade-leave-to {
+  opacity: 0;
+}
+
+.full-results-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(17, 17, 17, 0.42);
+}
+
+.full-results-modal {
+  width: min(1120px, calc(100vw - 32px));
+  height: min(760px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #FFFFFF;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+}
+
+.full-results-head,
+.full-results-toolbar,
+.full-results-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.full-results-head {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #EDEDED;
+}
+
+.full-results-eyebrow {
+  margin: 0 0 4px;
+  color: #A1A1AA;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.full-results-head h3 {
+  margin: 0;
+  color: #111111;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.full-results-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.full-results-actions,
+.full-results-page-sizes,
+.full-results-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.full-results-secondary,
+.full-results-close,
+.full-results-page-sizes button,
+.full-results-pager button,
+.full-results-error button {
+  appearance: none;
+  border: 1px solid #D8D8D8;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.full-results-secondary {
+  height: 34px;
+  padding: 0 12px;
+}
+
+.full-results-close {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
+.full-results-secondary:hover,
+.full-results-close:hover,
+.full-results-page-sizes button:hover,
+.full-results-pager button:hover,
+.full-results-error button:hover {
+  border-color: #B8B8B8;
+  background: #F5F5F5;
+  color: #111111;
+}
+
+.full-results-pager button:disabled,
+.full-results-page-sizes button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.full-results-toolbar {
+  min-height: 50px;
+  padding: 10px 20px;
+  border-bottom: 1px solid #F1F1F1;
+  background: #FBFBF9;
+}
+
+.full-results-query {
+  min-width: 0;
+  overflow: hidden;
+  color: #3F3F46;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.full-results-page-sizes button {
+  height: 30px;
+  padding: 0 9px;
+}
+
+.full-results-page-sizes button.active {
+  border-color: #111111;
+  background: #111111;
+  color: #FFFFFF;
+}
+
+.full-results-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 20px 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(200, 49, 42, 0.08);
+  color: #C8312A;
+  font-size: 12px;
+}
+
+.full-results-error button {
+  height: 28px;
+  margin-left: auto;
+  padding: 0 10px;
+}
+
+.full-results-table-wrap {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.full-results-table-head,
+.full-results-row {
+  display: grid;
+  grid-template-columns: 48px minmax(132px, 1.05fr) minmax(132px, 1.1fr) minmax(190px, 1.4fr) 96px 108px;
+  gap: 12px;
+  align-items: center;
+}
+
+.full-results-table-head {
+  height: 38px;
+  padding: 0 20px;
+  border-bottom: 1px solid #EDEDED;
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.full-results-table-body {
+  height: calc(100% - 38px);
+  overflow: auto;
+}
+
+.full-results-row {
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 20px;
+  border: 0;
+  border-bottom: 1px solid #F1F1F1;
+  background: #FFFFFF;
+  color: #3F3F46;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.16s ease;
+}
+
+.full-results-row:hover {
+  background: #FAFAFA;
+}
+
+.full-results-rank,
+.full-results-stock small,
+.full-results-price,
+.full-results-price small,
+.full-results-pager span {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.full-results-rank {
+  color: #A1A1AA;
+  font-size: 11px;
+}
+
+.full-results-stock,
+.full-results-industry,
+.full-results-price {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.full-results-stock strong,
+.full-results-industry em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.full-results-stock strong {
+  color: #111111;
+  font-size: 13px;
+}
+
+.full-results-stock small,
+.full-results-industry small,
+.full-results-price small {
+  color: #A1A1AA;
+  font-size: 10px;
+}
+
+.full-results-industry em {
+  color: #3F3F46;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.full-results-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.full-results-facts small {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #F5F5F5;
+  color: #71717A;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.full-results-price {
+  text-align: right;
+}
+
+.full-results-price strong {
+  color: #111111;
+  font-size: 13px;
+}
+
+.full-results-price small.up {
+  color: #C8312A;
+}
+
+.full-results-price small.down {
+  color: #0E8A66;
+}
+
+.full-results-spark {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.full-results-loading {
+  padding: 12px 20px;
+}
+
+.full-results-skeleton {
+  height: 42px;
+  margin-bottom: 9px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #F1F1F1, #FAFAFA, #F1F1F1);
+  background-size: 220% 100%;
+  animation: sk 1.2s ease-in-out infinite;
+}
+
+.full-results-foot {
+  min-height: 56px;
+  padding: 0 20px;
+  border-top: 1px solid #EDEDED;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.full-results-pager button {
+  height: 30px;
+  min-width: 68px;
+  padding: 0 10px;
+}
+
+.full-results-pager span {
+  min-width: 58px;
+  color: #3F3F46;
+  font-size: 12px;
+  text-align: center;
+}
+
 
 .history-item {
   position: relative;
@@ -1791,6 +2378,44 @@ const stageColor = (s) => ({
   }
   .result-price {
     grid-area: price;
+  }
+  .full-results-overlay {
+    padding: 10px;
+  }
+  .full-results-modal {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+  }
+  .full-results-head,
+  .full-results-toolbar,
+  .full-results-foot {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .full-results-actions,
+  .full-results-page-sizes,
+  .full-results-pager {
+    width: 100%;
+  }
+  .full-results-secondary {
+    flex: 1;
+  }
+  .full-results-table-wrap {
+    overflow: auto;
+  }
+  .full-results-table-head,
+  .full-results-row {
+    width: 900px;
+  }
+  .full-results-table-body {
+    height: calc(100% - 38px);
+    overflow: visible;
+  }
+  .full-results-foot {
+    justify-content: flex-start;
+  }
+  .full-results-pager {
+    justify-content: space-between;
   }
 }
 
