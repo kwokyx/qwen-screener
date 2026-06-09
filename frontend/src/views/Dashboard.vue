@@ -408,56 +408,58 @@ onMounted(loadAll)
                 <NButton size="tiny" secondary @click="loadAll">重试</NButton>
               </div>
             </NAlert>
-            <div v-else class="sector-rank-grid">
-              <section class="sector-rank-group">
-                <div class="sector-rank-title">
-                  <span>强势板块</span>
-                  <span class="sector-count-pill is-up">{{ sectorsUp.length }}</span>
-                </div>
-                <div v-if="sectorsUp.length" class="sector-rank-list">
-                  <button
-                    v-for="(s, n) in sectorsUp"
-                    :key="'sector-up-' + s.name"
-                    class="sector-rank-row is-up"
-                    @click="goToScreener(`${s.name} 板块基本面好的股票`)"
-                  >
-                    <span class="sector-rank-num">{{ n + 1 }}</span>
-                    <span class="sector-rank-main">
-                      <span class="sector-rank-name">{{ s.name }}</span>
-                      <span class="sector-rank-track">
-                        <span class="sector-rank-bar" :style="{ width: sectorBarWidth(s.change_pct) }"></span>
+            <div v-else class="sector-rank-scroll">
+              <div class="sector-rank-grid">
+                <section class="sector-rank-group">
+                  <div class="sector-rank-title">
+                    <span>强势板块</span>
+                    <span class="sector-count-pill is-up">{{ sectorsUp.length }}</span>
+                  </div>
+                  <div v-if="sectorsUp.length" class="sector-rank-list">
+                    <button
+                      v-for="(s, n) in sectorsUp"
+                      :key="'sector-up-' + s.name"
+                      class="sector-rank-row is-up"
+                      @click="goToScreener(`${s.name} 板块基本面好的股票`)"
+                    >
+                      <span class="sector-rank-num">{{ n + 1 }}</span>
+                      <span class="sector-rank-main">
+                        <span class="sector-rank-name">{{ s.name }}</span>
+                        <span class="sector-rank-track">
+                          <span class="sector-rank-bar" :style="{ width: sectorBarWidth(s.change_pct) }"></span>
+                        </span>
                       </span>
-                    </span>
-                    <PctText :pct="s.change_pct" :size="12" />
-                  </button>
-                </div>
-                <NEmpty v-else size="small" description="无上涨板块" />
-              </section>
+                      <PctText :pct="s.change_pct" :size="12" />
+                    </button>
+                  </div>
+                  <NEmpty v-else size="small" description="无上涨板块" />
+                </section>
 
-              <section class="sector-rank-group">
-                <div class="sector-rank-title">
-                  <span>弱势板块</span>
-                  <span class="sector-count-pill is-down">{{ sectorsDown.length }}</span>
-                </div>
-                <div v-if="sectorsDown.length" class="sector-rank-list">
-                  <button
-                    v-for="(s, n) in sectorsDown"
-                    :key="'sector-down-' + s.name"
-                    class="sector-rank-row is-down"
-                    @click="goToScreener(`${s.name} 板块基本面好的股票`)"
-                  >
-                    <span class="sector-rank-num">{{ n + 1 }}</span>
-                    <span class="sector-rank-main">
-                      <span class="sector-rank-name">{{ s.name }}</span>
-                      <span class="sector-rank-track">
-                        <span class="sector-rank-bar" :style="{ width: sectorBarWidth(s.change_pct) }"></span>
+                <section class="sector-rank-group">
+                  <div class="sector-rank-title">
+                    <span>弱势板块</span>
+                    <span class="sector-count-pill is-down">{{ sectorsDown.length }}</span>
+                  </div>
+                  <div v-if="sectorsDown.length" class="sector-rank-list">
+                    <button
+                      v-for="(s, n) in sectorsDown"
+                      :key="'sector-down-' + s.name"
+                      class="sector-rank-row is-down"
+                      @click="goToScreener(`${s.name} 板块基本面好的股票`)"
+                    >
+                      <span class="sector-rank-num">{{ n + 1 }}</span>
+                      <span class="sector-rank-main">
+                        <span class="sector-rank-name">{{ s.name }}</span>
+                        <span class="sector-rank-track">
+                          <span class="sector-rank-bar" :style="{ width: sectorBarWidth(s.change_pct) }"></span>
+                        </span>
                       </span>
-                    </span>
-                    <PctText :pct="s.change_pct" :size="12" />
-                  </button>
-                </div>
-                <NEmpty v-else size="small" description="无下跌板块" />
-              </section>
+                      <PctText :pct="s.change_pct" :size="12" />
+                    </button>
+                  </div>
+                  <NEmpty v-else size="small" description="无下跌板块" />
+                </section>
+              </div>
             </div>
           </NCard>
         </NGi>
@@ -832,6 +834,13 @@ onMounted(loadAll)
   cursor: pointer;
 }
 
+.sector-rank-scroll {
+  max-height: 624px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
 .sector-rank-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1044,6 +1053,12 @@ onMounted(loadAll)
 @media (max-width: 720px) {
   .indices-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sector-rank-scroll {
+    max-height: none;
+    overflow-y: visible;
+    padding-right: 0;
   }
 
   .sector-rank-grid {
