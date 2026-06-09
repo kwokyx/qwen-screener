@@ -95,10 +95,51 @@ const activeTool = computed(() => {
 })
 const activeToolNotes = computed(() => activeTool.value?.data_notes || [])
 const fieldLabelMap = computed(() => Object.fromEntries((stockScreenTool.value?.fields || []).map((field) => [field.key, field.label])))
-const structuredFieldOptions = computed(() => (stockScreenTool.value?.fields || []).map((field) => ({
-  label: field.label,
-  value: field.key,
-})))
+const conditionFieldGroups = [
+  {
+    key: 'fundamental',
+    label: '基本面',
+    fields: ['pe', 'pb', 'roe', 'market_cap', 'dividend_yield', 'revenue_yoy', 'profit_yoy', 'gross_margin', 'debt_ratio'],
+  },
+  {
+    key: 'technical',
+    label: '技术面',
+    fields: ['close', 'turnover', 'ma5', 'ma20', 'volume_ratio_20', 'breakout_20', 'ma5_above_ma20', 'pct_change_20'],
+  },
+  {
+    key: 'scope',
+    label: '选股范围',
+    fields: ['industry', 'market', 'risk_flag'],
+  },
+]
+const structuredFieldOptions = computed(() => {
+  const fields = stockScreenTool.value?.fields || []
+  const fieldMap = new Map(fields.map((field) => [field.key, field]))
+  const groupedKeys = new Set(conditionFieldGroups.flatMap((group) => group.fields))
+  const groups = conditionFieldGroups
+    .map((group) => ({
+      type: 'group',
+      key: group.key,
+      label: group.label,
+      children: group.fields
+        .map((key) => fieldMap.get(key))
+        .filter(Boolean)
+        .map((field) => ({ label: field.label, value: field.key })),
+    }))
+    .filter((group) => group.children.length)
+  const otherFields = fields
+    .filter((field) => !groupedKeys.has(field.key))
+    .map((field) => ({ label: field.label, value: field.key }))
+  if (otherFields.length) {
+    groups.push({
+      type: 'group',
+      key: 'other',
+      label: '其他',
+      children: otherFields,
+    })
+  }
+  return groups
+})
 const structuredSortOptions = computed(() => [
   { label: '默认排序', value: '' },
   ...(stockScreenTool.value?.fields || [])
