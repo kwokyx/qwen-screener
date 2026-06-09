@@ -218,37 +218,6 @@ function sectorBarWidth(pct) {
   return `${Math.min(100, Math.max(10, Math.abs(Number(pct || 0)) * 10))}%`
 }
 
-const sectorStrengthColumns = [
-  {
-    title: '板块',
-    key: 'name',
-    width: 120,
-    ellipsis: { tooltip: true },
-  },
-  {
-    title: '强度',
-    key: 'bar',
-    render: (s) => h('div', { class: 'strength-track' }, [
-      h('span', { class: 'strength-axis' }),
-      h('span', {
-        class: ['strength-bar', s.change_pct >= 0 ? 'is-up' : 'is-down'],
-        style: {
-          width: `${Math.min(50, Math.abs(s.change_pct) * 8)}%`,
-          left: s.change_pct >= 0 ? '50%' : 'auto',
-          right: s.change_pct >= 0 ? 'auto' : '50%',
-        },
-      }),
-    ]),
-  },
-  {
-    title: '涨跌幅',
-    key: 'change_pct',
-    align: 'right',
-    width: 92,
-    render: (s) => h(PctText, { pct: s.change_pct, size: 12 }),
-  },
-]
-
 onMounted(loadAll)
 </script>
 
@@ -461,41 +430,6 @@ onMounted(loadAll)
                 </section>
               </div>
             </div>
-          </NCard>
-        </NGi>
-
-        <NGi :span="24">
-          <NCard class="terminal-card strength-card" :bordered="false">
-            <template #header>
-              <div>
-                <div class="card-title">板块涨跌幅强度</div>
-                <div class="card-subtitle">条形长度按涨跌幅绝对值映射，流通市值加权</div>
-              </div>
-            </template>
-            <template #header-extra>
-              <NTag size="small" :bordered="false">{{ sectors.length }} 个行业</NTag>
-            </template>
-            <div v-if="loadingSectors && !sectors.length" class="table-skeleton strength-skeleton-list">
-              <div v-for="n in 10" :key="'strength-sk-' + n" class="strength-skeleton-row">
-                <span class="sk-cell sector"></span>
-                <span class="sk-cell bar"></span>
-                <span class="sk-cell chip"></span>
-              </div>
-            </div>
-            <NDataTable
-              v-else
-              :columns="sectorStrengthColumns"
-              :data="sectors"
-              :loading="loadingSectors"
-              :pagination="false"
-              :bordered="false"
-              :scroll-x="520"
-              size="small"
-            >
-              <template #empty>
-                <NEmpty description="暂无板块数据" />
-              </template>
-            </NDataTable>
           </NCard>
         </NGi>
       </NGrid>
@@ -715,8 +649,7 @@ onMounted(loadAll)
 }
 
 .dashboard-skeleton-row,
-.sector-skeleton-row,
-.strength-skeleton-row {
+.sector-skeleton-row {
   display: grid;
   align-items: center;
   min-height: 40px;
@@ -725,8 +658,7 @@ onMounted(loadAll)
 }
 
 .dashboard-skeleton-row:first-child,
-.sector-skeleton-row:first-child,
-.strength-skeleton-row:first-child {
+.sector-skeleton-row:first-child {
   border-top: 0;
 }
 
@@ -744,10 +676,6 @@ onMounted(loadAll)
   grid-template-columns: minmax(0, 1fr) 72px;
 }
 
-.strength-skeleton-row {
-  grid-template-columns: 120px minmax(0, 1fr) 72px;
-}
-
 .sk-cell {
   height: 10px;
 }
@@ -756,8 +684,6 @@ onMounted(loadAll)
 .sk-cell.name { width: 76%; }
 .sk-cell.num { width: 58px; justify-self: end; }
 .sk-cell.chip { width: 62px; height: 18px; justify-self: end; border-radius: 5px; }
-.sk-cell.sector { width: 88px; }
-.sk-cell.bar { width: 100%; height: 8px; border-radius: 3px; }
 
 @keyframes dashboard-shimmer {
   0% { background-position: 120% 0; }
@@ -785,20 +711,17 @@ onMounted(loadAll)
 }
 
 .table-card,
-.sector-card,
-.strength-card {
+.sector-card {
   overflow: hidden;
 }
 
 .table-card :deep(.n-card__content),
-.sector-card :deep(.n-card__content),
-.strength-card :deep(.n-card__content) {
+.sector-card :deep(.n-card__content) {
   padding-top: 4px;
 }
 
 .table-card :deep(.n-data-table-th),
-.sector-card :deep(.n-data-table-th),
-.strength-card :deep(.n-data-table-th) {
+.sector-card :deep(.n-data-table-th) {
   background: transparent;
   color: #71717A;
   font-size: 12px;
@@ -806,16 +729,14 @@ onMounted(loadAll)
 }
 
 .table-card :deep(.n-data-table-td),
-.sector-card :deep(.n-data-table-td),
-.strength-card :deep(.n-data-table-td) {
+.sector-card :deep(.n-data-table-td) {
   background: transparent;
   font-size: 13px;
   padding: 18px 14px;
 }
 
 .table-card :deep(.n-data-table-tr:hover td),
-.sector-card :deep(.n-data-table-tr:hover td),
-.strength-card :deep(.n-data-table-tr:hover td) {
+.sector-card :deep(.n-data-table-tr:hover td) {
   background: #FFFFFF;
 }
 
@@ -960,38 +881,6 @@ onMounted(loadAll)
   background: #16A35C;
 }
 
-.strength-track {
-  position: relative;
-  height: 8px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: #ECECEC;
-}
-
-.strength-axis {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 1px;
-  background: #D4D4D8;
-}
-
-.strength-bar {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-radius: 3px;
-}
-
-.strength-bar.is-up {
-  background: #E04F76;
-}
-
-.strength-bar.is-down {
-  background: #16A35C;
-}
-
 @media (max-width: 960px) {
   .market-overview-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1027,24 +916,21 @@ onMounted(loadAll)
   }
 
   .table-card,
-  .sector-card,
-  .strength-card {
+  .sector-card {
     width: min(100%, calc(100vw - 24px));
     max-width: 100%;
     min-width: 0;
   }
 
   .table-card :deep(.n-card__content),
-  .sector-card :deep(.n-card__content),
-  .strength-card :deep(.n-card__content) {
+  .sector-card :deep(.n-card__content) {
     max-width: 100%;
     min-width: 0;
     overflow-x: auto;
   }
 
   .table-card :deep(.n-data-table),
-  .sector-card :deep(.n-data-table),
-  .strength-card :deep(.n-data-table) {
+  .sector-card :deep(.n-data-table) {
     max-width: 100%;
     min-width: 0;
   }
