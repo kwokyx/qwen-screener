@@ -481,13 +481,13 @@ const columns = computed(() => [
   {
     title: '代码',
     key: 'code',
-    width: 92,
+    width: 80,
     render: (s) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', color: Preview.textMuted, fontSize: '10.5px' } }, s.code),
   },
   {
     title: '名称',
     key: 'name',
-    minWidth: 120,
+    width: 100,
     render: (s) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 } }, [
       h(StarButton, { stock: { code: s.code, name: s.name, sector: s.industry, refPrice: s.close }, size: 12 }),
       h('span', s.name),
