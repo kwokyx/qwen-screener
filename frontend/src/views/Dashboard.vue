@@ -412,7 +412,7 @@ onMounted(loadAll)
               <section class="sector-rank-group">
                 <div class="sector-rank-title">
                   <span>强势板块</span>
-                  <NTag size="tiny" :bordered="false" type="success">{{ sectorsUp.length }}</NTag>
+                  <span class="sector-count-pill is-up">{{ sectorsUp.length }}</span>
                 </div>
                 <div v-if="sectorsUp.length" class="sector-rank-list">
                   <button
@@ -437,7 +437,7 @@ onMounted(loadAll)
               <section class="sector-rank-group">
                 <div class="sector-rank-title">
                   <span>弱势板块</span>
-                  <NTag size="tiny" :bordered="false" type="error">{{ sectorsDown.length }}</NTag>
+                  <span class="sector-count-pill is-down">{{ sectorsDown.length }}</span>
                 </div>
                 <div v-if="sectorsDown.length" class="sector-rank-list">
                   <button
@@ -852,6 +852,29 @@ onMounted(loadAll)
   color: #3F3F46;
   font-size: 12px;
   font-weight: 800;
+}
+
+.sector-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sector-count-pill.is-up {
+  background: #FCE7EE;
+  color: #C8312A;
+}
+
+.sector-count-pill.is-down {
+  background: #E6F5EF;
+  color: #0E8A66;
 }
 
 .sector-rank-list {
