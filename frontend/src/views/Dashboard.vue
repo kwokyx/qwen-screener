@@ -47,6 +47,9 @@ const idxSpark = computed(() => indices.value.map((idx) => idx.spark || []))
 
 const sectorsUp = computed(() => [...sectors.value].filter((s) => s.change_pct >= 0).sort((a, b) => b.change_pct - a.change_pct))
 const sectorsDown = computed(() => [...sectors.value].filter((s) => s.change_pct < 0).sort((a, b) => a.change_pct - b.change_pct))
+const sectorRankLimit = 10
+const sectorsUpShown = computed(() => sectorsUp.value.slice(0, sectorRankLimit))
+const sectorsDownShown = computed(() => sectorsDown.value.slice(0, sectorRankLimit))
 
 const marketStats = computed(() => {
   const t = tickerInfo.value
@@ -407,12 +410,12 @@ onMounted(loadAll)
               <div class="sector-rank-grid">
                 <section class="sector-rank-group">
                   <div class="sector-rank-title">
-                    <span>强势板块</span>
-                    <span class="sector-count-pill is-up">{{ sectorsUp.length }}</span>
+                    <span>强势板块 Top{{ sectorRankLimit }}</span>
+                    <span class="sector-count-pill is-up">{{ sectorsUpShown.length }}</span>
                   </div>
-                  <div v-if="sectorsUp.length" class="sector-rank-list">
+                  <div v-if="sectorsUpShown.length" class="sector-rank-list">
                     <button
-                      v-for="(s, n) in sectorsUp"
+                      v-for="(s, n) in sectorsUpShown"
                       :key="'sector-up-' + s.name"
                       class="sector-rank-row is-up"
                       @click="goToScreener(`${s.name} 板块基本面好的股票`)"
@@ -432,12 +435,12 @@ onMounted(loadAll)
 
                 <section class="sector-rank-group">
                   <div class="sector-rank-title">
-                    <span>弱势板块</span>
-                    <span class="sector-count-pill is-down">{{ sectorsDown.length }}</span>
+                    <span>弱势板块 Top{{ sectorRankLimit }}</span>
+                    <span class="sector-count-pill is-down">{{ sectorsDownShown.length }}</span>
                   </div>
-                  <div v-if="sectorsDown.length" class="sector-rank-list">
+                  <div v-if="sectorsDownShown.length" class="sector-rank-list">
                     <button
-                      v-for="(s, n) in sectorsDown"
+                      v-for="(s, n) in sectorsDownShown"
                       :key="'sector-down-' + s.name"
                       class="sector-rank-row is-down"
                       @click="goToScreener(`${s.name} 板块基本面好的股票`)"
@@ -468,7 +471,6 @@ onMounted(loadAll)
   display: flex;
   flex-direction: column;
   gap: 20px;
-  --dashboard-list-height: 624px;
 }
 
 .market-overview-grid {
@@ -826,10 +828,7 @@ onMounted(loadAll)
 }
 
 .sector-rank-scroll {
-  max-height: var(--dashboard-list-height);
-  overflow-y: auto;
-  padding-right: 4px;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
 
 .sector-rank-grid {
@@ -887,7 +886,7 @@ onMounted(loadAll)
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
+  min-height: 54px;
   width: 100%;
   min-width: 0;
   padding: 7px 8px;
