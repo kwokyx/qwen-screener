@@ -6,22 +6,20 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { A2 } from '../shared/theme.js'
+import { fetchWatchSnapshots } from '../shared/stockSnapshot.js'
 import Icon from './Icon.vue'
-import * as stockApi from '../api/stock'
 
 const wl = useWatchlistStore()
 const router = useRouter()
 const route = useRoute()
 
 const open = ref(false)
-const details = ref({})
+const snapshots = ref({})
 
 async function refreshDetails() {
-  for (const w of wl.items) {
-    try {
-      const d = await stockApi.detail(w.code)
-      if (d) details.value[w.code] = d
-    } catch { /* ignore */ }
+  snapshots.value = {
+    ...snapshots.value,
+    ...(await fetchWatchSnapshots(wl.items)),
   }
 }
 
@@ -35,7 +33,14 @@ function close() {
 }
 
 function goto(code) {
+  close()
   router.push(`/detail/${code}`)
+}
+
+function onClickOutside(e) {
+  if (!open.value) return
+  const dock = document.querySelector('.watchdock')
+  if (dock && !dock.contains(e.target)) close()
 }
 
 // 当前页是 chat / detail 等页面，dock 不要遮挡。在 detail 页默认收起
@@ -50,8 +55,28 @@ function onKey(e) {
 }
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+onMounted(() => document.addEventListener('mousedown', onClickOutside))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside))
+
+watch(() => route.fullPath, () => { if (open.value) close() })
+
+watch(() => wl.items.map((item) => item.code).join('|'), () => {
+  if (open.value) refreshDetails()
+})
 
 const items = computed(() => wl.items)
+const dockItems = computed(() => items.value.map((item) => {
+  const snapshot = snapshots.value[item.code] || {}
+  const price = snapshot.close ?? item.refPrice ?? null
+  return {
+    ...item,
+    displayName: snapshot.name || item.name || item.code,
+    displaySector: snapshot.industry || item.sector || '',
+    displayPrice: price,
+    priceSource: snapshot.close != null ? snapshot.source_label : (item.refPrice != null ? '加入价' : ''),
+    priceTitle: snapshot.close != null ? snapshot.source_title : '加入自选时保存的基准价',
+  }
+}))
 </script>
 
 <template>
@@ -84,22 +109,25 @@ const items = computed(() => wl.items)
           <div :style="{ fontSize: '10.5px', color: A2.textDim, lineHeight: 1.5 }">在任意股票旁点 ★ 即可加入<br/>或按 ⌘K 搜索</div>
         </div>
         <div v-else class="watchdock-list">
-          <div v-for="w in items" :key="w.code"
+          <div v-for="w in dockItems" :key="w.code"
                class="watchdock-item"
                @click="goto(w.code)">
             <div :style="{ flex: 1, minWidth: 0 }">
-              <div :style="{ fontSize: '12px', fontWeight: 600, color: A2.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ w.name || w.code }}</div>
+              <div :style="{ fontSize: '12px', fontWeight: 600, color: A2.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ w.displayName }}</div>
               <div :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', marginTop: '1px' }">
-                {{ w.code }}<span v-if="w.sector"> · {{ w.sector }}</span>
+                {{ w.code }}<span v-if="w.displaySector"> · {{ w.displaySector }}</span>
               </div>
             </div>
             <div :style="{ textAlign: 'right', flexShrink: 0 }">
               <div :style="{ fontSize: '12px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: A2.text }">
-                {{ details[w.code]?.latest?.close?.toFixed(2) || w.refPrice?.toFixed(2) || '—' }}
+                {{ w.displayPrice == null ? '—' : w.displayPrice.toFixed(2) }}
               </div>
-              <div v-if="w.alerts && w.alerts.length"
-                   :style="{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '9.5px', color: A2.qwen, fontFamily: 'IBM Plex Mono, monospace', marginTop: '1px' }">
-                <Icon name="bell" :size="9" /> {{ w.alerts.length }}
+              <div v-if="w.priceSource || (w.alerts && w.alerts.length)"
+                   :style="{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '5px', fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', marginTop: '1px' }">
+                <span v-if="w.priceSource" :title="w.priceTitle">{{ w.priceSource }}</span>
+                <span v-if="w.alerts && w.alerts.length" :style="{ color: A2.qwen, display: 'inline-flex', alignItems: 'center', gap: '3px' }">
+                  <Icon name="bell" :size="9" /> {{ w.alerts.length }}
+                </span>
               </div>
             </div>
           </div>
