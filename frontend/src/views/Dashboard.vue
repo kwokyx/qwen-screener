@@ -273,40 +273,42 @@ onMounted(loadAll)
   <Shell>
     <div class="dashboard-page">
       <div class="market-overview-grid">
-        <template v-if="loadingIndices && !indices.length">
-          <NCard v-for="(_, n) in 6" :key="'idx-sk-' + n" class="terminal-card index-card" :bordered="false">
-            <div class="index-skeleton">
-              <span class="sk-line short"></span>
-              <span class="sk-line value"></span>
-              <span class="sk-line mini"></span>
-            </div>
-          </NCard>
-        </template>
-        <NCard v-else-if="indicesError" class="terminal-card index-card status-card" :bordered="false">
-          <div class="status-title">指数加载失败</div>
-          <div class="status-desc">{{ indicesError }}</div>
-          <NButton size="tiny" secondary @click="loadAll">重试</NButton>
-        </NCard>
-        <template v-else>
-          <NCard v-for="(idx, i) in indices" :key="idx.code" class="terminal-card index-card" :bordered="false">
-            <div class="index-head">
-              <div>
-                <div class="index-name">{{ idx.name }}</div>
-                <div class="index-code">{{ idx.code }} · {{ idx.constituents }} 只</div>
+        <div class="indices-grid">
+          <template v-if="loadingIndices && !indices.length">
+            <NCard v-for="(_, n) in 6" :key="'idx-sk-' + n" class="terminal-card index-card" :bordered="false">
+              <div class="index-skeleton">
+                <span class="sk-line short"></span>
+                <span class="sk-line value"></span>
+                <span class="sk-line mini"></span>
               </div>
-              <Sparkline :data="idxSpark[i] || []" :color="idx.change_pct >= 0 ? '#C8312A' : '#0E8A66'" :fill="idx.change_pct >= 0 ? '#C8312A22' : '#0E8A6622'" :width="64" :height="24" />
-            </div>
-            <div class="index-value-row">
-              <span class="index-value" :class="idx.change_pct >= 0 ? 'up' : 'down'">
-                {{ idx.value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
-              </span>
-              <span class="index-change" :class="idx.change_pct >= 0 ? 'up' : 'down'">
-                {{ idx.change >= 0 ? '+' : '' }}{{ idx.change.toFixed(2) }}
-              </span>
-              <PctText :pct="idx.change_pct" :size="11" />
-            </div>
+            </NCard>
+          </template>
+          <NCard v-else-if="indicesError" class="terminal-card index-card status-card" :bordered="false">
+            <div class="status-title">指数加载失败</div>
+            <div class="status-desc">{{ indicesError }}</div>
+            <NButton size="tiny" secondary @click="loadAll">重试</NButton>
           </NCard>
-        </template>
+          <template v-else>
+            <NCard v-for="(idx, i) in indices" :key="idx.code" class="terminal-card index-card" :bordered="false">
+              <div class="index-head">
+                <div>
+                  <div class="index-name">{{ idx.name }}</div>
+                  <div class="index-code">{{ idx.code }} · {{ idx.constituents }} 只</div>
+                </div>
+                <Sparkline :data="idxSpark[i] || []" :color="idx.change_pct >= 0 ? '#C8312A' : '#0E8A66'" :fill="idx.change_pct >= 0 ? '#C8312A22' : '#0E8A6622'" :width="64" :height="24" />
+              </div>
+              <div class="index-value-row">
+                <span class="index-value" :class="idx.change_pct >= 0 ? 'up' : 'down'">
+                  {{ idx.value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+                </span>
+                <span class="index-change" :class="idx.change_pct >= 0 ? 'up' : 'down'">
+                  {{ idx.change >= 0 ? '+' : '' }}{{ idx.change.toFixed(2) }}
+                </span>
+                <PctText :pct="idx.change_pct" :size="11" />
+              </div>
+            </NCard>
+          </template>
+        </div>
 
         <NCard class="terminal-card market-card" :bordered="false">
           <div class="card-title-row">
@@ -504,9 +506,20 @@ onMounted(loadAll)
 
 .market-overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: 20px;
   align-items: stretch;
+}
+
+.indices-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  min-width: 0;
+}
+
+.indices-grid .status-card {
+  grid-column: 1 / -1;
 }
 
 .terminal-card {
@@ -868,7 +881,19 @@ onMounted(loadAll)
 
 @media (max-width: 960px) {
   .market-overview-grid {
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .indices-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .market-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .market-metric:last-child {
+    grid-column: auto;
   }
 
   .main-grid {
@@ -909,6 +934,26 @@ onMounted(loadAll)
   .strength-card :deep(.n-data-table) {
     max-width: 100%;
     min-width: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .indices-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-metric:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 460px) {
+  .indices-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
