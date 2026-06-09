@@ -230,11 +230,12 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 }
 ```
 
-**支持字段**：`pe / pb / roe / market_cap / dividend_yield / revenue_yoy / profit_yoy / gross_margin / debt_ratio / industry / market / close / turnover`
+**支持字段**：`pe / pb / roe / market_cap / dividend_yield / revenue_yoy / profit_yoy / gross_margin / debt_ratio / industry / market / risk_flag / close / turnover / ma5 / ma20 / volume_ratio_20 / breakout_20 / ma5_above_ma20 / pct_change_20`
 
 **操作符**：`gt | gte | lt | lte | eq | between | in`
 - `between` → value 传 `[低, 高]`
 - `in` → value 传字符串数组（仅 `industry / market`）
+- `risk_flag` → 查询时基于股票名称派生，`0` 表示普通名称，`1` 表示 ST / 退市风险名称。
 
 **响应** `200`
 ```json

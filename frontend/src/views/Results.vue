@@ -184,15 +184,18 @@ const sortDesc = ref(route.query.order === 'asc'
   : (route.query.order === 'desc' ? true : (filterMode.value === 'agent' && agentContext.value?.sort_desc !== false)))
 const conditionSets = {
   balanced: [
+    { field: 'risk_flag', op: 'eq', value: 0 },
     { field: 'pe', op: 'gt', value: 0 },
     { field: 'pe', op: 'lte', value: 500 },
   ],
   value: [
+    { field: 'risk_flag', op: 'eq', value: 0 },
     { field: 'pe', op: 'gt', value: 0 },
     { field: 'pe', op: 'lte', value: 80 },
     { field: 'roe', op: 'gt', value: 5 },
   ],
   sized: [
+    { field: 'risk_flag', op: 'eq', value: 0 },
     { field: 'pe', op: 'gt', value: 0 },
     { field: 'pe', op: 'lte', value: 500 },
     { field: 'market_cap', op: 'gt', value: 100 },
@@ -211,6 +214,7 @@ const fieldLabels = {
   profit_yoy: '净利润同比',
   revenue_yoy: '营收同比',
   industry: '行业',
+  risk_flag: '风险标记',
 }
 const opLabels = {
   lt: '<',
@@ -240,15 +244,18 @@ const filterGroups = computed(() => {
   const map = {
     balanced: [
       { cat: '数据范围', items: [{ l: '股票池', v: '全市场' }, { l: '数据日期', v: '最近交易日' }] },
+      { cat: '选股范围', items: [{ l: '风险股', v: '排除 ST / 退市' }] },
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '> 0 且 ≤ 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '不限制' }] },
     ],
     value: [
+      { cat: '选股范围', items: [{ l: '风险股', v: '排除 ST / 退市' }] },
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '> 0 且 ≤ 80' }] },
       { cat: '盈利', items: [{ l: 'ROE', v: '> 5%' }] },
       { cat: '规模', items: [{ l: '总市值', v: '不限制' }] },
     ],
     sized: [
+      { cat: '选股范围', items: [{ l: '风险股', v: '排除 ST / 退市' }] },
       { cat: '估值', items: [{ l: 'PE(TTM)', v: '> 0 且 ≤ 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '> 100 亿' }] },
     ],
@@ -352,9 +359,9 @@ const resultSubtitle = computed(() => {
     return agentContext.value?.query || '本轮智能筛选'
   }
   const map = {
-    balanced: '正 PE ≤ 500 的全市场筛选',
-    value: '正 PE ≤ 80 且 ROE > 5%',
-    sized: '总市值 > 100 亿，按市值排序',
+    balanced: '排除 ST/退市，正 PE ≤ 500',
+    value: '排除 ST/退市，正 PE ≤ 80 且 ROE > 5%',
+    sized: '排除 ST/退市，总市值 > 100 亿',
     all: '用户明确要求查看全部股票',
   }
   return map[filterMode.value] || '等待筛选条件'
@@ -427,6 +434,8 @@ function conditionMatches(row, condition) {
 
 function conditionReason(row, condition) {
   if (!conditionMatches(row, condition)) return null
+  if (condition.field === 'risk_flag') return null
+  if (condition.field === 'pe' && condition.op === 'gt' && Number(condition.value) === 0) return null
   const value = rowValue(row, condition.field)
   const label = shortMetricLabel(condition.field)
   const formatted = formatReasonValue(condition.field, value)

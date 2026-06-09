@@ -128,6 +128,7 @@ def _openai_call_tool(user_query: str) -> dict | None:
             "你是一个 A 股量化筛选助手。把用户的自然语言筛选需求转成 screen_stocks 工具调用。"
             "翻译规则：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长股=revenue_yoy>20且profit_yoy>20；"
             "白马股=roe>15且market_cap>500；小盘股=market_cap<100，中盘=100~500，大盘>500。"
+            "排除ST/退市/风险警示=risk_flag eq 0；只看ST/退市=risk_flag eq 1。"
             "industry 用中文短词（银行/白酒/半导体/光伏/医药/新能源车）。"
         )
         resp = client.chat.completions.create(

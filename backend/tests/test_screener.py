@@ -30,6 +30,31 @@ def test_low_pe_filter_excludes_negative_pe_loss_makers(db, seed_stocks):
     assert "999998.SH" not in codes
 
 
+def test_risk_flag_filters_st_and_delisted_names(db, seed_stocks):
+    """risk_flag 基于本地股票名称派生：0 为普通股票，1 为 ST / 退市风险名称。"""
+    from datetime import date
+
+    from app.models.stock import StockBasic, StockDaily
+
+    db.add(StockBasic(code="999997.SH", name="*ST样本", industry="测试"))
+    db.add(StockDaily(code="999997.SH", trade_date=date.today(), close=8, pe=12.0, pb=1.1))
+    db.add(StockBasic(code="999996.SH", name="退市样本", industry="测试"))
+    db.add(StockDaily(code="999996.SH", trade_date=date.today(), close=5, pe=8.0, pb=0.8))
+    db.commit()
+
+    normal = _screen(db, conditions=[FilterCondition(field="risk_flag", op="eq", value=0)])
+    risky = _screen(db, conditions=[FilterCondition(field="risk_flag", op="eq", value=1)])
+
+    normal_codes = {item.code for item in normal.items}
+    risky_codes = {item.code for item in risky.items}
+
+    assert "600036.SH" in normal_codes
+    assert "999997.SH" not in normal_codes
+    assert "999996.SH" not in normal_codes
+    assert risky_codes == {"999997.SH", "999996.SH"}
+    assert {item.risk_flag for item in risky.items} == {1.0}
+
+
 def test_roe_filter(db, seed_stocks):
     """ROE > 20% 应命中茅台(28)、美的(22)、古井(24) 共 3 只。"""
     res = _screen(db, conditions=[FilterCondition(field="roe", op="gt", value=20)])

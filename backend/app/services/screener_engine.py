@@ -16,6 +16,10 @@ from app.schemas.screener import (
 )
 
 
+RISK_NAME_CLAUSE = or_(StockBasic.name.like("%ST%"), StockBasic.name.like("%退市%"))
+RISK_FLAG_EXPR = case((RISK_NAME_CLAUSE, 1.0), else_=0.0)
+
+
 # 字段 → ORM 列映射。前端/千问只能引用这里列出的字段。
 FIELD_MAP = {
     "pe": StockDaily.pe,
@@ -31,6 +35,7 @@ FIELD_MAP = {
     "debt_ratio": StockFinancial.debt_ratio,
     "industry": StockBasic.industry,
     "market": StockBasic.market,
+    "risk_flag": RISK_FLAG_EXPR,
 }
 TECHNICAL_FIELDS = {
     "ma5",
@@ -42,6 +47,10 @@ TECHNICAL_FIELDS = {
 }
 SORT_FIELDS = {*FIELD_MAP, *TECHNICAL_FIELDS, "change_pct", "score"}
 STRING_FIELDS = {"industry", "market"}
+
+
+def _risk_flag_for_name(name: str | None) -> float:
+    return 1.0 if name and ("ST" in name or "退市" in name) else 0.0
 
 
 def validate_screen_request(req: ScreenRequest) -> None:
@@ -572,6 +581,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             profit_yoy=fin.profit_yoy if fin else None,
             gross_margin=fin.gross_margin if fin else None,
             debt_ratio=fin.debt_ratio if fin else None,
+            risk_flag=_risk_flag_for_name(basic.name),
             ma5=technical_values_map.get("ma5"),
             ma20=technical_values_map.get("ma20"),
             volume_ratio_20=technical_values_map.get("volume_ratio_20"),

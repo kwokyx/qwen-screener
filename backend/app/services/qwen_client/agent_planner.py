@@ -725,14 +725,14 @@ def _build_messages(query: str, context: dict[str, Any] | None) -> list[dict]:
         "解释上一轮→explain_result；排序上一轮→sort_results；换一批/下一页→paginate_results；个股详情→stock_detail；模糊或上下文不足→ask_clarification。\n"
         "全部股票/全市场/不设条件才允许 stock_screen conditions=[]。"
         "ask_clarification.missing_info 仅可用：行业、风格偏好、估值范围、持有周期、风险承受。\n"
-        "支持字段仅限 pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover、ma5、ma20、volume_ratio_20、breakout_20、ma5_above_ma20、pct_change_20。"
+        "支持字段仅限 pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、risk_flag、close、turnover、ma5、ma20、volume_ratio_20、breakout_20、ma5_above_ma20、pct_change_20。"
         "market 仅用于主板/创业板/科创板/北交所；A股/全A是默认股票池，不要生成 market=A股。\n"
         "不支持三年CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；"
         "遇到不支持字段必须 ask_clarification，不要改写成别的指标继续筛选。\n"
         "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；"
         "成长=仅在用户未给出明确同比阈值时用 revenue_yoy>20 且 profit_yoy>20；净利润同比正增长=profit_yoy>0，不能额外添加 revenue_yoy；白马=roe>15且market_cap>500；"
         "小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500。"
-        "20日新高/突破=breakout_20 eq 1；放量=volume_ratio_20>1.5；均线多头/MA5高于MA20=ma5_above_ma20 eq 1；近20日涨幅=pct_change_20。"
+        "20日新高/突破=breakout_20 eq 1；放量=volume_ratio_20>1.5；均线多头/MA5高于MA20=ma5_above_ma20 eq 1；近20日涨幅=pct_change_20；排除ST/退市/风险警示=risk_flag eq 0；只看ST/退市=risk_flag eq 1。"
         "industry用中文短词。"
     )
 
@@ -841,14 +841,14 @@ def _build_react_messages(
         "不要私有思考链。\n"
         "普通寒暄、能力说明、使用方式询问或非选股开放对话，直接给 final 普通回答，不要调用 ask_clarification。"
         "只有用户想筛股票但缺少必要条件时，才使用 ask_clarification。\n"
-        "支持字段：pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、close、turnover、ma5、ma20、volume_ratio_20、breakout_20、ma5_above_ma20、pct_change_20。\n"
+        "支持字段：pe、pb、roe、market_cap、dividend_yield、revenue_yoy、profit_yoy、gross_margin、debt_ratio、industry、market、risk_flag、close、turnover、ma5、ma20、volume_ratio_20、breakout_20、ma5_above_ma20、pct_change_20。\n"
         "market 仅用于主板/创业板/科创板/北交所；A股/全A是默认股票池，不要生成 market=A股。\n"
         "不支持：三年净利润CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价；必须 ask_clarification 或 final 说明，不能近似改写后筛选。\n"
         "stock_detail 只定位详情。explain_result/sort_results/paginate_results 必须有上一轮结果，否则 ask_clarification。"
         "strategy_design 默认不执行；确认执行只有上一轮有条件才可筛选。"
         "内置策略请求必须用 strategy_select，不要追问行业/估值：最近强势/强势突破/突破股票→turtle_breakout或rps_breakout；均线放量/放量上攻→ma_volume；涨停后承接/涨停回踩→limit_up_shakeout；高位旗形/高紧旗形→high_tight_flag。\n"
         "已有 observation 时优先 final，禁止重复相同工具参数。\n"
-        "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=仅在用户未给出明确同比阈值时用 revenue_yoy>20 且 profit_yoy>20；净利润同比正增长=profit_yoy>0，不能额外添加 revenue_yoy；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500；20日新高/突破=breakout_20 eq 1；放量=volume_ratio_20>1.5；均线多头/MA5高于MA20=ma5_above_ma20 eq 1；近20日涨幅=pct_change_20。"
+        "翻译：低估值=pe<15且pb<2；高分红=dividend_yield>3；成长=仅在用户未给出明确同比阈值时用 revenue_yoy>20 且 profit_yoy>20；净利润同比正增长=profit_yoy>0，不能额外添加 revenue_yoy；白马=roe>15且market_cap>500；小盘=market_cap<100；中盘=market_cap between [100,500]；大盘=market_cap>500；20日新高/突破=breakout_20 eq 1；放量=volume_ratio_20>1.5；均线多头/MA5高于MA20=ma5_above_ma20 eq 1；近20日涨幅=pct_change_20；排除ST/退市/风险警示=risk_flag eq 0；只看ST/退市=risk_flag eq 1。"
     )
     messages: list[dict] = [{"role": "system", "content": system}]
     compact_context = _compact_context(context)

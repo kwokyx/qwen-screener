@@ -13,6 +13,7 @@ ALLOWED_FIELDS = {
     "pe", "pb", "roe", "market_cap", "dividend_yield",
     "revenue_yoy", "profit_yoy", "gross_margin", "debt_ratio",
     "industry", "market", "close", "turnover",
+    "risk_flag",
     "ma5", "ma20", "volume_ratio_20", "breakout_20",
     "ma5_above_ma20", "pct_change_20",
 }
@@ -55,6 +56,7 @@ class ScreenResultItem(StockBasicOut):
     profit_yoy: float | None = None
     gross_margin: float | None = None
     debt_ratio: float | None = None
+    risk_flag: float | None = None
     ma5: float | None = None
     ma20: float | None = None
     volume_ratio_20: float | None = None

@@ -60,6 +60,7 @@ const fieldLabel = {
   debt_ratio: '资产负债率',
   industry: '行业',
   market: '板块',
+  risk_flag: '风险标记',
   close: '现价',
   turnover: '换手率',
   ma5: 'MA5',

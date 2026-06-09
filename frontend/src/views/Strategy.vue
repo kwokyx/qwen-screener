@@ -342,6 +342,7 @@ function mapScreenRows(items, labels) {
       市值: item.market_cap,
       股息率: item.dividend_yield,
       换手率: item.turnover,
+      风险: item.risk_flag,
       MA5: item.ma5,
       MA20: item.ma20,
       '20日放量': item.volume_ratio_20,
@@ -450,6 +451,7 @@ function formatMetric(key, value) {
   if (key === '市值') return `${number.toFixed(0)}亿`
   if (key === '股息率' || key === 'ROE' || key === '换手率' || key === '20日涨幅') return `${number.toFixed(2)}%`
   if (key === '20日放量') return `${number.toFixed(2)}x`
+  if (key === '风险') return number === 0 ? '普通' : 'ST/退市'
   return number.toFixed(2)
 }
 
