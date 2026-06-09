@@ -1,5 +1,5 @@
 <script setup>
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
@@ -19,8 +19,8 @@ import PctChip from '../components/charts/PctChip.vue'
 import StarButton from '../components/StarButton.vue'
 import AlertRuleEditor from '../components/AlertRuleEditor.vue'
 import { Preview } from '../shared/theme.js'
+import { fetchWatchSnapshots } from '../shared/stockSnapshot.js'
 import { useWatchlistStore } from '../stores/watchlist'
-import { detail as fetchDetail } from '../api/stock.js'
 import { toast } from '../stores/toast'
 
 const router = useRouter()
@@ -29,7 +29,8 @@ const wl = useWatchlistStore()
 
 const loading = ref(false)
 const errorMsg = ref('')
-const details = ref({})
+const snapshots = ref({})
+let loadSeq = 0
 const watchPagination = {
   pageSize: 10,
   showSizePicker: true,
@@ -42,46 +43,44 @@ const alertPagination = {
 }
 
 async function loadAll() {
-  if (!wl.items.length) {
-    details.value = {}
+  const seq = ++loadSeq
+  const currentItems = [...wl.items]
+  if (!currentItems.length) {
+    snapshots.value = {}
     return
   }
   loading.value = true
   errorMsg.value = ''
   try {
-    const results = await Promise.allSettled(wl.items.map(w => fetchDetail(w.code)))
-    const map = {}
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') map[wl.items[i].code] = r.value
-    })
-    details.value = map
+    const nextSnapshots = await fetchWatchSnapshots(currentItems)
+    if (seq === loadSeq) snapshots.value = nextSnapshots
   } catch (e) {
+    if (seq !== loadSeq) return
     errorMsg.value = e?.message || '加载失败'
     toast.error(`自选数据加载失败：${errorMsg.value}`)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
-onMounted(loadAll)
-watch(() => wl.items.length, loadAll)
+watch(() => wl.items.map((item) => item.code).join('|'), loadAll, { immediate: true })
 
 const rows = computed(() => wl.items.map((w) => {
-  const d = details.value[w.code] || {}
-  const latest = d.latest || {}
-  const close = latest.close
+  const snapshot = snapshots.value[w.code] || {}
+  const detail = snapshot.detail || {}
+  const close = snapshot.close
   const refPrice = w.refPrice
   const sinceCost = (close != null && refPrice) ? (close - refPrice) / refPrice * 100 : null
   return {
     code: w.code,
-    name: w.name || d.name || w.code,
-    industry: d.industry || w.sector || null,
+    name: snapshot.name || w.name || w.code,
+    industry: snapshot.industry || w.sector || null,
     close,
-    changePct: d.change_pct,
-    pe: latest.pe,
-    pb: latest.pb,
-    marketCap: latest.market_cap,
-    roe: d.roe,
+    changePct: snapshot.change_pct,
+    pe: snapshot.pe,
+    pb: snapshot.pb,
+    marketCap: snapshot.market_cap,
+    roe: detail.roe,
     refPrice,
     sinceCost,
     addedAt: w.addedAt,
@@ -163,7 +162,7 @@ const watchColumns = computed(() => [
   {
     title: '名称 / 代码',
     key: 'name',
-    minWidth: 180,
+    width: 144,
     render(row) {
       return h('div', { class: 'stock-cell' }, [
         h('div', { onClick: e => e.stopPropagation() }, [
@@ -183,23 +182,28 @@ const watchColumns = computed(() => [
     title: '现价',
     key: 'close',
     align: 'right',
+    width: 76,
     sorter: (a, b) => (a.close ?? -Infinity) - (b.close ?? -Infinity),
-    render: row => mono(fmtNum(row.close), { color: row.changePct == null ? Preview.textMain : (row.changePct >= 0 ? Preview.positive : Preview.negative), fontWeight: 700 }),
+    render: row => mono(fmtNum(row.close), {
+      color: row.changePct == null ? Preview.textMain : (row.changePct >= 0 ? Preview.positive : Preview.negative),
+      fontWeight: 700,
+    }),
   },
   {
     title: '今日',
     key: 'changePct',
     align: 'right',
+    width: 70,
     sorter: (a, b) => (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity),
     render: row => pctNode(row.changePct),
   },
-  { title: 'PE', key: 'pe', align: 'right', render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
-  { title: 'PB', key: 'pb', align: 'right', render: row => mono(row.pb == null ? '—' : row.pb.toFixed(2), { color: Preview.textMuted }) },
-  { title: 'ROE', key: 'roe', align: 'right', render: row => mono(fmtROE(row.roe), { color: Preview.textMuted }) },
+  { title: 'PE', key: 'pe', align: 'right', width: 56, render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
+  { title: 'PB', key: 'pb', align: 'right', width: 56, render: row => mono(row.pb == null ? '—' : row.pb.toFixed(2), { color: Preview.textMuted }) },
+  { title: 'ROE', key: 'roe', align: 'right', width: 64, render: row => mono(fmtROE(row.roe), { color: Preview.textMuted }) },
   {
     title: '行业',
     key: 'industry',
-    minWidth: 100,
+    width: 76,
     render: row => row.industry
       ? h(NTag, { size: 'small', bordered: false, round: true }, { default: () => row.industry })
       : mono('—', { color: Preview.textFaint }),
@@ -208,7 +212,7 @@ const watchColumns = computed(() => [
     title: '加入价 / 至今',
     key: 'sinceCost',
     align: 'right',
-    minWidth: 125,
+    width: 96,
     render(row) {
       return h('div', { class: 'cost-cell' }, [
         mono(row.refPrice == null ? '—' : row.refPrice.toFixed(2), { color: Preview.textMuted }),
@@ -216,15 +220,16 @@ const watchColumns = computed(() => [
       ])
     },
   },
-  { title: '加入日期', key: 'addedAt', align: 'right', render: row => mono(fmtDate(row.addedAt), { color: Preview.textMuted }) },
+  { title: '加入日期', key: 'addedAt', align: 'right', width: 104, render: row => mono(fmtDate(row.addedAt), { color: Preview.textMuted }) },
   {
     title: '预警',
     key: 'alerts',
     align: 'right',
-    minWidth: 105,
+    width: 52,
+    fixed: 'right',
     render(row) {
       return h('div', { onClick: e => e.stopPropagation() }, [
-        h(AlertRuleEditor, { code: row.code }),
+        h(AlertRuleEditor, { code: row.code, compact: true }),
       ])
     },
   },
@@ -335,8 +340,10 @@ const rowProps = (row) => ({
             </template>
             <NDataTable
               v-if="rows.length"
+              class="watch-detail-table"
               :columns="watchColumns"
               :data="rows"
+              :scroll-x="794"
               :loading="loading"
               :row-props="rowProps"
               :bordered="false"
@@ -491,39 +498,57 @@ const rowProps = (row) => ({
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.stock-cell {
+.portfolio-page :deep(.stock-cell) {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-height: 42px;
 }
-.stock-name {
+.portfolio-page :deep(.stock-name) {
   font-size: 13px;
   font-weight: 700;
   color: #111111;
+  line-height: 1.3;
 }
-.stock-code {
+.portfolio-page :deep(.stock-code) {
   margin-top: 2px;
   font-size: 11px;
   color: #71717a;
 }
+.portfolio-page :deep(.mono),
 .mono {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.cost-cell {
+.portfolio-page :deep(.cost-cell) {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 3px;
 }
-.alert-status-control {
+.watch-detail-table :deep(.n-data-table-th) {
+  padding: 10px;
+  white-space: nowrap;
+}
+.watch-detail-table :deep(.n-data-table-td) {
+  padding: 11px 10px;
+  white-space: nowrap;
+}
+.watch-detail-table :deep(.n-data-table-tr) {
+  min-height: 52px;
+}
+.watch-detail-table :deep(.alert-trigger) {
+  min-width: 32px;
+}
+.portfolio-page :deep(.alert-status-control) {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: 7px;
   min-width: 86px;
 }
-.alert-enabled {
-  color: #16a35c;
+.portfolio-page :deep(.alert-enabled) {
+  color: #111111;
+  font-weight: 650;
 }
 .empty-panel {
   padding: 44px 0;

@@ -720,7 +720,7 @@ function peerRowProps(row) {
           </div>
         </div>
         <div class="stock-header-right">
-          <NSpace size="small">
+          <div class="detail-actions">
             <StarButton variant="button" :stock="{ code: detail.code, name: detail.name, sector: detail.industry, refPrice: displayQuote?.close || detail.latest?.close }" :size="12" />
             <AlertRuleEditor v-if="wl.has(detail.code)" :code="detail.code" />
             <NButton
@@ -734,7 +734,7 @@ function peerRowProps(row) {
               </template>
               {{ aiStreaming ? '停止' : (!aiStatus.isUp ? '千问离线' : (aiText ? '重新生成' : '千问解读')) }}
             </NButton>
-          </NSpace>
+          </div>
         </div>
       </div>
 
@@ -1022,6 +1022,40 @@ function peerRowProps(row) {
 
 .stock-header-right {
   flex-shrink: 0;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.detail-actions :deep(.btn-outline),
+.detail-actions :deep(.alert-trigger),
+.detail-actions :deep(.n-button) {
+  height: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.detail-actions :deep(.btn-outline),
+.detail-actions :deep(.alert-trigger) {
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.detail-actions :deep(.n-button) {
+  padding: 0 14px;
+}
+
+.detail-actions :deep(.alert-count-pill) {
+  margin-left: 2px;
 }
 
 /* ---- Skeleton ---- */

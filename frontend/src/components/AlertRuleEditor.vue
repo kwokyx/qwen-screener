@@ -15,15 +15,18 @@ import { useWatchlistStore } from '../stores/watchlist'
 import { useNotificationsStore } from '../stores/notifications'
 import { toast } from '../stores/toast'
 import { Preview } from '../shared/theme.js'
+import Icon from './Icon.vue'
 
 const props = defineProps({
   code: { type: String, required: true },
+  compact: { type: Boolean, default: false },
 })
 
 const wl = useWatchlistStore()
 const notif = useNotificationsStore()
 
 const item = computed(() => wl.get(props.code))
+const alertCount = computed(() => item.value?.alerts?.length || 0)
 const open = ref(false)
 const newRule = ref({ type: 'pct_up', threshold: 20 })
 
@@ -78,14 +81,25 @@ function fireTest() {
   <div v-if="item" class="alert-editor" @click.stop>
     <NPopover v-model:show="open" trigger="click" placement="bottom-end" :width="380" :show-arrow="false">
       <template #trigger>
-        <NButton size="small" secondary class="alert-trigger">
-          <NSpace align="center" :size="6">
+        <button
+          type="button"
+          class="alert-trigger"
+          :class="{ 'alert-trigger-compact': compact, 'has-alerts': alertCount, 'all-paused': alertCount && !item.alerts.some(a => a.enabled !== false) }"
+          :title="alertCount ? `已设 ${alertCount} 条预警` : '设置预警'"
+        >
+          <span v-if="compact" class="alert-icon-content">
+            <Icon name="bell" :size="14" :stroke="1.8" />
+            <span v-if="alertCount" class="alert-count-dot">
+              {{ alertCount > 9 ? '9+' : alertCount }}
+            </span>
+          </span>
+          <span v-else class="alert-trigger-content">
             <span>预警</span>
-            <NTag v-if="item.alerts.length" size="small" :bordered="false" type="success" class="alert-count">
-              {{ item.alerts.length }}
-            </NTag>
-          </NSpace>
-        </NButton>
+            <span v-if="alertCount" class="alert-count-pill">
+              {{ alertCount }}
+            </span>
+          </span>
+        </button>
       </template>
 
       <div class="alert-pop">
@@ -149,11 +163,99 @@ function fireTest() {
   display: inline-block;
 }
 .alert-trigger {
+  appearance: none;
+  border: 0;
   border-radius: 6px;
+  height: 28px;
+  min-width: 58px;
+  padding: 0 8px;
+  background: #f1f1f1;
+  color: #3f3f46;
   font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
-.alert-count {
-  border-radius: 4px;
+.alert-trigger:hover {
+  background: #e7e7e7;
+  color: #111111;
+}
+.alert-trigger:active {
+  transform: translateY(1px);
+}
+.alert-trigger-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  white-space: nowrap;
+  line-height: 1;
+}
+.alert-trigger-compact {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 7px;
+}
+.alert-trigger-compact.has-alerts {
+  color: #111111;
+  background: #eeeeee;
+}
+.alert-trigger-compact.all-paused {
+  color: #a1a1aa;
+  background: #f3f3f3;
+}
+.alert-icon-content {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+}
+.alert-count-dot {
+  position: absolute;
+  right: -8px;
+  top: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #111111;
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 15px;
+  box-shadow: 0 0 0 2px #eeeeee;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.alert-trigger-compact.all-paused .alert-count-dot {
+  background: #a1a1aa;
+  box-shadow: 0 0 0 2px #f3f3f3;
+}
+.alert-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #111111;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 15px;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.alert-trigger.all-paused .alert-count-pill {
+  background: #a1a1aa;
 }
 .alert-pop {
   padding: 4px;
