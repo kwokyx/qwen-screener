@@ -214,25 +214,8 @@ function moverRowProps(row) {
   }
 }
 
-function sectorColumns(type) {
-  const positive = type === 'up'
-  return [
-    {
-      title: positive ? '上涨板块' : '下跌板块',
-      key: 'name',
-      render: (s) => h('button', {
-        class: 'sector-link',
-        onClick: () => goToScreener(`${s.name} 板块基本面好的股票`),
-      }, s.name),
-    },
-    {
-      title: '涨跌幅',
-      key: 'change_pct',
-      align: 'right',
-      width: 92,
-      render: (s) => h(PctText, { pct: s.change_pct, size: 12 }),
-    },
-  ]
+function sectorBarWidth(pct) {
+  return `${Math.min(100, Math.max(10, Math.abs(Number(pct || 0)) * 10))}%`
 }
 
 const sectorStrengthColumns = [
@@ -425,36 +408,57 @@ onMounted(loadAll)
                 <NButton size="tiny" secondary @click="loadAll">重试</NButton>
               </div>
             </NAlert>
-            <NGrid v-else :cols="2" :x-gap="10">
-              <NGi>
-                <NDataTable
-                  :columns="sectorColumns('up')"
-                  :data="sectorsUp.slice(0, 8)"
-                  :loading="loadingSectors"
-                  :pagination="false"
-                  :bordered="false"
-                  size="small"
-                >
-                  <template #empty>
-                    <NEmpty size="small" description="无上涨板块" />
-                  </template>
-                </NDataTable>
-              </NGi>
-              <NGi>
-                <NDataTable
-                  :columns="sectorColumns('down')"
-                  :data="sectorsDown.slice(0, 8)"
-                  :loading="loadingSectors"
-                  :pagination="false"
-                  :bordered="false"
-                  size="small"
-                >
-                  <template #empty>
-                    <NEmpty size="small" description="无下跌板块" />
-                  </template>
-                </NDataTable>
-              </NGi>
-            </NGrid>
+            <div v-else class="sector-rank-grid">
+              <section class="sector-rank-group">
+                <div class="sector-rank-title">
+                  <span>强势板块</span>
+                  <NTag size="tiny" :bordered="false" type="success">{{ sectorsUp.length }}</NTag>
+                </div>
+                <div v-if="sectorsUp.length" class="sector-rank-list">
+                  <button
+                    v-for="(s, n) in sectorsUp.slice(0, 6)"
+                    :key="'sector-up-' + s.name"
+                    class="sector-rank-row is-up"
+                    @click="goToScreener(`${s.name} 板块基本面好的股票`)"
+                  >
+                    <span class="sector-rank-num">{{ n + 1 }}</span>
+                    <span class="sector-rank-main">
+                      <span class="sector-rank-name">{{ s.name }}</span>
+                      <span class="sector-rank-track">
+                        <span class="sector-rank-bar" :style="{ width: sectorBarWidth(s.change_pct) }"></span>
+                      </span>
+                    </span>
+                    <PctText :pct="s.change_pct" :size="12" />
+                  </button>
+                </div>
+                <NEmpty v-else size="small" description="无上涨板块" />
+              </section>
+
+              <section class="sector-rank-group">
+                <div class="sector-rank-title">
+                  <span>弱势板块</span>
+                  <NTag size="tiny" :bordered="false" type="error">{{ sectorsDown.length }}</NTag>
+                </div>
+                <div v-if="sectorsDown.length" class="sector-rank-list">
+                  <button
+                    v-for="(s, n) in sectorsDown.slice(0, 6)"
+                    :key="'sector-down-' + s.name"
+                    class="sector-rank-row is-down"
+                    @click="goToScreener(`${s.name} 板块基本面好的股票`)"
+                  >
+                    <span class="sector-rank-num">{{ n + 1 }}</span>
+                    <span class="sector-rank-main">
+                      <span class="sector-rank-name">{{ s.name }}</span>
+                      <span class="sector-rank-track">
+                        <span class="sector-rank-bar" :style="{ width: sectorBarWidth(s.change_pct) }"></span>
+                      </span>
+                    </span>
+                    <PctText :pct="s.change_pct" :size="12" />
+                  </button>
+                </div>
+                <NEmpty v-else size="small" description="无下跌板块" />
+              </section>
+            </div>
           </NCard>
         </NGi>
 
@@ -508,7 +512,7 @@ onMounted(loadAll)
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   gap: 20px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .indices-grid {
@@ -590,6 +594,7 @@ onMounted(loadAll)
 .down { color: #16A35C; }
 
 .market-card {
+  align-self: start;
   min-height: 118px;
 }
 
@@ -827,24 +832,100 @@ onMounted(loadAll)
   cursor: pointer;
 }
 
-:deep(.sector-link) {
-  width: 100%;
-  display: block;
-  overflow: hidden;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #111111;
-  font: inherit;
-  font-weight: 700;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
+.sector-rank-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
-:deep(.sector-link:hover) {
-  text-decoration: underline;
+.sector-rank-group {
+  min-width: 0;
+}
+
+.sector-rank-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  margin-bottom: 8px;
+  color: #3F3F46;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sector-rank-list {
+  display: grid;
+  gap: 6px;
+}
+
+.sector-rank-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: #FFFFFF;
+  color: #111111;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.sector-rank-row:hover {
+  border-color: #DADADA;
+  background: #FAFAFA;
+}
+
+.sector-rank-num {
+  color: #A1A1AA;
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.sector-rank-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sector-rank-name {
+  overflow: hidden;
+  color: #111111;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-rank-track {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ECECEC;
+}
+
+.sector-rank-bar {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+}
+
+.sector-rank-row.is-up .sector-rank-bar {
+  background: #E04F76;
+}
+
+.sector-rank-row.is-down .sector-rank-bar {
+  background: #16A35C;
 }
 
 .strength-track {
@@ -940,6 +1021,10 @@ onMounted(loadAll)
 @media (max-width: 720px) {
   .indices-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sector-rank-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .market-stats {
