@@ -468,6 +468,7 @@ onMounted(loadAll)
   display: flex;
   flex-direction: column;
   gap: 20px;
+  --dashboard-list-height: 624px;
 }
 
 .market-overview-grid {
@@ -825,7 +826,7 @@ onMounted(loadAll)
 }
 
 .sector-rank-scroll {
-  max-height: 634px;
+  max-height: var(--dashboard-list-height);
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
