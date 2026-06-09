@@ -7,29 +7,15 @@ import { useRouter, useRoute } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { A2 } from '../shared/theme.js'
 import Icon from './Icon.vue'
-import * as stockApi from '../api/stock'
 
 const wl = useWatchlistStore()
 const router = useRouter()
 const route = useRoute()
 
 const open = ref(false)
-const quotes = ref({})
-
-async function refreshQuotes() {
-  const codes = wl.items.map((w) => w.code)
-  if (!codes.length) return
-  for (const code of codes) {
-    try {
-      const q = await stockApi.quote(code)
-      if (q) quotes.value[code] = q
-    } catch { /* ignore */ }
-  }
-}
 
 function toggle() {
   open.value = !open.value
-  if (open.value) refreshQuotes()
 }
 
 function close() {
@@ -97,7 +83,7 @@ const items = computed(() => wl.items)
             </div>
             <div :style="{ textAlign: 'right', flexShrink: 0 }">
               <div :style="{ fontSize: '12px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: A2.text }">
-                {{ quotes[w.code]?.close?.toFixed(2) || w.refPrice?.toFixed(2) || '—' }}
+                {{ w.refPrice != null ? w.refPrice.toFixed(2) : '—' }}
               </div>
               <div v-if="w.alerts && w.alerts.length"
                    :style="{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '9.5px', color: A2.qwen, fontFamily: 'IBM Plex Mono, monospace', marginTop: '1px' }">
