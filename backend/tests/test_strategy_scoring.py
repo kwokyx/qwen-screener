@@ -187,6 +187,44 @@ def test_strategy_cache_reuses_full_result_across_limits(db, monkeypatch):
     assert [item.code for item in second.items] == ["000001.SZ", "000002.SZ", "000003.SZ"]
 
 
+def test_strategy_selection_pushes_feishu_for_each_call_including_cache(db, monkeypatch):
+    from app.models.stock import StockBasic, StockDaily
+
+    strategy_selector.clear_strategy_cache()
+    db.add(StockBasic(code="000001.SZ", name="测试股票", industry="银行"))
+    db.add(StockDaily(code="000001.SZ", trade_date=date(2026, 6, 4), close=10, high=10, low=9, amount=2e8))
+    db.commit()
+    load_calls = 0
+    pushes = []
+
+    def fake_load(_db, days):
+        nonlocal load_calls
+        load_calls += 1
+        return _make_df([])
+
+    monkeypatch.setattr(strategy_selector, "_load_histories", fake_load)
+    monkeypatch.setattr(strategy_selector, "_start_daemon_thread", lambda target, *args: target(*args))
+    monkeypatch.setattr(strategy_selector.feishu, "push_strategy_result", lambda name, items: pushes.append((name, items)))
+    monkeypatch.setattr(
+        STRATEGY_REGISTRY["turtle_breakout"],
+        "run",
+        lambda _df: [
+            strategy_selector.StrategyPickItem(code="000001.SZ", name="A", trade_date=date(2026, 6, 4), close=10, score=90, signals=["a"], metrics={}),
+            strategy_selector.StrategyPickItem(code="000002.SZ", name="B", trade_date=date(2026, 6, 4), close=10, score=80, signals=["b"], metrics={}),
+        ],
+    )
+
+    first = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=1)
+    second = strategy_selector.run_strategy_selection(db, "turtle_breakout", limit=2)
+
+    assert load_calls == 1
+    assert [item.code for item in first.items] == ["000001.SZ"]
+    assert [item.code for item in second.items] == ["000001.SZ", "000002.SZ"]
+    assert len(pushes) == 2
+    assert [item["code"] for item in pushes[0][1]] == ["000001.SZ"]
+    assert [item["code"] for item in pushes[1][1]] == ["000001.SZ", "000002.SZ"]
+
+
 def test_strategy_singleflight_failure_releases_inflight_and_allows_retry(db, monkeypatch):
     from app.models.stock import StockBasic, StockDaily
 

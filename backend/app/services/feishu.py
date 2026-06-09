@@ -24,10 +24,9 @@ class FeishuNotifier:
     _app_token_lock = threading.Lock()
 
     def push_strategy_result(self, strategy_name: str, items: list[dict]) -> None:
-        if not items:
-            return
-
         is_alert = strategy_name.startswith("价格预警")
+        if is_alert and not items:
+            return
         if is_alert:
             self._push_alert_card(strategy_name, items)
         elif settings.feishu_webhook_url:

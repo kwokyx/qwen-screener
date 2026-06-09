@@ -175,7 +175,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         with _RESULT_CACHE_LOCK:
             cached = _RESULT_CACHE.get(cache_key)
             if cached and time.monotonic() < cached[0]:
-                return _slice_strategy_response(cached[1], limit)
+                return _notify_and_slice_strategy_response(strategy_id, cached[1], limit)
             inflight = _RESULT_INFLIGHT.get(cache_key)
             if inflight is None:
                 inflight = _StrategyInflight(event=threading.Event())
@@ -191,7 +191,7 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
         if inflight.error is not None:
             raise inflight.error
         if inflight.response is not None:
-            return _slice_strategy_response(inflight.response, limit)
+            return _notify_and_slice_strategy_response(strategy_id, inflight.response, limit)
 
     try:
         history_days = _STRATEGY_HISTORY_OPTIONS[strategy_id]
@@ -216,24 +216,31 @@ def run_strategy_selection(db: Session, strategy_id: str, limit: int = 50) -> St
             _RESULT_INFLIGHT.pop(cache_key, None)
         inflight.event.set()
 
-    if response.items:
-        strategy_name = TEMPLATE_MAP[strategy_id].name
-        items_data = [
-            {
-                "code": item.code,
-                "name": item.name,
-                "close": item.close,
-                "change_pct": item.change_pct,
-            }
-            for item in response.items
-        ]
-        threading.Thread(
-            target=feishu.push_strategy_result,
-            args=(strategy_name, items_data),
-            daemon=True,
-        ).start()
+    return _notify_and_slice_strategy_response(strategy_id, response, limit)
 
-    return _slice_strategy_response(response, limit)
+
+def _start_daemon_thread(target, *args) -> None:
+    threading.Thread(target=target, args=args, daemon=True).start()
+
+
+def _notify_and_slice_strategy_response(
+    strategy_id: str,
+    response: StrategySelectResponse,
+    limit: int,
+) -> StrategySelectResponse:
+    sliced = _slice_strategy_response(response, limit)
+    strategy_name = TEMPLATE_MAP[strategy_id].name
+    items_data = [
+        {
+            "code": item.code,
+            "name": item.name,
+            "close": item.close,
+            "change_pct": item.change_pct,
+        }
+        for item in sliced.items
+    ]
+    _start_daemon_thread(feishu.push_strategy_result, strategy_name, items_data)
+    return sliced
 
 
 def clear_strategy_cache() -> None:
