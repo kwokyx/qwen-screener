@@ -16,12 +16,18 @@ import {
   NTag,
 } from 'naive-ui'
 import Shell from '../components/Shell.vue'
+import StarButton from '../components/StarButton.vue'
 import { screen as screenStocks } from '../api/screener'
 import { getStrategyTemplates, getStrategyTools, selectStrategy } from '../api/strategy'
 import { industries as fetchIndustries } from '../api/market'
+import { useAuthStore } from '../stores/auth'
+import { toast } from '../stores/toast'
+import { useWatchlistStore } from '../stores/watchlist'
 
 const router = useRouter()
 const route = useRoute()
+const auth = useAuthStore()
+const wl = useWatchlistStore()
 
 const templates = ref([])
 const tools = ref([])
@@ -59,6 +65,12 @@ const rows = computed(() => {
   }
   return result.value?.items || []
 })
+const resultWatchCandidates = computed(() => rows.value.filter((item) => item?.code && !wl.has(item.code)))
+const batchWatchLabel = computed(() => (
+  resultWatchCandidates.value.length
+    ? `结果加入自选 ${resultWatchCandidates.value.length}`
+    : '结果已加入'
+))
 const displayTotal = computed(() => structuredResult.value?.total ?? result.value?.total ?? 0)
 const displayTradeDate = computed(() => structuredResult.value?.items?.[0]?.trade_date
   || structuredResult.value?.items?.[0]?.trade_date
@@ -343,6 +355,28 @@ function mapScreenRows(items, labels) {
   })
 }
 
+function addResultRowsToWatchlist() {
+  if (!auth.token) {
+    toast.info('登录后可以保存自选股')
+    router.push({ name: 'login', query: { redirect: route.fullPath } })
+    return
+  }
+  const candidates = resultWatchCandidates.value
+  if (!candidates.length) {
+    toast.info('当前结果已在自选中')
+    return
+  }
+  candidates.forEach((item) => {
+    wl.add({
+      code: item.code,
+      name: item.name,
+      sector: item.industry,
+      refPrice: item.close,
+    })
+  })
+  toast.success(`已加入自选 ${candidates.length} 只`)
+}
+
 const columns = [
   {
     title: '股票',
@@ -350,10 +384,16 @@ const columns = [
     width: 180,
     render(row) {
       return h('div', { class: 'stock-cell' }, [
-        h('button', {
-          class: 'stock-link',
-          onClick: () => gotoDetail(row.code),
-        }, row.name || row.code),
+        h('div', { class: 'stock-title-row' }, [
+          h(StarButton, {
+            stock: { code: row.code, name: row.name, sector: row.industry, refPrice: row.close },
+            size: 13,
+          }),
+          h('button', {
+            class: 'stock-link',
+            onClick: () => gotoDetail(row.code),
+          }, row.name || row.code),
+        ]),
         h('span', { class: 'stock-code' }, row.code),
       ])
     },
@@ -794,9 +834,20 @@ watch([
                 <span v-if="hasResult">{{ displayTotal }} 只命中</span>
                 <span v-else-if="tableLoading">请稍候，正在计算</span>
               </div>
-              <n-tag :bordered="false" size="small" :type="resultSourceType">
-                {{ resultSourceLabel }}
-              </n-tag>
+              <div class="table-head-actions">
+                <n-button
+                  v-if="hasResult && rows.length"
+                  size="small"
+                  secondary
+                  :disabled="tableLoading || !resultWatchCandidates.length"
+                  @click="addResultRowsToWatchlist"
+                >
+                  {{ batchWatchLabel }}
+                </n-button>
+                <n-tag :bordered="false" size="small" :type="resultSourceType">
+                  {{ resultSourceLabel }}
+                </n-tag>
+              </div>
             </div>
           </template>
 
@@ -1190,6 +1241,13 @@ h1 {
   gap: 12px;
 }
 
+.table-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .table-head span {
   margin-left: 10px;
   color: #71717A;
@@ -1202,13 +1260,24 @@ h1 {
   gap: 2px;
 }
 
+.stock-title-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .stock-link {
+  min-width: 0;
+  overflow: hidden;
   border: 0;
   background: transparent;
   padding: 0;
   color: #111111;
   font-weight: 700;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1354,6 +1423,16 @@ h1 {
   .workspace-bar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .table-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .table-head-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 </style>
