@@ -23,6 +23,9 @@ import { Preview } from '../shared/theme.js'
 import { screen } from '../api/screener'
 import * as chatApi from '../api/chat'
 import { useKlineCache } from '../composables/useKlineCache.js'
+import { useAuthStore } from '../stores/auth'
+import { toast } from '../stores/toast'
+import { useWatchlistStore } from '../stores/watchlist'
 import {
   formatCoverage,
   qualityForRecord,
@@ -32,6 +35,8 @@ import {
 
 const router = useRouter()
 const route = useRoute()
+const auth = useAuthStore()
+const wl = useWatchlistStore()
 const AGENT_RESULTS_KEY = 'qwen.results.agent.v1'
 const resultModes = new Set(['balanced', 'value', 'sized', 'all'])
 let suppressNextRouteSync = false
@@ -249,6 +254,30 @@ const tradeDate = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
 let loadRequestId = 0
+
+const pageWatchCandidates = computed(() => items.value.filter((s) => s?.code && !wl.has(s.code)))
+const batchWatchLabel = computed(() => (
+  pageWatchCandidates.value.length
+    ? `本页加入自选 ${pageWatchCandidates.value.length}`
+    : '本页已加入'
+))
+
+function addCurrentPageToWatchlist() {
+  if (!auth.token) {
+    toast.info('登录后可以保存自选股')
+    router.push({ name: 'login', query: { redirect: route.fullPath } })
+    return
+  }
+  const candidates = pageWatchCandidates.value
+  if (!candidates.length) {
+    toast.info('当前页股票已在自选中')
+    return
+  }
+  candidates.forEach((s) => {
+    wl.add({ code: s.code, name: s.name, sector: s.industry, refPrice: s.close })
+  })
+  toast.success(`已加入自选 ${candidates.length} 只`)
+}
 
 const hasRunnableFilter = computed(() => {
   if (filterMode.value === 'agent') {
@@ -808,6 +837,15 @@ watch(
         <NSpace size="small">
           <NButton text size="small" type="primary" @click="router.push('/chat')">
             自然语言筛选
+          </NButton>
+          <NButton
+            v-if="hasRunnableFilter && items.length"
+            size="small"
+            secondary
+            :disabled="loading || !pageWatchCandidates.length"
+            @click="addCurrentPageToWatchlist"
+          >
+            {{ batchWatchLabel }}
           </NButton>
           <NButton
             v-if="filterMode === 'agent'"
