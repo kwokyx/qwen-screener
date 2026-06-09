@@ -298,6 +298,10 @@ function retryTurn(turn) {
   send()
 }
 
+function clearChatRouteQuery() {
+  window.history.replaceState(window.history.state, '', '/chat')
+}
+
 function deleteHistory(id, ev) {
   ev?.stopPropagation()
   history.remove(id)
@@ -316,7 +320,7 @@ function fmtRelTime(ts) {
   return `${d.getMonth() + 1}-${d.getDate()}`
 }
 
-function consumeRouteIntent() {
+async function consumeRouteIntent() {
   const sessionId = route.query.session
   if (sessionId && typeof sessionId === 'string') {
     streamRestore(sessionId)
@@ -331,13 +335,17 @@ function consumeRouteIntent() {
   const q = route.query.q
   if (q && typeof q === 'string') {
     input.value = q
-    send()
-    // 用过即清，刷新不重发
-    router.replace({ path: '/chat' })
+    const run = route.query.run === '1' || route.query.run === 'true'
+    if (run) {
+      await send()
+    }
+    // 普通预填立即清 URL；自动执行等发送完成后再清，避免切页时丢掉流式状态。
+    clearChatRouteQuery()
   }
 }
 
-// 从其他页面跳转携带 ?q=xxx 时自动发送；导航点击 AI选股携带 ?fresh=... 时回到起始态。
+// 从其他页面跳转携带 ?q=xxx&run=1 时自动发送；普通 ?q=xxx 只预填。
+// 导航点击 AI选股携带 ?fresh=... 时回到起始态。
 onMounted(() => {
   window.addEventListener('qwen-chat-home', openChatHomeState)
   consumeRouteIntent()

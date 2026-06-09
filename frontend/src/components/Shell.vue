@@ -56,6 +56,7 @@ const userMenuOptions = computed(() => [
 
 function handleMenuSelect(key) {
   if (key === 'chat') {
+    if (route.name === 'chat' && (route.query.q || route.query.run || route.query.session)) return
     openChatHome()
     return
   }

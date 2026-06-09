@@ -25,7 +25,7 @@ import * as marketApi from '../api/market'
 const router = useRouter()
 
 function gotoDetail(code) { router.push(`/detail/${code}`) }
-function goToScreener(query) { router.push({ path: '/chat', query: { q: query } }) }
+function goToScreener(query) { router.push({ path: '/chat', query: { q: query, run: '1' } }) }
 
 const indices = ref([])
 const sectors = ref([])
