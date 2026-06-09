@@ -130,6 +130,9 @@ def _build_clause(cond: FilterCondition):
             return clauses[0]
         return or_(*clauses)
 
+    if cond.field == "pe" and op in {"lt", "lte", "between"}:
+        return and_(col > 0, _basic_clause(col, op, v))
+
     return _basic_clause(col, op, v)
 
 
@@ -403,11 +406,24 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     sort_fields = {**FIELD_MAP, "change_pct": change_pct, "score": quality_score}
     if req.sort_by:
         col = sort_fields[req.sort_by]
-        q = q.order_by(
-            col.is_(None).asc(),
-            desc(col) if req.sort_desc else col.asc(),
-            StockBasic.code.asc(),
-        )
+        if req.sort_by == "pe":
+            invalid_pe = case(
+                (col.is_(None), 1),
+                (col <= 0, 1),
+                else_=0,
+            )
+            q = q.order_by(
+                invalid_pe.asc(),
+                col.is_(None).asc(),
+                desc(col) if req.sort_desc else col.asc(),
+                StockBasic.code.asc(),
+            )
+        else:
+            q = q.order_by(
+                col.is_(None).asc(),
+                desc(col) if req.sort_desc else col.asc(),
+                StockBasic.code.asc(),
+            )
     else:
         q = q.order_by(StockBasic.code.asc())
 

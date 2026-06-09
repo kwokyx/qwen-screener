@@ -14,6 +14,22 @@ def test_pe_filter(db, seed_stocks):
     assert codes == {"600036.SH", "000333.SZ", "000596.SZ"}
 
 
+def test_low_pe_filter_excludes_negative_pe_loss_makers(db, seed_stocks):
+    """负 PE 表示亏损，不能被 PE<20 当作低估值股票命中。"""
+    from datetime import date
+
+    from app.models.stock import StockBasic, StockDaily
+
+    db.add(StockBasic(code="999998.SH", name="亏损样本", industry="测试"))
+    db.add(StockDaily(code="999998.SH", trade_date=date.today(), close=8, pe=-6.0, pb=1.1))
+    db.commit()
+
+    res = _screen(db, conditions=[FilterCondition(field="pe", op="lt", value=20)])
+    codes = {it.code for it in res.items}
+
+    assert "999998.SH" not in codes
+
+
 def test_roe_filter(db, seed_stocks):
     """ROE > 20% 应命中茅台(28)、美的(22)、古井(24) 共 3 只。"""
     res = _screen(db, conditions=[FilterCondition(field="roe", op="gt", value=20)])
@@ -115,6 +131,22 @@ def test_sort_keeps_null_values_last(db, seed_stocks):
 
     assert asc_result.items[-1].code == "999999.SH"
     assert desc_result.items[-1].code == "999999.SH"
+
+
+def test_sort_pe_keeps_negative_values_after_positive_pe(db, seed_stocks):
+    """按 PE 升序排序时，负 PE 亏损股排在有效正 PE 后面。"""
+    from datetime import date
+
+    from app.models.stock import StockBasic, StockDaily
+
+    db.add(StockBasic(code="999998.SH", name="亏损样本", industry="测试"))
+    db.add(StockDaily(code="999998.SH", trade_date=date.today(), close=8, pe=-6.0, pb=1.1))
+    db.commit()
+
+    result = _screen(db, conditions=[], sort_by="pe", sort_desc=False)
+    codes = [item.code for item in result.items]
+
+    assert codes.index("999998.SH") > codes.index("688981.SH")
 
 
 def test_sort_change_pct_uses_server_expression(db, seed_stocks):
