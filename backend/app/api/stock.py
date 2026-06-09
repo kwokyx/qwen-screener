@@ -192,11 +192,19 @@ def detail(code: str, db: Session = Depends(get_db)):
         .order_by(desc(StockFinancial.report_date))
         .first()
     )
+    from app.services.screener_engine import _ttm_dividend_yield
+
+    latest_daily_out = StockDailyOut.model_validate(latest_daily) if latest_daily else None
+    if latest_daily_out and latest_daily_out.dividend_yield is None and latest_daily and latest_daily.close:
+        dy = _ttm_dividend_yield(db, basic.code, latest_daily.close)
+        if dy is not None:
+            latest_daily_out = latest_daily_out.model_copy(update={"dividend_yield": dy})
+
     return StockDetailOut(
         code=basic.code,
         name=basic.name,
         industry=basic.industry,
-        latest=StockDailyOut.model_validate(latest_daily) if latest_daily else None,
+        latest=latest_daily_out,
         prev_close=prev_close,
         change_pct=change_pct,
         roe=latest_fin.roe if latest_fin else None,
@@ -214,10 +222,13 @@ def quote(code: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "股票不存在")
 
     from app.services.providers.quote_provider import fetch_realtime_quote_budgeted
+    from app.services.screener_engine import _ttm_dividend_yield
 
     live = fetch_realtime_quote_budgeted(code)
     if live:
         live["name"] = live.get("name") or basic.name
+        if not live.get("dividend_yield") and latest and latest.close:
+            live["dividend_yield"] = _ttm_dividend_yield(db, basic.code, latest.close)
         return live
 
     last2 = (
@@ -247,6 +258,10 @@ def quote(code: str, db: Session = Depends(get_db)):
         pe=latest.pe if latest else None,
         pb=latest.pb if latest else None,
         market_cap=latest.market_cap if latest else None,
+        dividend_yield=(
+            latest.dividend_yield if (latest and latest.dividend_yield is not None)
+            else _ttm_dividend_yield(db, basic.code, latest.close if latest else None)
+        ),
         change=change,
         change_pct=change_pct,
         source="local",

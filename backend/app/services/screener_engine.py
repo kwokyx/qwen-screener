@@ -6,7 +6,7 @@
 from sqlalchemy import and_, case, desc, func, or_
 from sqlalchemy.orm import Session, aliased
 
-from app.models.stock import StockBasic, StockDaily, StockFinancial
+from app.models.stock import StockBasic, StockDaily, StockFinancial, StockDividend
 from app.schemas.screener import (
     ALLOWED_FIELDS,
     FilterCondition,
@@ -427,7 +427,8 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             market_cap=daily.market_cap if (daily and daily.market_cap is not None) else (
                 round(daily.close * basic.total_share, 2) if (daily and daily.close and basic.total_share) else None
             ),
-            dividend_yield=daily.dividend_yield if daily else None,
+            dividend_yield=(daily.dividend_yield if daily and daily.dividend_yield is not None
+                else _ttm_dividend_yield(db, basic.code, daily.close if daily else None)),
             turnover=daily.turnover if daily else None,
             score=_quality_score(daily, previous, fin),
             prev_close=previous.close if previous else None,
@@ -453,4 +454,26 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
 def _change_pct(close: float | None, previous_close: float | None) -> float | None:
     if close is None or previous_close in (None, 0):
         return None
+    return (close - previous_close) / previous_close * 100
+
+
+def _ttm_dividend_yield(db: Session, code: str, close: float | None) -> float | None:
+    """实时计算近12个月股息率：TTM每股分红 / 当前股价 × 100。"""
+    if not close or close <= 0:
+        return None
+    from datetime import date, timedelta
+
+    latest_date = db.query(func.max(StockDividend.operate_date)).filter(
+        StockDividend.code == code
+    ).scalar()
+    if not latest_date:
+        return None
+    ttm = db.query(func.sum(StockDividend.cash_per_share)).filter(
+        StockDividend.code == code,
+        StockDividend.operate_date > latest_date - timedelta(days=365),
+        StockDividend.operate_date <= latest_date,
+    ).scalar()
+    if not ttm:
+        return None
+    return round(ttm / close * 100, 2)
     return (close - previous_close) / previous_close * 100

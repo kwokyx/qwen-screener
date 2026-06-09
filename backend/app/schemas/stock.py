@@ -56,6 +56,7 @@ class StockQuoteOut(BaseModel):
     change_pct: float | None = None
     source: str = "local"
     quote_time: str | None = None
+    dividend_yield: float | None = None
 
 
 class StockDetailOut(BaseModel):
