@@ -2,20 +2,32 @@
 // 浮动在右下的"自选股快捷栏"，常驻所有页面。
 // 收起态是一个小标签；展开后显示自选列表，点击直达详情。
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useWatchlistStore } from '../stores/watchlist'
 import { A2 } from '../shared/theme.js'
 import Icon from './Icon.vue'
+import * as stockApi from '../api/stock'
 
 const wl = useWatchlistStore()
 const router = useRouter()
 const route = useRoute()
 
 const open = ref(false)
+const details = ref({})
+
+async function refreshDetails() {
+  for (const w of wl.items) {
+    try {
+      const d = await stockApi.detail(w.code)
+      if (d) details.value[w.code] = d
+    } catch { /* ignore */ }
+  }
+}
 
 function toggle() {
   open.value = !open.value
+  if (open.value) refreshDetails()
 }
 
 function close() {
@@ -83,7 +95,7 @@ const items = computed(() => wl.items)
             </div>
             <div :style="{ textAlign: 'right', flexShrink: 0 }">
               <div :style="{ fontSize: '12px', fontWeight: 700, fontFamily: 'IBM Plex Mono, monospace', color: A2.text }">
-                {{ w.refPrice != null ? w.refPrice.toFixed(2) : '—' }}
+                {{ details[w.code]?.latest?.close?.toFixed(2) || w.refPrice?.toFixed(2) || '—' }}
               </div>
               <div v-if="w.alerts && w.alerts.length"
                    :style="{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '9.5px', color: A2.qwen, fontFamily: 'IBM Plex Mono, monospace', marginTop: '1px' }">
