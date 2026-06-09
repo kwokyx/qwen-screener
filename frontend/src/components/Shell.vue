@@ -70,11 +70,8 @@ function openChatHome() {
 function handleNavMenuClick(e) {
   const target = e.target?.nodeType === Node.TEXT_NODE ? e.target.parentElement : e.target
   const item = target?.closest?.('.n-menu-item-content, .n-menu-item, [role="menuitem"], .nav-menu-link')
-  const pathText = (e.composedPath?.() || [])
-    .slice(0, 5)
-    .map((node) => node?.innerText || node?.textContent || '')
-    .join('')
-  const label = (item?.innerText || item?.textContent || pathText || '').replace(/\s+/g, '').trim()
+  if (!item) return
+  const label = (item.innerText || item.textContent || '').replace(/\s+/g, '').trim()
   if (!label.includes('AI选股')) return
   e.preventDefault()
   e.stopPropagation()
