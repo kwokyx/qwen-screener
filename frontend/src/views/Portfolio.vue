@@ -30,6 +30,16 @@ const wl = useWatchlistStore()
 const loading = ref(false)
 const errorMsg = ref('')
 const details = ref({})
+const watchPagination = {
+  pageSize: 10,
+  showSizePicker: true,
+  pageSizes: [10, 20, 50],
+  prefix: ({ itemCount }) => `共 ${itemCount} 只`,
+}
+const alertPagination = {
+  pageSize: 6,
+  prefix: ({ itemCount }) => `共 ${itemCount} 条`,
+}
 
 async function loadAll() {
   if (!wl.items.length) {
@@ -331,6 +341,7 @@ const rowProps = (row) => ({
               :row-props="rowProps"
               :bordered="false"
               :single-line="false"
+              :pagination="watchPagination"
               size="small"
             />
             <NEmpty v-else description="自选列表为空" class="empty-panel">
@@ -380,6 +391,7 @@ const rowProps = (row) => ({
                 :bordered="false"
                 :single-line="false"
                 :row-props="rowProps"
+                :pagination="alertPagination"
                 size="small"
               />
               <NEmpty v-else description="暂无告警规则" class="small-empty">
