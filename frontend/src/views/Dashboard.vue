@@ -79,7 +79,7 @@ async function loadAll() {
         throw e
       })
       .finally(() => { loadingIndices.value = false }),
-    marketApi.sectors(20)
+    marketApi.sectors(30)
       .then((d) => { sectors.value = d })
       .catch((e) => {
         sectors.value = []
@@ -416,7 +416,7 @@ onMounted(loadAll)
                 </div>
                 <div v-if="sectorsUp.length" class="sector-rank-list">
                   <button
-                    v-for="(s, n) in sectorsUp.slice(0, 6)"
+                    v-for="(s, n) in sectorsUp"
                     :key="'sector-up-' + s.name"
                     class="sector-rank-row is-up"
                     @click="goToScreener(`${s.name} 板块基本面好的股票`)"
@@ -441,7 +441,7 @@ onMounted(loadAll)
                 </div>
                 <div v-if="sectorsDown.length" class="sector-rank-list">
                   <button
-                    v-for="(s, n) in sectorsDown.slice(0, 6)"
+                    v-for="(s, n) in sectorsDown"
                     :key="'sector-down-' + s.name"
                     class="sector-rank-row is-down"
                     @click="goToScreener(`${s.name} 板块基本面好的股票`)"
