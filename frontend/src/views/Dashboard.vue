@@ -51,10 +51,20 @@ const sectorsDown = computed(() => [...sectors.value].filter((s) => s.change_pct
 const marketStats = computed(() => {
   const t = tickerInfo.value
   if (!t) return null
+  const advancers = Number(t.advancers || 0)
+  const decliners = Number(t.decliners || 0)
+  const total = advancers + decliners
+  const advancerPct = total > 0 ? Math.round((advancers / total) * 100) : 50
+  const declinerPct = total > 0 ? 100 - advancerPct : 50
+  const breadthLabel = advancers > decliners ? '涨多跌少' : (decliners > advancers ? '跌多涨少' : '涨跌均衡')
   return {
-    advancers: t.advancers || 0,
-    decliners: t.decliners || 0,
+    advancers,
+    decliners,
     amount: t.total_amount_yi || 0,
+    total,
+    advancerPct,
+    declinerPct,
+    breadthLabel,
     tradeDate: t.trade_date,
   }
 })
@@ -277,18 +287,34 @@ onMounted(loadAll)
             <div class="status-desc">{{ tickerError }}</div>
             <NButton size="tiny" secondary @click="loadAll">重试</NButton>
           </div>
-          <div v-else-if="marketStats" class="market-stats">
-            <div class="market-metric">
-              <span>上涨</span>
-              <strong>{{ formatInt(marketStats.advancers) }}</strong>
+          <div v-else-if="marketStats" class="market-summary">
+            <div class="market-breadth-head">
+              <span>市场宽度</span>
+              <strong :class="marketStats.advancers >= marketStats.decliners ? 'up' : 'down'">
+                {{ marketStats.breadthLabel }}
+              </strong>
             </div>
-            <div class="market-metric">
-              <span>下跌</span>
-              <strong>{{ formatInt(marketStats.decliners) }}</strong>
+            <div class="market-breadth-bar" aria-hidden="true">
+              <span class="breadth-up" :style="{ width: marketStats.advancerPct + '%' }"></span>
+              <span class="breadth-down" :style="{ width: marketStats.declinerPct + '%' }"></span>
             </div>
-            <div class="market-metric">
-              <span>总成交</span>
-              <strong>{{ formatInt(marketStats.amount) }}<small>亿</small></strong>
+            <div class="market-breadth-counts">
+              <span>上涨 {{ formatInt(marketStats.advancers) }}</span>
+              <span>下跌 {{ formatInt(marketStats.decliners) }}</span>
+            </div>
+            <div class="market-stats">
+              <div class="market-metric">
+                <span>上涨占比</span>
+                <strong>{{ marketStats.advancerPct }}<small>%</small></strong>
+              </div>
+              <div class="market-metric">
+                <span>样本股票</span>
+                <strong>{{ formatInt(marketStats.total) }}</strong>
+              </div>
+              <div class="market-metric">
+                <span>总成交</span>
+                <strong>{{ formatInt(marketStats.amount) }}<small>亿</small></strong>
+              </div>
             </div>
           </div>
           <NEmpty v-else size="small" description="暂无市场概况" />
@@ -564,25 +590,68 @@ onMounted(loadAll)
   font-weight: 800;
 }
 
+.market-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.market-breadth-head,
+.market-breadth-counts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.market-breadth-head span,
+.market-breadth-counts {
+  color: #71717A;
+  font-size: 12px;
+}
+
+.market-breadth-head strong {
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.market-breadth-bar {
+  display: flex;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ECECEC;
+}
+
+.market-breadth-bar span {
+  min-width: 4px;
+}
+
+.breadth-up {
+  background: #E04F76;
+}
+
+.breadth-down {
+  background: #16A35C;
+}
+
 .market-stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
 }
 
 .market-metric {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
-}
-
-.market-metric:last-child {
-  grid-column: 1 / -1;
+  padding: 10px;
+  border-radius: 8px;
+  background: #FFFFFF;
 }
 
 .market-metric span {
   color: #71717A;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .market-metric strong {
@@ -590,7 +659,7 @@ onMounted(loadAll)
   color: #3F3F46;
   white-space: nowrap;
   font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 21px;
+  font-size: 16px;
   font-weight: 800;
   line-height: 1.05;
 }
@@ -756,7 +825,7 @@ onMounted(loadAll)
 }
 
 .sector-rank-scroll {
-  max-height: 624px;
+  max-height: 634px;
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
