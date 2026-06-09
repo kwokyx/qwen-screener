@@ -32,7 +32,15 @@ FIELD_MAP = {
     "industry": StockBasic.industry,
     "market": StockBasic.market,
 }
-SORT_FIELDS = {*FIELD_MAP, "change_pct", "score"}
+TECHNICAL_FIELDS = {
+    "ma5",
+    "ma20",
+    "volume_ratio_20",
+    "breakout_20",
+    "ma5_above_ma20",
+    "pct_change_20",
+}
+SORT_FIELDS = {*FIELD_MAP, *TECHNICAL_FIELDS, "change_pct", "score"}
 STRING_FIELDS = {"industry", "market"}
 
 
@@ -67,10 +75,13 @@ def validate_screen_request(req: ScreenRequest) -> None:
             raise ValueError(f"{cond.field} 需要数字阈值")
 
 
-def _build_clause(cond: FilterCondition):
+def _build_clause(cond: FilterCondition, field_map=None):
     if cond.field not in ALLOWED_FIELDS:
         raise ValueError(f"不支持的筛选字段: {cond.field}")
-    col = FIELD_MAP[cond.field]
+    field_map = field_map or FIELD_MAP
+    if cond.field not in field_map:
+        raise ValueError(f"不支持的筛选字段: {cond.field}")
+    col = field_map[cond.field]
     op, v = cond.op, cond.value
 
     # industry 字段对千问输出的"宽口径行业名"做模糊匹配
@@ -311,6 +322,92 @@ def _covered_market_date(db: Session, basic_count: int, before=None):
     return row[0] if row else None
 
 
+def _technical_factor_subquery(db: Session, as_of_date=None):
+    ranked_query = db.query(
+        StockDaily.code.label("code"),
+        StockDaily.trade_date.label("trade_date"),
+        StockDaily.close.label("close"),
+        StockDaily.high.label("high"),
+        StockDaily.volume.label("volume"),
+        func.row_number().over(
+            partition_by=StockDaily.code,
+            order_by=StockDaily.trade_date.desc(),
+        ).label("rn"),
+    )
+    if as_of_date is not None:
+        ranked_query = ranked_query.filter(StockDaily.trade_date <= as_of_date)
+    ranked = ranked_query.subquery()
+
+    current_window = ranked.c.rn <= 20
+    previous_window = and_(ranked.c.rn >= 2, ranked.c.rn <= 21)
+    return (
+        db.query(
+            ranked.c.code.label("code"),
+            func.max(case((ranked.c.rn == 1, ranked.c.close))).label("latest_close"),
+            func.max(case((ranked.c.rn == 1, ranked.c.volume))).label("latest_volume"),
+            func.avg(case((ranked.c.rn <= 5, ranked.c.close))).label("ma5"),
+            func.avg(case((current_window, ranked.c.close))).label("ma20"),
+            func.count(case((current_window, 1))).label("count_20"),
+            func.avg(case((previous_window, ranked.c.volume))).label("avg_volume_20"),
+            func.max(case((previous_window, ranked.c.high))).label("prev_high_20"),
+            func.count(case((previous_window, 1))).label("prev_count_20"),
+            func.max(case((ranked.c.rn == 21, ranked.c.close))).label("close_20_ago"),
+        )
+        .filter(ranked.c.rn <= 21)
+        .group_by(ranked.c.code)
+        .subquery()
+    )
+
+
+def _technical_expressions(technical):
+    volume_ratio_20 = case(
+        (
+            and_(technical.c.prev_count_20 >= 20, technical.c.avg_volume_20 > 0),
+            technical.c.latest_volume / func.nullif(technical.c.avg_volume_20, 0),
+        ),
+        else_=None,
+    ).label("volume_ratio_20")
+    breakout_20 = case(
+        (
+            and_(
+                technical.c.prev_count_20 >= 20,
+                technical.c.latest_close > technical.c.prev_high_20,
+            ),
+            1.0,
+        ),
+        (technical.c.prev_count_20 >= 20, 0.0),
+        else_=None,
+    ).label("breakout_20")
+    ma5_above_ma20 = case(
+        (
+            and_(
+                technical.c.count_20 >= 20,
+                technical.c.ma5 > technical.c.ma20,
+            ),
+            1.0,
+        ),
+        (technical.c.count_20 >= 20, 0.0),
+        else_=None,
+    ).label("ma5_above_ma20")
+    pct_change_20 = case(
+        (
+            and_(technical.c.close_20_ago.is_not(None), technical.c.close_20_ago != 0),
+            (technical.c.latest_close - technical.c.close_20_ago)
+            / func.nullif(technical.c.close_20_ago, 0)
+            * 100,
+        ),
+        else_=None,
+    ).label("pct_change_20")
+    return {
+        "ma5": technical.c.ma5.label("ma5"),
+        "ma20": technical.c.ma20.label("ma20"),
+        "volume_ratio_20": volume_ratio_20,
+        "breakout_20": breakout_20,
+        "ma5_above_ma20": ma5_above_ma20,
+        "pct_change_20": pct_change_20,
+    }
+
+
 def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     validate_screen_request(req)
     previous_daily = aliased(StockDaily)
@@ -326,8 +423,14 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         previous_market_date = _covered_market_date(db, basic_count, before=latest_market_date)
 
     if latest_market_date:
+        uses_technical = (
+            any(cond.field in TECHNICAL_FIELDS for cond in req.conditions)
+            or req.sort_by in TECHNICAL_FIELDS
+        )
+        technical = _technical_factor_subquery(db, latest_market_date) if uses_technical else None
+        technical_exprs = _technical_expressions(technical) if technical is not None else {}
         q = (
-            db.query(StockBasic, StockDaily, previous_daily, StockFinancial)
+            db.query(StockBasic, StockDaily, previous_daily, StockFinancial, *technical_exprs.values())
             .outerjoin(
                 StockDaily,
                 and_(
@@ -351,6 +454,8 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
                 ),
             )
         )
+        if technical is not None:
+            q = q.outerjoin(technical, technical.c.code == StockBasic.code)
     else:
         # 回退路径：数据日期稀疏时按每只股票自己的最新记录取值。
         latest_daily_dates = (
@@ -365,8 +470,14 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             .group_by(StockDaily.code)
             .subquery()
         )
+        uses_technical = (
+            any(cond.field in TECHNICAL_FIELDS for cond in req.conditions)
+            or req.sort_by in TECHNICAL_FIELDS
+        )
+        technical = _technical_factor_subquery(db) if uses_technical else None
+        technical_exprs = _technical_expressions(technical) if technical is not None else {}
         q = (
-            db.query(StockBasic, StockDaily, previous_daily, StockFinancial)
+            db.query(StockBasic, StockDaily, previous_daily, StockFinancial, *technical_exprs.values())
             .outerjoin(latest_daily_dates, latest_daily_dates.c.code == StockBasic.code)
             .outerjoin(
                 StockDaily,
@@ -392,9 +503,12 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
                 ),
             )
         )
+        if technical is not None:
+            q = q.outerjoin(technical, technical.c.code == StockBasic.code)
 
+    field_map = {**FIELD_MAP, **technical_exprs}
     if req.conditions:
-        clauses = [_build_clause(c) for c in req.conditions]
+        clauses = [_build_clause(c, field_map) for c in req.conditions]
         q = q.filter(and_(*clauses) if req.logic == "AND" else or_(*clauses))
 
     change_pct = (
@@ -403,7 +517,7 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
         * 100
     )
     quality_score = _quality_score_expr(change_pct)
-    sort_fields = {**FIELD_MAP, "change_pct": change_pct, "score": quality_score}
+    sort_fields = {**field_map, "change_pct": change_pct, "score": quality_score}
     if req.sort_by:
         col = sort_fields[req.sort_by]
         if req.sort_by == "pe":
@@ -430,8 +544,12 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
     total = basic_count if not req.conditions else q.order_by(None).count()
     rows = q.offset(req.offset).limit(req.limit).all()
 
-    items = [
-        ScreenResultItem(
+    items = []
+    technical_keys = list(technical_exprs)
+    for row in rows:
+        basic, daily, previous, fin, *technical_values = row
+        technical_values_map = dict(zip(technical_keys, technical_values))
+        items.append(ScreenResultItem(
             code=basic.code,
             name=basic.name,
             industry=basic.industry,
@@ -454,9 +572,13 @@ def screen(db: Session, req: ScreenRequest) -> ScreenResponse:
             profit_yoy=fin.profit_yoy if fin else None,
             gross_margin=fin.gross_margin if fin else None,
             debt_ratio=fin.debt_ratio if fin else None,
-        )
-        for basic, daily, previous, fin in rows
-    ]
+            ma5=technical_values_map.get("ma5"),
+            ma20=technical_values_map.get("ma20"),
+            volume_ratio_20=technical_values_map.get("volume_ratio_20"),
+            breakout_20=technical_values_map.get("breakout_20"),
+            ma5_above_ma20=technical_values_map.get("ma5_above_ma20"),
+            pct_change_20=technical_values_map.get("pct_change_20"),
+        ))
     trade_date = latest_market_date or db.query(func.max(StockDaily.trade_date)).scalar()
     return ScreenResponse(
         total=total,

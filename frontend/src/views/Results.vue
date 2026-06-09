@@ -147,7 +147,10 @@ function routeFilterMode(query = route.query, hasAgent = false) {
 const agentContext = ref(readAgentContext())
 const filterMode = ref(routeFilterMode(route.query, Boolean(agentContext.value)))
 const DEFAULT_SORT_FIELD = 'market_cap'
-const sortableFields = new Set(['close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover'])
+const sortableFields = new Set([
+  'close', 'change_pct', 'pe', 'pb', 'roe', 'dividend_yield', 'market_cap', 'turnover',
+  'ma5', 'ma20', 'volume_ratio_20', 'breakout_20', 'ma5_above_ma20', 'pct_change_20',
+])
 const sortLabels = {
   close: '现价',
   change_pct: '涨跌幅',
@@ -157,6 +160,12 @@ const sortLabels = {
   dividend_yield: '股息率',
   market_cap: '总市值',
   turnover: '换手率',
+  ma5: 'MA5',
+  ma20: 'MA20',
+  volume_ratio_20: '20日放量倍数',
+  breakout_20: '20日新高突破',
+  ma5_above_ma20: 'MA5高于MA20',
+  pct_change_20: '20日涨跌幅',
 }
 
 function positiveInt(value, fallback) {
@@ -374,6 +383,8 @@ const metricUnits = {
   debt_ratio: '%',
   market_cap: '亿',
   turnover: '%',
+  volume_ratio_20: 'x',
+  pct_change_20: '%',
 }
 
 function rowValue(row, field) {

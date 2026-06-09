@@ -183,6 +183,27 @@ async function waitForExpressionMaybe(cdp, expression, timeoutMs = 2000) {
   return false
 }
 
+function browserClickHelperSource() {
+  return `function smokeClick(el) {
+    if (!el) return false;
+    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    const rect = el.getBoundingClientRect();
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: rect.left + Math.max(1, rect.width / 2),
+      clientY: rect.top + Math.max(1, rect.height / 2),
+    };
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      el.dispatchEvent(type.startsWith('pointer')
+        ? new PointerEvent(type, init)
+        : new MouseEvent(type, init));
+    }
+    return true;
+  }`
+}
+
 async function setViewport(cdp, width, height, mobile = false) {
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width,
@@ -263,11 +284,11 @@ async function verifyIndustryConditionDropdown(cdp) {
     'structured field metadata',
   )
   const openedField = await evaluate(cdp, `(() => {
+    ${browserClickHelperSource()}
     const row = document.querySelector('.condition-row');
     const fieldSelect = row?.querySelector('.n-select .n-base-selection');
     if (!fieldSelect) return { ok: false, reason: 'field select not found' };
-    fieldSelect.click();
-    return { ok: true };
+    return { ok: smokeClick(fieldSelect) };
   })()`)
   if (!openedField?.ok) fail('Could not open condition field selector.', openedField)
   await waitForExpression(
@@ -277,20 +298,25 @@ async function verifyIndustryConditionDropdown(cdp) {
     'industry field option',
   )
   const choseIndustry = await evaluate(cdp, `(() => {
+    ${browserClickHelperSource()}
     const option = [...document.querySelectorAll('.n-base-select-option')]
       .find((el) => (el.innerText || el.textContent || '').trim() === '行业');
     if (!option) return { ok: false, reason: 'industry option not found' };
-    option.click();
-    return { ok: true };
+    return { ok: smokeClick(option) };
   })()`)
   if (!choseIndustry?.ok) fail('Could not choose industry field.', choseIndustry)
 
+  await waitForExpression(
+    cdp,
+    `(document.querySelector('.condition-row')?.innerText || '').includes('行业')`,
+    'industry field selected',
+  )
   await waitForExpression(cdp, 'document.querySelector(".condition-row .condition-value-control")', 'industry value select')
   const openedIndustry = await evaluate(cdp, `(() => {
+    ${browserClickHelperSource()}
     const valueSelect = document.querySelector('.condition-row .condition-value-control .n-base-selection');
     if (!valueSelect) return { ok: false, reason: 'industry select not found' };
-    valueSelect.click();
-    return { ok: true, text: (valueSelect.innerText || valueSelect.textContent || '').trim() };
+    return { ok: smokeClick(valueSelect), text: (valueSelect.innerText || valueSelect.textContent || '').trim() };
   })()`)
   if (!openedIndustry?.ok) fail('Could not open industry value selector.', openedIndustry)
   await waitForExpression(
@@ -300,11 +326,11 @@ async function verifyIndustryConditionDropdown(cdp) {
     'industry dropdown options',
   )
   const selected = await evaluate(cdp, `(() => {
+    ${browserClickHelperSource()}
     const option = [...document.querySelectorAll('.n-base-select-option')]
       .find((el) => (el.innerText || el.textContent || '').includes('半导体'));
     if (!option) return { ok: false, reason: 'semiconductor industry option not found' };
-    option.click();
-    return { ok: true };
+    return { ok: smokeClick(option) };
   })()`)
   if (!selected?.ok) {
     fail('Industry condition did not use a selectable dropdown value.', selected)

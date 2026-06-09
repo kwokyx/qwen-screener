@@ -342,6 +342,10 @@ function mapScreenRows(items, labels) {
       市值: item.market_cap,
       股息率: item.dividend_yield,
       换手率: item.turnover,
+      MA5: item.ma5,
+      MA20: item.ma20,
+      '20日放量': item.volume_ratio_20,
+      '20日涨幅': item.pct_change_20,
     }
     const missingMetrics = Object.entries(metrics)
       .filter(([, value]) => value === null || value === undefined)
@@ -444,7 +448,8 @@ function formatMetric(key, value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return value
   if (key === '市值') return `${number.toFixed(0)}亿`
-  if (key === '股息率' || key === 'ROE' || key === '换手率') return `${number.toFixed(2)}%`
+  if (key === '股息率' || key === 'ROE' || key === '换手率' || key === '20日涨幅') return `${number.toFixed(2)}%`
+  if (key === '20日放量') return `${number.toFixed(2)}x`
   return number.toFixed(2)
 }
 

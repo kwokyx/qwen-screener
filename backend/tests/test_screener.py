@@ -243,3 +243,70 @@ def test_result_change_pct_is_none_without_previous_close(db):
 
     assert item.prev_close is None
     assert item.change_pct is None
+
+
+def test_technical_breakout_and_volume_ratio_fields(db):
+    """技术面字段基于已有日线派生：20日突破、放量倍数、均线状态、20日涨幅。"""
+    from datetime import date, timedelta
+
+    from app.models.stock import StockBasic, StockDaily
+
+    start = date(2026, 1, 1)
+    db.add(StockBasic(code="600001.SH", name="突破样本", industry="测试"))
+    db.add(StockBasic(code="600002.SH", name="普通样本", industry="测试"))
+    for i in range(22):
+        trade_date = start + timedelta(days=i)
+        db.add(StockDaily(
+            code="600001.SH",
+            trade_date=trade_date,
+            close=25 if i == 21 else 10 + i * 0.2,
+            high=25 if i == 21 else 18,
+            volume=3000 if i == 21 else 1000,
+        ))
+        db.add(StockDaily(
+            code="600002.SH",
+            trade_date=trade_date,
+            close=10,
+            high=18,
+            volume=1000,
+        ))
+    db.commit()
+
+    breakout = _screen(db, conditions=[FilterCondition(field="breakout_20", op="eq", value=1)])
+    volume = _screen(db, conditions=[FilterCondition(field="volume_ratio_20", op="gt", value=2)])
+    trend = _screen(db, conditions=[FilterCondition(field="ma5_above_ma20", op="eq", value=1)])
+
+    assert [item.code for item in breakout.items] == ["600001.SH"]
+    assert [item.code for item in volume.items] == ["600001.SH"]
+    assert [item.code for item in trend.items] == ["600001.SH"]
+    assert breakout.items[0].breakout_20 == 1.0
+    assert breakout.items[0].volume_ratio_20 == 3.0
+    assert breakout.items[0].ma5 is not None
+    assert breakout.items[0].ma20 is not None
+    assert breakout.items[0].pct_change_20 is not None
+
+
+def test_technical_fields_require_enough_history(db):
+    """历史不足时技术字段为空，相关条件不会命中。"""
+    from datetime import date, timedelta
+
+    from app.models.stock import StockBasic, StockDaily
+
+    start = date(2026, 1, 1)
+    db.add(StockBasic(code="600003.SH", name="历史不足", industry="测试"))
+    for i in range(5):
+        db.add(StockDaily(
+            code="600003.SH",
+            trade_date=start + timedelta(days=i),
+            close=20 + i,
+            high=20 + i,
+            volume=5000,
+        ))
+    db.commit()
+
+    result = _screen(db, conditions=[FilterCondition(field="breakout_20", op="eq", value=1)])
+    all_rows = _screen(db, conditions=[])
+
+    assert result.items == []
+    assert all_rows.items[0].breakout_20 is None
+    assert all_rows.items[0].volume_ratio_20 is None

@@ -62,6 +62,12 @@ const fieldLabel = {
   market: '板块',
   close: '现价',
   turnover: '换手率',
+  ma5: 'MA5',
+  ma20: 'MA20',
+  volume_ratio_20: '20日放量倍数',
+  breakout_20: '20日新高突破',
+  ma5_above_ma20: 'MA5高于MA20',
+  pct_change_20: '20日涨跌幅',
 }
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
 function fmtCond(c) {

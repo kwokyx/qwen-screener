@@ -113,7 +113,10 @@ def list_agent_tools() -> list[StrategyToolInfo]:
             examples=["按股息率排序", "按市值降序", "换一批"],
             fields=[
                 field for field in _tool_fields()
-                if field.key in {"pe", "pb", "roe", "market_cap", "dividend_yield", "close", "turnover"}
+                if field.key in {
+                    "pe", "pb", "roe", "market_cap", "dividend_yield", "close", "turnover",
+                    "ma5", "ma20", "volume_ratio_20", "breakout_20", "ma5_above_ma20", "pct_change_20",
+                }
             ],
             data_notes=["排序在后端筛选引擎分页前执行，避免只排序当前页。"],
         ),
@@ -2524,6 +2527,12 @@ def _tool_fields() -> list[StrategyToolField]:
         ("market", "市场", "text", text_ops, "交易市场或板块字段。"),
         ("close", "收盘价", "number", numeric_ops, "最新交易日收盘价。"),
         ("turnover", "换手率", "number", numeric_ops, "最新交易日换手率。"),
+        ("ma5", "MA5", "number", numeric_ops, "基于本地日线派生的 5 日收盘均线，历史不足时缺失。"),
+        ("ma20", "MA20", "number", numeric_ops, "基于本地日线派生的 20 日收盘均线，历史不足时缺失。"),
+        ("volume_ratio_20", "20日放量倍数", "number", numeric_ops, "最新成交量 / 前 20 个交易日平均成交量，历史不足时缺失。"),
+        ("breakout_20", "20日新高突破", "number", ["eq", "gt", "gte"], "布尔型派生字段：1 表示收盘价突破前 20 个交易日最高价，0 表示未突破。"),
+        ("ma5_above_ma20", "MA5高于MA20", "number", ["eq", "gt", "gte"], "布尔型派生字段：1 表示 MA5 高于 MA20，0 表示未满足。"),
+        ("pct_change_20", "20日涨跌幅", "number", numeric_ops, "最新收盘价相对 20 个交易日前收盘价的涨跌幅。"),
     ]
     return [
         StrategyToolField(
@@ -2569,6 +2578,12 @@ def _field_labels() -> dict[str, str]:
         "market": "市场",
         "close": "收盘价",
         "turnover": "换手率",
+        "ma5": "MA5",
+        "ma20": "MA20",
+        "volume_ratio_20": "20日放量倍数",
+        "breakout_20": "20日新高突破",
+        "ma5_above_ma20": "MA5高于MA20",
+        "pct_change_20": "20日涨跌幅",
     }
 
 
