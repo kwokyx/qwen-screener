@@ -76,7 +76,7 @@ const items = computed(() => wl.items)
                class="watchdock-item"
                @click="goto(w.code)">
             <div :style="{ flex: 1, minWidth: 0 }">
-              <div :style="{ fontSize: '12px', fontWeight: 600, color: A2.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ w.name || '—' }}</div>
+              <div :style="{ fontSize: '12px', fontWeight: 600, color: A2.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ w.name || w.code }}</div>
               <div :style="{ fontSize: '9.5px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', marginTop: '1px' }">
                 {{ w.code }}<span v-if="w.sector"> · {{ w.sector }}</span>
               </div>
