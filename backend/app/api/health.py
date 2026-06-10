@@ -1,8 +1,7 @@
 import copy
 import threading
 import time
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -47,13 +46,7 @@ def _latest_expected_weekday(day=None):
     This intentionally handles weekends only. Public-holiday awareness needs a
     maintained trading calendar and should not be guessed here.
     """
-    now = day or datetime.now(ZoneInfo("Asia/Shanghai"))
-    current = now.date() if isinstance(now, datetime) else now
-    if isinstance(now, datetime) and now.hour < 16:
-        current -= timedelta(days=1)
-    while current.weekday() >= 5:
-        current -= timedelta(days=1)
-    return current
+    return scheduler._latest_expected_weekday(day)
 
 
 def _covered_latest_trade_date(db: Session, basic_cnt: int):
@@ -168,7 +161,7 @@ def _freshness_diagnostics(
         "severity": severity,
         "message": message,
         "lag_days": lag_days,
-        "expected_basis": "weekday_close_after_16_no_holidays",
+        "expected_basis": "weekday_close_after_1505_no_holidays",
         "coverage_threshold": threshold,
         "latest_coverage_rows": latest_daily_cnt,
         "latest_coverage": coverage,
@@ -178,6 +171,40 @@ def _freshness_diagnostics(
         "has_sparse_newer_data": sparse_newer,
         "active_jobs": active_jobs,
         "recommended_jobs": recommended_jobs,
+    }
+
+
+def _sync_performance(sync_meta: dict[str, dict]) -> dict:
+    def duration_of(name: str) -> int | None:
+        meta = (sync_meta or {}).get(name) or {}
+        status = meta.get("display_status") or meta.get("status")
+        value = meta.get("duration_ms")
+        if status != "success" or not isinstance(value, int) or value <= 0:
+            return None
+        return value
+
+    daily_market_ms = duration_of("daily_market")
+    daily_value_ms = duration_of("daily_value")
+    market_refresh_ms = duration_of("market_refresh")
+    daily_parts = [v for v in (daily_market_ms, daily_value_ms) if v is not None]
+    if market_refresh_ms is not None:
+        estimated_daily_ms = market_refresh_ms
+        estimated_daily_source = "market_refresh"
+    elif daily_parts:
+        estimated_daily_ms = sum(daily_parts)
+        estimated_daily_source = "daily_market+daily_value"
+    else:
+        estimated_daily_ms = None
+        estimated_daily_source = None
+    return {
+        "market_refresh_ms": market_refresh_ms,
+        "daily_market_ms": daily_market_ms,
+        "daily_value_ms": daily_value_ms,
+        "estimated_daily_ms": estimated_daily_ms,
+        "estimated_daily_source": estimated_daily_source,
+        "weekly_fundamentals_ms": duration_of("weekly_fundamentals"),
+        "weekly_dividend_ms": duration_of("weekly_dividend"),
+        "weekly_kline_backfill_ms": duration_of("weekly_kline_backfill"),
     }
 
 
@@ -401,6 +428,7 @@ def _data_health_payload(db: Session):
             "latest_dividend_yield": round(dividend_yield_cnt / latest_daily_cnt, 4) if latest_daily_cnt else 0,
         },
         "sync_meta": sync_meta,
+        "sync_performance": _sync_performance(sync_meta),
         "sync_warnings": sync_warnings,
         "sync_has_issue": bool(sync_warnings),
         "freshness": freshness,

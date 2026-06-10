@@ -39,7 +39,8 @@ def test_latest_expected_weekday_rolls_weekend_back_to_friday():
 
 def test_latest_expected_weekday_uses_previous_close_before_market_sync():
     assert health._latest_expected_weekday(datetime(2026, 6, 1, 9, 30)) == date(2026, 5, 29)
-    assert health._latest_expected_weekday(datetime(2026, 6, 1, 16, 0)) == date(2026, 6, 1)
+    assert health._latest_expected_weekday(datetime(2026, 6, 1, 15, 4)) == date(2026, 5, 29)
+    assert health._latest_expected_weekday(datetime(2026, 6, 1, 15, 5)) == date(2026, 6, 1)
 
 
 def test_data_health_treats_friday_close_as_fresh_on_sunday(db, monkeypatch):
@@ -196,6 +197,62 @@ def test_data_health_reports_fresh_data_with_repairable_sync_warning(db, monkeyp
     assert warning["data_impact"] == "data_available"
     assert warning["can_fast_retry"] is True
     assert "不会重新拉取全市场" in warning["recommended_action"]
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+
+
+def test_data_health_reports_sync_performance_from_market_refresh(db):
+    health.scheduler._ensure_meta_table()
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+        for name, duration in (
+            ("market_refresh", 123000),
+            ("daily_market", 45000),
+            ("daily_value", 78000),
+        ):
+            conn.execute(text(
+                "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+                "VALUES (:n, :t, :s, :d, :x)"
+            ), {
+                "n": name,
+                "t": datetime.utcnow(),
+                "s": "success",
+                "d": duration,
+                "x": "ok",
+            })
+
+    result = health.data_health(db)
+
+    assert result["sync_performance"]["market_refresh_ms"] == 123000
+    assert result["sync_performance"]["estimated_daily_ms"] == 123000
+    assert result["sync_performance"]["estimated_daily_source"] == "market_refresh"
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+
+
+def test_data_health_estimates_sync_performance_from_daily_jobs(db):
+    health.scheduler._ensure_meta_table()
+    with health.scheduler.engine.begin() as conn:
+        conn.execute(text("DELETE FROM sync_meta"))
+        for name, duration in (
+            ("daily_market", 45000),
+            ("daily_value", 78000),
+        ):
+            conn.execute(text(
+                "INSERT INTO sync_meta (name, last_run_at, status, duration_ms, detail) "
+                "VALUES (:n, :t, :s, :d, :x)"
+            ), {
+                "n": name,
+                "t": datetime.utcnow(),
+                "s": "success",
+                "d": duration,
+                "x": "ok",
+            })
+
+    result = health.data_health(db)
+
+    assert result["sync_performance"]["estimated_daily_ms"] == 123000
+    assert result["sync_performance"]["estimated_daily_source"] == "daily_market+daily_value"
     with health.scheduler.engine.begin() as conn:
         conn.execute(text("DELETE FROM sync_meta"))
 

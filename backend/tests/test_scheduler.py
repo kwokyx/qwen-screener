@@ -1,6 +1,7 @@
 import threading
 import time
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -147,6 +148,68 @@ def _seed_basic(db, n=120):
     for i in range(n):
         db.add(StockBasic(code=f"60{i:04d}.SH", name=f"测试股{i}", industry="测试"))
     db.commit()
+
+
+def test_latest_expected_weekday_switches_after_close_buffer():
+    tz = ZoneInfo("Asia/Shanghai")
+
+    assert scheduler._latest_expected_weekday(datetime(2026, 6, 3, 15, 4, tzinfo=tz)) == date(2026, 6, 2)
+    assert scheduler._latest_expected_weekday(datetime(2026, 6, 3, 15, 5, tzinfo=tz)) == date(2026, 6, 3)
+
+
+def test_market_close_catchup_queues_missing_today_data(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    calls = []
+
+    def fake_run_async(name, force=False):
+        calls.append({"name": name, "force": force})
+        return {"queued": True, "running": False, "job": name, "meta": {"status": "queued"}}
+
+    monkeypatch.setattr(scheduler, "run_async", fake_run_async)
+
+    rv = scheduler._queue_market_close_catchup(datetime(2026, 6, 3, 15, 6, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert rv["queued"] is True
+    assert calls == [{"name": "market_refresh", "force": False}]
+
+
+def test_market_close_catchup_skips_before_close_buffer(db, monkeypatch):
+    calls = []
+    monkeypatch.setattr(scheduler, "run_async", lambda name, force=False: calls.append(name))
+
+    rv = scheduler._queue_market_close_catchup(datetime(2026, 6, 3, 15, 4, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert rv is None
+    assert calls == []
+
+
+def test_market_close_catchup_skips_when_market_data_ready(db, monkeypatch):
+    scheduler._running_jobs.clear()
+    expected = date(2026, 6, 3)
+    monkeypatch.setattr(scheduler, "_latest_expected_weekday", lambda day=None: expected)
+    _seed_basic(db, 120)
+    for code, in db.query(StockBasic.code).all():
+        db.add(StockDaily(
+            code=code,
+            trade_date=expected,
+            close=10,
+            volume=100,
+            pe=8.5,
+            pb=0.9,
+            market_cap=300,
+            dividend_yield=3.2,
+        ))
+    db.commit()
+    calls = []
+    monkeypatch.setattr(scheduler, "run_async", lambda name, force=False: calls.append(name))
+
+    rv = scheduler._queue_market_close_catchup(datetime(2026, 6, 3, 15, 6, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert rv is None
+    assert calls == []
 
 
 def test_run_now_short_circuits_daily_market_when_data_ready(db, monkeypatch):

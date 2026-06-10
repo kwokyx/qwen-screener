@@ -19,6 +19,7 @@ const open = ref(false)
 const meta = ref({})            // sync_meta
 const counts = ref(null)        // {basic, daily, financial, with_industry}
 const coverage = ref(null)
+const syncPerformance = ref(null)
 const latestDate = ref(null)
 const expectedDate = ref(null)
 const fresh = ref(false)
@@ -60,6 +61,7 @@ async function refresh() {
     meta.value = r.sync_meta || {}
     counts.value = r.counts
     coverage.value = r.coverage
+    syncPerformance.value = r.sync_performance || null
     latestDate.value = r.latest_trade_date
     expectedDate.value = r.expected_trade_date
     fresh.value = !!r.fresh
@@ -169,6 +171,19 @@ function fmtAbs(iso) {
   })
 }
 
+function fmtDurationMs(ms) {
+  const value = Number(ms)
+  if (!Number.isFinite(value) || value <= 0) return ''
+  const seconds = Math.round(value / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  if (minutes < 60) return rest ? `${minutes}m${rest}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  return mins ? `${hours}h${mins}m` : `${hours}h`
+}
+
 function parseServerUtcTime(value) {
   const text = String(value || '').trim()
   if (!text) return new Date(Number.NaN)
@@ -232,6 +247,15 @@ const activeSyncJobLabels = computed(() =>
   activeSyncJobs.value.map(labelOf).join('、')
 )
 
+const dailyPullDurationText = computed(() => {
+  const duration = fmtDurationMs(syncPerformance.value?.estimated_daily_ms)
+  if (!duration) return ''
+  const source = syncPerformance.value?.estimated_daily_source === 'market_refresh'
+    ? '最近行情更新'
+    : '最近日线+估值'
+  return `${source}耗时 ${duration}`
+})
+
 const marketRefreshRunning = computed(() => isJobActive(MARKET_REFRESH_JOB))
 const marketRefreshLabel = computed(() => marketRefreshRunning.value ? '更新中' : '更新行情')
 const marketRefreshTitle = computed(() => {
@@ -241,10 +265,11 @@ const marketRefreshTitle = computed(() => {
 })
 
 const syncWindowNote = computed(() => {
+  const duration = dailyPullDurationText.value ? ` ${dailyPullDurationText.value}。` : ''
   if (fresh.value && latestDate.value && expectedDate.value) {
-    return `当前应至 ${expectedDate.value}。交易日日线通常在 16:00 后才尝试同步当天；16:00 前显示上一交易日是正常的。任务更新时间不是行情日期，以上方最新交易日和覆盖率为准。`
+    return `当前应至 ${expectedDate.value}。交易日日线从 15:05 起尝试同步当天，15:05 前显示上一交易日是正常的。${duration}任务更新时间不是行情日期，以上方最新交易日和覆盖率为准。`
   }
-  return '点击“更新行情”会先同步日线行情，再补估值、市值和股息率；任务更新时间不是行情日期，以上方最新交易日和覆盖率为准。'
+  return `点击“更新行情”会先同步日线行情，再补估值、市值和股息率。${duration}任务更新时间不是行情日期，以上方最新交易日和覆盖率为准。`
 })
 
 const retryableWarnings = computed(() =>

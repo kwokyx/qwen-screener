@@ -5,8 +5,9 @@
     DATA_PROVIDER=akshare   → 使用 AKShare（legacy）
 
 时间表（东八区）：
-    周一-周五 15:30   sync_daily       全市场日K线（OHLCV + PE/PB/换手率）
-    周一-周五 16:00   sync_daily_value  估值面（bs: 同 daily 已有 PE/PB；ak: 东财+雪球 PE/股息率）
+    周一-周五 15:05   market_refresh    收盘后首次刷新日K线 + 估值面
+    周一-周五 15:30   sync_daily        全市场日K线补偿（OHLCV + PE/PB/换手率）
+    周一-周五 16:00   sync_daily_value  估值面补偿（bs: 同 daily 已有 PE/PB；ak: 东财+雪球 PE/股息率）
     周六     02:00   sync_fundamentals  财务指标
     周六     03:00   weekly_dividend    已实施现金分红 + 本地 TTM 股息率
     周日     02:00   sync_basic        全 A 股代码列表（新股 / 退市更新）
@@ -58,6 +59,8 @@ _VALUATION_COVERAGE_THRESHOLD = 0.90
 _DIVIDEND_YIELD_COVERAGE_THRESHOLD = 0.95
 _KLINE_BACKFILL_LOOKBACK_DAYS = 90
 _KLINE_BACKFILL_MIN_COVERED_DAYS = 40
+_MARKET_CLOSE_SYNC_HOUR = 15
+_MARKET_CLOSE_SYNC_MINUTE = 5
 _STRATEGY_CACHE_INVALIDATING_JOBS = {
     "daily_market",
     "daily_value",
@@ -259,11 +262,15 @@ def _market_row_threshold(basic_cnt: int) -> int:
     return max(100, int(basic_cnt * 0.5)) if basic_cnt else 100
 
 
+def _is_after_market_close_sync_time(now: datetime) -> bool:
+    return (now.hour, now.minute) >= (_MARKET_CLOSE_SYNC_HOUR, _MARKET_CLOSE_SYNC_MINUTE)
+
+
 def _latest_expected_weekday(day=None) -> date:
-    """Match /health/data's market-close freshness basis without importing it."""
+    """Latest weekday that should be available after the close-sync buffer."""
     now = day or datetime.now(ZoneInfo("Asia/Shanghai"))
     current = now.date() if isinstance(now, datetime) else now
-    if isinstance(now, datetime) and now.hour < 16:
+    if isinstance(now, datetime) and not _is_after_market_close_sync_time(now):
         current -= timedelta(days=1)
     while current.weekday() >= 5:
         current -= timedelta(days=1)
@@ -973,6 +980,26 @@ def run_async(job_name: str, *, force: bool = False) -> dict:
     return {"queued": True, "running": False, "job": job_name, "meta": get_meta().get(job_name, {})}
 
 
+def _market_close_sync_due(now: datetime | None = None) -> bool:
+    local_now = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    if local_now.weekday() >= 5:
+        return False
+    if not _is_after_market_close_sync_time(local_now):
+        return False
+    status = job_data_status("market_refresh")
+    return not status.get("ready")
+
+
+def _queue_market_close_catchup(now: datetime | None = None) -> dict | None:
+    """Queue the close-time market refresh if the app missed the cron window."""
+    if not _market_close_sync_due(now):
+        return None
+    rv = run_async("market_refresh")
+    state = rv.get("meta", {}).get("display_status") or rv.get("meta", {}).get("status")
+    logger.info("[SCHED] 收盘后补偿同步已检查: queued={} running={} status={}", rv.get("queued"), rv.get("running"), state)
+    return rv
+
+
 def job_strategy_push() -> None:
     """收盘后执行全量策略扫描，有命中则推飞书。"""
     from app.services.feishu import notifier as feishu
@@ -1012,6 +1039,12 @@ def start():
     _mark_interrupted_jobs()
     _scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
+    # 周一-周五 15:05：收盘后先尝试一次组合刷新；若数据源未就绪，后续 15:30/16:00 继续补偿。
+    _scheduler.add_job(
+        lambda: _run_with_meta("market_refresh", job_market_refresh, allow_shortcut=False),
+        CronTrigger(day_of_week="mon-fri", hour=_MARKET_CLOSE_SYNC_HOUR, minute=_MARKET_CLOSE_SYNC_MINUTE),
+        id="market_refresh_close",
+    )
     # 周一-周五 15:30：日K线快照（bs: OHLCV+PE+PB；ak: 新浪 OHLC）
     _scheduler.add_job(
         lambda: _run_with_meta("daily_market", job_daily_market, allow_shortcut=False),
@@ -1024,10 +1057,10 @@ def start():
         CronTrigger(day_of_week="mon-fri", hour=16, minute=0),
         id="daily_value",
     )
-    # 周一-周五 19:00：全策略扫描 + 飞书推送
+    # 周一-周五 18:00：全策略扫描 + 飞书推送
     _scheduler.add_job(
         lambda: _run_with_meta("strategy_push", job_strategy_push, allow_shortcut=False),
-        CronTrigger(day_of_week="mon-fri", hour=19, minute=0),
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=0),
         id="strategy_push",
     )
     # 周六 02:00：全量财务指标
@@ -1068,6 +1101,10 @@ def start():
         run_async("db_backup")
     except Exception:
         logger.exception("[SCHED] 启动备份失败（不影响启动）")
+    try:
+        _queue_market_close_catchup()
+    except Exception:
+        logger.exception("[SCHED] 收盘后补偿同步检查失败（不影响启动）")
 
 
 def stop():
