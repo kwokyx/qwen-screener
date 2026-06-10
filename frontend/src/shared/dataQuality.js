@@ -1,7 +1,7 @@
 export const screeningQualityFields = [
-  { key: 'pe', label: 'PE' },
-  { key: 'pb', label: 'PB' },
-  { key: 'roe', label: 'ROE' },
+  { key: 'pe', label: '市盈率' },
+  { key: 'pb', label: '市净率' },
+  { key: 'roe', label: '净资产收益率' },
   { key: 'market_cap', label: '市值' },
   { key: 'dividend_yield', label: '股息率' },
 ]
@@ -9,11 +9,11 @@ export const screeningQualityFields = [
 export const detailQualityFields = [
   { key: 'trade_date', label: '交易日' },
   { key: 'close', label: '收盘价' },
-  { key: 'pe', label: 'PE' },
-  { key: 'pb', label: 'PB' },
+  { key: 'pe', label: '市盈率' },
+  { key: 'pb', label: '市净率' },
   { key: 'market_cap', label: '市值' },
   { key: 'dividend_yield', label: '股息率' },
-  { key: 'roe', label: 'ROE' },
+  { key: 'roe', label: '净资产收益率' },
   { key: 'profit_yoy', label: '净利同比' },
 ]
 

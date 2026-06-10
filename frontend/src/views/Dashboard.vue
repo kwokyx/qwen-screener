@@ -212,10 +212,10 @@ const moverColumns = computed(() => [
     render: (s) => mono(s.turnover != null ? `${s.turnover.toFixed(2)}%` : '—', { color: Preview.textMuted }),
   },
   {
-    title: 'PE',
+    title: '市盈率',
     key: 'pe',
     align: 'right',
-    width: 76,
+    width: 86,
     render: (s) => mono(formatPe(s.pe), { color: Preview.textMuted }),
   },
   {

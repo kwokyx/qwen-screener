@@ -197,9 +197,9 @@ const watchColumns = computed(() => [
     sorter: (a, b) => (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity),
     render: row => pctNode(row.changePct),
   },
-  { title: 'PE', key: 'pe', align: 'right', width: 56, render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
-  { title: 'PB', key: 'pb', align: 'right', width: 56, render: row => mono(row.pb == null ? '—' : row.pb.toFixed(2), { color: Preview.textMuted }) },
-  { title: 'ROE', key: 'roe', align: 'right', width: 64, render: row => mono(fmtROE(row.roe), { color: Preview.textMuted }) },
+  { title: '市盈率', key: 'pe', align: 'right', width: 74, render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
+  { title: '市净率', key: 'pb', align: 'right', width: 74, render: row => mono(row.pb == null ? '—' : row.pb.toFixed(2), { color: Preview.textMuted }) },
+  { title: '净资产收益率', key: 'roe', align: 'right', width: 104, render: row => mono(fmtROE(row.roe), { color: Preview.textMuted }) },
   {
     title: '行业',
     key: 'industry',

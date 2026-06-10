@@ -22,7 +22,7 @@ def test_agent_design_request_does_not_execute_screen(db, seed_stocks, monkeypat
     assert res.screen_result is None
     assert res.strategy_result is None
     assert res.plan.condition_labels == [
-        "ROE不低于15",
+        "净资产收益率不低于15",
         "资产负债率不高于60",
         "毛利率不低于25",
         "净利润同比不低于10",

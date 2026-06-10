@@ -84,11 +84,11 @@ def list_agent_tools() -> list[StrategyToolInfo]:
             description="把自然语言目标转换为字段条件，再调用 screener_engine.screen 查询本地最新行情、估值和财务表。",
             inputs=["conditions", "logic", "sort_by", "limit"],
             outputs=["股票代码", "名称", "行业", "现价", "估值", "市值", "命中条件"],
-            examples=["低估值高分红的银行股", "半导体行业里的大市值龙头", "白马股，ROE 高，估值不要太贵"],
+            examples=["低估值高分红的银行股", "半导体行业里的大市值龙头", "白马股，净资产收益率高，估值不要太贵"],
             fields=_tool_fields(),
             data_notes=[
                 "行情字段来自本地 stock_daily 最新交易日。",
-                "ROE、营收同比、净利润同比等来自本地 StockFinancial 最新报告期。",
+                "净资产收益率、营收同比、净利润同比等来自本地 StockFinancial 最新报告期。",
                 "字段缺失时对应条件不会命中，前端展示为缺失而不是补假数据。",
             ],
         ),
@@ -1272,7 +1272,7 @@ def build_unsupported_metric_response(
     answer = "\n".join([
         f"我不能直接按「{query}」筛选，因为当前本地数据字段还不支持：{metric_text}。",
         "为避免把只满足部分条件的股票误当成完整命中，本轮没有执行筛选。",
-        "可以改成当前已支持的字段，例如：PE 低于 15、ROE 大于 15、最新季度净利润同比大于 20、消费股。",
+        "可以改成当前已支持的字段，例如：市盈率低于 15、净资产收益率大于 15、最新季度净利润同比大于 20、消费股。",
     ])
     return StrategyAgentResponse(
         query=query,
@@ -2433,15 +2433,15 @@ def _explain_item(item: dict[str, Any]) -> str:
     parts = [f"{name}（{code}）"]
     metrics = [
         ("行业", item.get("industry")),
-        ("PE", item.get("pe")),
-        ("ROE", item.get("roe")),
+        ("市盈率", item.get("pe")),
+        ("净资产收益率", item.get("roe")),
         ("股息率", item.get("dividend_yield")),
         ("市值", item.get("market_cap")),
     ]
     for label, value in metrics:
         if value is None or value == "":
             continue
-        suffix = "%" if label in ("ROE", "股息率") else ("亿" if label == "市值" else "")
+        suffix = "%" if label in ("净资产收益率", "股息率") else ("亿" if label == "市值" else "")
         parts.append(f"{label}{_compact_metric(value)}{suffix}")
     return "，".join(parts)
 
@@ -2482,7 +2482,7 @@ def _explain_result_risks(items: list[dict[str, Any]], conditions: list[FilterCo
     if any(_as_float(item.get("pe")) is not None and _as_float(item.get("pe")) < 0 for item in items[:5]):
         risks.append("存在负市盈率，通常代表最近利润为负，不能按低估值简单理解")
     if any(_as_float(item.get("roe")) is not None and _as_float(item.get("roe")) < 0 for item in items[:5]):
-        risks.append("存在 ROE 为负的股票，盈利质量风险较高")
+        risks.append("存在净资产收益率为负的股票，盈利质量风险较高")
     if any(_as_float(item.get("dividend_yield")) == 0 for item in items[:5]):
         risks.append("部分股票股息率为 0，不适合高分红目标")
     if not risks:
@@ -2516,7 +2516,7 @@ def _tool_fields() -> list[StrategyToolField]:
     fields = [
         ("pe", "市盈率", "number", numeric_ops, "估值指标，越低通常代表估值越便宜，但需结合行业。"),
         ("pb", "市净率", "number", numeric_ops, "估值指标，适合银行、周期等重资产行业参考。"),
-        ("roe", "ROE", "number", numeric_ops, "净资产收益率，衡量盈利质量。"),
+        ("roe", "净资产收益率", "number", numeric_ops, "净资产收益率，衡量盈利质量。"),
         ("market_cap", "总市值", "number", numeric_ops, "单位为亿元，用于区分小盘、中盘、大盘或龙头。"),
         ("dividend_yield", "股息率", "number", numeric_ops, "现金分红收益率，字段缺失时不补算。"),
         ("revenue_yoy", "营收同比", "number", numeric_ops, "最新报告期营业收入同比增速。"),
@@ -2528,11 +2528,11 @@ def _tool_fields() -> list[StrategyToolField]:
         ("risk_flag", "风险标记", "number", ["eq"], "基于股票名称派生：1 表示 ST / 退市风险名称，0 表示普通名称。"),
         ("close", "收盘价", "number", numeric_ops, "最新交易日收盘价。"),
         ("turnover", "换手率", "number", numeric_ops, "最新交易日换手率。"),
-        ("ma5", "MA5", "number", numeric_ops, "基于本地日线派生的 5 日收盘均线，历史不足时缺失。"),
-        ("ma20", "MA20", "number", numeric_ops, "基于本地日线派生的 20 日收盘均线，历史不足时缺失。"),
+        ("ma5", "5日均线", "number", numeric_ops, "基于本地日线派生的 5 日收盘均线，历史不足时缺失。"),
+        ("ma20", "20日均线", "number", numeric_ops, "基于本地日线派生的 20 日收盘均线，历史不足时缺失。"),
         ("volume_ratio_20", "20日放量倍数", "number", numeric_ops, "最新成交量 / 前 20 个交易日平均成交量，历史不足时缺失。"),
         ("breakout_20", "20日新高突破", "number", ["eq", "gt", "gte"], "布尔型派生字段：1 表示收盘价突破前 20 个交易日最高价，0 表示未突破。"),
-        ("ma5_above_ma20", "MA5高于MA20", "number", ["eq", "gt", "gte"], "布尔型派生字段：1 表示 MA5 高于 MA20，0 表示未满足。"),
+        ("ma5_above_ma20", "5日均线高于20日均线", "number", ["eq", "gt", "gte"], "布尔型派生字段：1 表示 5 日均线高于 20 日均线，0 表示未满足。"),
         ("pct_change_20", "20日涨跌幅", "number", numeric_ops, "最新收盘价相对 20 个交易日前收盘价的涨跌幅。"),
     ]
     return [
@@ -2568,7 +2568,7 @@ def _field_labels() -> dict[str, str]:
     return {
         "pe": "市盈率",
         "pb": "市净率",
-        "roe": "ROE",
+        "roe": "净资产收益率",
         "market_cap": "总市值",
         "dividend_yield": "股息率",
         "revenue_yoy": "营收同比",
@@ -2580,11 +2580,11 @@ def _field_labels() -> dict[str, str]:
         "risk_flag": "风险标记",
         "close": "收盘价",
         "turnover": "换手率",
-        "ma5": "MA5",
-        "ma20": "MA20",
+        "ma5": "5日均线",
+        "ma20": "20日均线",
         "volume_ratio_20": "20日放量倍数",
         "breakout_20": "20日新高突破",
-        "ma5_above_ma20": "MA5高于MA20",
+        "ma5_above_ma20": "5日均线高于20日均线",
         "pct_change_20": "20日涨跌幅",
     }
 

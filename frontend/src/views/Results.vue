@@ -154,17 +154,17 @@ const sortableFields = new Set([
 const sortLabels = {
   close: '现价',
   change_pct: '涨跌幅',
-  pe: 'PE',
-  pb: 'PB',
-  roe: 'ROE',
+  pe: '市盈率',
+  pb: '市净率',
+  roe: '净资产收益率',
   dividend_yield: '股息率',
   market_cap: '总市值',
   turnover: '换手率',
-  ma5: 'MA5',
-  ma20: 'MA20',
+  ma5: '5日均线',
+  ma20: '20日均线',
   volume_ratio_20: '20日放量倍数',
   breakout_20: '20日新高突破',
-  ma5_above_ma20: 'MA5高于MA20',
+  ma5_above_ma20: '5日均线高于20日均线',
   pct_change_20: '20日涨跌幅',
 }
 
@@ -204,9 +204,9 @@ const conditionSets = {
 }
 
 const fieldLabels = {
-  pe: 'PE(TTM)',
-  pb: 'PB',
-  roe: 'ROE',
+  pe: '市盈率(TTM)',
+  pb: '市净率',
+  roe: '净资产收益率',
   market_cap: '总市值',
   dividend_yield: '股息率',
   debt_ratio: '资产负债率',
@@ -245,18 +245,18 @@ const filterGroups = computed(() => {
     balanced: [
       { cat: '数据范围', items: [{ l: '股票池', v: '全市场' }, { l: '数据日期', v: '最近交易日' }] },
       { cat: '选股范围', items: [{ l: '风险股', v: '排除 ST / 退市' }] },
-      { cat: '估值', items: [{ l: 'PE(TTM)', v: '> 0 且 ≤ 500' }] },
+      { cat: '估值', items: [{ l: '市盈率(TTM)', v: '> 0 且 ≤ 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '不限制' }] },
     ],
     value: [
       { cat: '选股范围', items: [{ l: '风险股', v: '排除 ST / 退市' }] },
-      { cat: '估值', items: [{ l: 'PE(TTM)', v: '> 0 且 ≤ 80' }] },
-      { cat: '盈利', items: [{ l: 'ROE', v: '> 5%' }] },
+      { cat: '估值', items: [{ l: '市盈率(TTM)', v: '> 0 且 ≤ 80' }] },
+      { cat: '盈利', items: [{ l: '净资产收益率', v: '> 5%' }] },
       { cat: '规模', items: [{ l: '总市值', v: '不限制' }] },
     ],
     sized: [
       { cat: '选股范围', items: [{ l: '风险股', v: '排除 ST / 退市' }] },
-      { cat: '估值', items: [{ l: 'PE(TTM)', v: '> 0 且 ≤ 500' }] },
+      { cat: '估值', items: [{ l: '市盈率(TTM)', v: '> 0 且 ≤ 500' }] },
       { cat: '规模', items: [{ l: '总市值', v: '> 100 亿' }] },
     ],
     all: [
@@ -332,7 +332,7 @@ function rowQualityLabel(row) {
 
 function rowQualityTitle(row) {
   const quality = rowQuality(row)
-  if (!quality.missing.length) return 'PE、PB、ROE、市值、股息率字段完整'
+  if (!quality.missing.length) return '市盈率、市净率、净资产收益率、市值、股息率字段完整'
   return `缺失字段：${quality.missingLabels.join('、')}；相关筛选或排序可能受影响`
 }
 
@@ -347,10 +347,10 @@ const stats = computed(() => {
   return [
     { l: '命中数量', v: total.value, sub: `已展示 ${arr.length} 只`, unit: '只' },
     { l: '字段覆盖', v: formatCoverage(pageCoverage.value.ratio), sub: weakCoverageText.value, unit: '' },
-    { l: '平均 PE', v: fmt(avg('pe')), sub: '当前页均值', unit: 'x' },
+    { l: '平均市盈率', v: fmt(avg('pe')), sub: '当前页均值', unit: 'x' },
     { l: '平均市值', v: fmt(avg('market_cap'), 0), sub: '当前页均值', unit: '亿' },
     { l: '平均股息率', v: fmt(avg('dividend_yield')), sub: '当前页均值', unit: '%' },
-    { l: '平均 ROE', v: fmt(avg('roe')), sub: '当前页均值', unit: '%' },
+    { l: '平均净资产收益率', v: fmt(avg('roe')), sub: '当前页均值', unit: '%' },
   ]
 })
 
@@ -359,8 +359,8 @@ const resultSubtitle = computed(() => {
     return agentContext.value?.query || '本轮智能筛选'
   }
   const map = {
-    balanced: '排除 ST/退市，正 PE ≤ 500',
-    value: '排除 ST/退市，正 PE ≤ 80 且 ROE > 5%',
+    balanced: '排除 ST/退市，正市盈率 ≤ 500',
+    value: '排除 ST/退市，正市盈率 ≤ 80 且净资产收益率 > 5%',
     sized: '排除 ST/退市，总市值 > 100 亿',
     all: '用户明确要求查看全部股票',
   }
@@ -449,9 +449,9 @@ function conditionReason(row, condition) {
 
 function fallbackReasons(row) {
   return [
-    row.pe != null && row.pe > 0 && row.pe < 15 ? `低 PE ${row.pe.toFixed(2)}` : null,
-    row.pb != null && row.pb < 1.5 ? `低 PB ${row.pb.toFixed(2)}` : null,
-    row.roe != null && row.roe >= 15 ? `ROE ${row.roe.toFixed(2)}%` : null,
+    row.pe != null && row.pe > 0 && row.pe < 15 ? `低市盈率 ${row.pe.toFixed(2)}` : null,
+    row.pb != null && row.pb < 1.5 ? `低市净率 ${row.pb.toFixed(2)}` : null,
+    row.roe != null && row.roe >= 15 ? `净资产收益率 ${row.roe.toFixed(2)}%` : null,
     row.dividend_yield != null && row.dividend_yield >= 4 ? `股息 ${row.dividend_yield.toFixed(2)}%` : null,
     row.market_cap != null && row.market_cap >= 1000 ? `市值 ${Math.round(row.market_cap).toLocaleString()}亿` : null,
   ].filter(Boolean)
@@ -553,26 +553,26 @@ const columns = computed(() => [
     ),
   },
   {
-    title: 'PE',
+    title: '市盈率',
     key: 'pe',
     align: 'right',
-    width: 70,
+    width: 86,
     ...remoteSort('pe'),
     render: (s) => rightMonoCell(fmtPe(s.pe)),
   },
   {
-    title: 'PB',
+    title: '市净率',
     key: 'pb',
     align: 'right',
-    width: 70,
+    width: 86,
     ...remoteSort('pb'),
     render: (s) => rightMonoCell(fmtNum(s.pb)),
   },
   {
-    title: 'ROE',
+    title: '净资产收益率',
     key: 'roe',
     align: 'right',
-    width: 76,
+    width: 108,
     ...remoteSort('roe'),
     render: (s) => rightMonoCell(s.roe != null ? `${s.roe.toFixed(2)}%` : '—', {
       color: s.roe > 10 ? Preview.negative : Preview.textMuted,

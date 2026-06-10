@@ -246,11 +246,11 @@ function fmtVol(v) {
         <!-- MA -->
         <g font-size="10.5" font-family="IBM Plex Sans, sans-serif">
           <circle :cx="hover.tipX + 14" cy="113" r="3" fill="#f59e0b" />
-          <text :x="hover.tipX + 22" y="116" fill="#7A776F">MA5</text>
+          <text :x="hover.tipX + 22" y="116" fill="#7A776F">5日线</text>
           <text :x="hover.tipX + hover.tipW - 10" y="116" fill="#111110" text-anchor="end" font-family="IBM Plex Mono, monospace" font-weight="600">{{ fmt(hover.ma5) }}</text>
 
           <circle :cx="hover.tipX + 14" cy="133" r="3" fill="#8b5cf6" />
-          <text :x="hover.tipX + 22" y="136" fill="#7A776F">MA20</text>
+          <text :x="hover.tipX + 22" y="136" fill="#7A776F">20日线</text>
           <text :x="hover.tipX + hover.tipW - 10" y="136" fill="#111110" text-anchor="end" font-family="IBM Plex Mono, monospace" font-weight="600">{{ fmt(hover.ma20) }}</text>
         </g>
 

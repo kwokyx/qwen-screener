@@ -45,7 +45,7 @@ const JOBS = [
   { name: MARKET_REFRESH_JOB,       label: '行情更新',   desc: '按顺序更新日线行情和估值数据', eta: '后台约数分钟' },
   { name: 'daily_market',           label: '日线行情',   desc: '最新交易日行情覆盖', eta: '后台约数分钟' },
   { name: 'daily_value',            label: '估值数据',   desc: '估值、市值、股息率补全', eta: '后台约数分钟' },
-  { name: 'weekly_fundamentals',    label: '财务指标',   desc: 'ROE、营收、净利等指标', eta: '后台耗时较长' },
+  { name: 'weekly_fundamentals',    label: '财务指标',   desc: '净资产收益率、营收、净利等指标', eta: '后台耗时较长' },
   { name: 'weekly_dividend',        label: '分红数据',   desc: '现金分红与股息率重算', eta: '后台耗时较长' },
   { name: 'weekly_basic',           label: '股票列表',   desc: '全 A 股代码列表更新', eta: '后台约十几秒' },
   { name: 'weekly_kline_backfill',  label: 'K线回填',    desc: '补齐近期历史 K 线', eta: '后台耗时较长' },

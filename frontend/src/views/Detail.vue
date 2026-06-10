@@ -539,7 +539,7 @@ const finRows = computed(() => {
   if (!d) return []
   const fmt = (v, d2 = 2, suf = '') => v == null ? '—' : (v.toFixed(d2) + suf)
   return [
-    { l: 'ROE',          v: fmt(d.roe, 2, '%') },
+    { l: '净资产收益率', v: fmt(d.roe, 2, '%') },
     { l: '营收同比',      v: fmt(d.revenue_yoy, 2, '%') },
     { l: '净利同比',      v: fmt(d.profit_yoy, 2, '%') },
     { l: '毛利率',        v: fmt(d.gross_margin, 2, '%') },
@@ -565,8 +565,8 @@ const valuationCells = computed(() => {
     return Number(v) > 0 ? Number(v).toFixed(d) : '亏损'
   }
   return [
-    { l: '市盈率 PE', v: fmtPe(l.pe), s: l.pe == null ? '—' : (l.pe <= 0 ? '亏损' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高')) },
-    { l: '市净率 PB', v: fmt(l.pb), s: l.pb == null ? '—' : (l.pb < 1.5 ? '破净 / 低 PB' : l.pb < 3 ? '合理' : '偏高') },
+    { l: '市盈率', v: fmtPe(l.pe), s: l.pe == null ? '—' : (l.pe <= 0 ? '亏损' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高')) },
+    { l: '市净率', v: fmt(l.pb), s: l.pb == null ? '—' : (l.pb < 1.5 ? '破净 / 低市净率' : l.pb < 3 ? '合理' : '偏高') },
     { l: '股息率 TTM', v: fmt(l.dividend_yield, 2, '%'), s: l.dividend_yield == null ? '—' : (l.dividend_yield > 4 ? '高股息' : l.dividend_yield > 2 ? '一般' : '偏低') },
     { l: '总市值', v: l.market_cap == null ? '—' : Math.round(l.market_cap).toLocaleString(), s: l.market_cap == null ? '—' : (l.market_cap > 1000 ? '大盘股' : l.market_cap > 100 ? '中盘股' : '小盘股') },
   ]
@@ -589,10 +589,10 @@ const peerColumns = computed(() => [
   },
   { title: '代码', key: 'code', width: 96, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', color: Preview.textMuted, fontSize: '10.5px' } }, p.code) },
   { title: '现价', key: 'close', align: 'right', width: 78, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 } }, fmtPeer(p.close)) },
-  { title: 'PE', key: 'pe', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeerPe(p.pe)) },
-  { title: 'PB', key: 'pb', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeer(p.pb)) },
+  { title: '市盈率', key: 'pe', align: 'right', width: 86, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeerPe(p.pe)) },
+  { title: '市净率', key: 'pb', align: 'right', width: 86, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeer(p.pb)) },
   {
-    title: 'ROE', key: 'roe', align: 'right', width: 78,
+    title: '净资产收益率', key: 'roe', align: 'right', width: 108,
     render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', fontWeight: p.roe > 10 ? 700 : 500 } }, p.roe != null ? `${p.roe.toFixed(2)}%` : '—'),
   },
   {

@@ -49,9 +49,9 @@ const presetPrompts = [
 ]
 
 const fieldLabel = {
-  pe: 'PE',
-  pb: 'PB',
-  roe: 'ROE',
+  pe: '市盈率',
+  pb: '市净率',
+  roe: '净资产收益率',
   market_cap: '市值',
   dividend_yield: '股息率',
   revenue_yoy: '营收同比',
@@ -63,11 +63,11 @@ const fieldLabel = {
   risk_flag: '风险标记',
   close: '现价',
   turnover: '换手率',
-  ma5: 'MA5',
-  ma20: 'MA20',
+  ma5: '5日均线',
+  ma20: '20日均线',
   volume_ratio_20: '20日放量倍数',
   breakout_20: '20日新高突破',
-  ma5_above_ma20: 'MA5高于MA20',
+  ma5_above_ma20: '5日均线高于20日均线',
   pct_change_20: '20日涨跌幅',
 }
 const opLabel = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', between: '∈', in: '∈' }
@@ -97,8 +97,8 @@ const fmtChange = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).to
 function resultFacts(s) {
   if (s.signals?.length) return s.signals.slice(0, 2)
   return [
-    s.pe != null ? `PE ${fmtPe(s.pe)}` : null,
-    s.roe != null ? `ROE ${fmtMetric(s.roe)}%` : null,
+    s.pe != null ? `市盈率 ${fmtPe(s.pe)}` : null,
+    s.roe != null ? `净资产收益率 ${fmtMetric(s.roe)}%` : null,
     s.dividend_yield != null ? `股息 ${fmtMetric(s.dividend_yield)}%` : null,
   ].filter(Boolean)
 }
@@ -767,10 +767,10 @@ const stageColor = (s) => ({
                                 <em>{{ turnDetailBasics(turn).close?.toFixed(2) }}</em> 收盘
                               </span>
                               <span v-if="turnDetailBasics(turn).pe != null" class="detail-stat">
-                                <em>{{ fmtPe(turnDetailBasics(turn).pe, 1) }}</em> PE
+                                <em>{{ fmtPe(turnDetailBasics(turn).pe, 1) }}</em> 市盈率
                               </span>
                               <span v-if="turnDetailBasics(turn).pb != null" class="detail-stat">
-                                <em>{{ turnDetailBasics(turn).pb?.toFixed(2) }}</em> PB
+                                <em>{{ turnDetailBasics(turn).pb?.toFixed(2) }}</em> 市净率
                               </span>
                               <span v-if="turnDetailBasics(turn).market_cap != null" class="detail-stat">
                                 <em>{{ turnDetailBasics(turn).market_cap?.toFixed(0) }}亿</em> 市值

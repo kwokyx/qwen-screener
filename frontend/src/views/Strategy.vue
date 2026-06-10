@@ -377,15 +377,15 @@ function savedConditionSummary(item) {
 function mapScreenRows(items, labels) {
   return items.map((item) => {
     const metrics = {
-      PE: item.pe,
-      PB: item.pb,
-      ROE: item.roe,
+      市盈率: item.pe,
+      市净率: item.pb,
+      净资产收益率: item.roe,
       市值: item.market_cap,
       股息率: item.dividend_yield,
       换手率: item.turnover,
       风险: item.risk_flag,
-      MA5: item.ma5,
-      MA20: item.ma20,
+      '5日均线': item.ma5,
+      '20日均线': item.ma20,
       '20日放量': item.volume_ratio_20,
       '20日涨幅': item.pct_change_20,
     }
@@ -490,7 +490,7 @@ function formatMetric(key, value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return value
   if (key === '市值') return `${number.toFixed(0)}亿`
-  if (key === '股息率' || key === 'ROE' || key === '换手率' || key === '20日涨幅') return `${number.toFixed(2)}%`
+  if (key === '股息率' || key === '净资产收益率' || key === '换手率' || key === '20日涨幅') return `${number.toFixed(2)}%`
   if (key === '20日放量') return `${number.toFixed(2)}x`
   if (key === '风险') return number === 0 ? '普通' : 'ST/退市'
   return number.toFixed(2)
