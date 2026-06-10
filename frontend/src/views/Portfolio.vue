@@ -129,7 +129,7 @@ const allAlerts = computed(() => {
   return out
 })
 
-const fmtPE = (v) => v == null ? '—' : v < 0 ? '亏损' : v.toFixed(1)
+const fmtPE = (v) => v == null ? '—' : Number(v) > 0 ? Number(v).toFixed(1) : '亏损'
 const fmtROE = (v) => v == null ? '—' : `${v.toFixed(1)}%`
 const fmtNum = (v, digits = 2) => v == null ? '—' : Number(v).toFixed(digits)
 const fmtDate = (ts) => {

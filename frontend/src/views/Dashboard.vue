@@ -155,6 +155,11 @@ function formatMarketCap(v) {
   return v != null ? `${Math.round(v).toLocaleString()}亿` : '—'
 }
 
+function formatPe(v, digits = 1) {
+  if (v == null) return '—'
+  return Number(v) > 0 ? Number(v).toFixed(digits) : '亏损'
+}
+
 const moverColumns = computed(() => [
   {
     title: '代码',
@@ -209,7 +214,7 @@ const moverColumns = computed(() => [
     key: 'pe',
     align: 'right',
     width: 76,
-    render: (s) => mono(s.pe != null && s.pe > 0 ? s.pe.toFixed(1) : '—', { color: Preview.textMuted }),
+    render: (s) => mono(formatPe(s.pe), { color: Preview.textMuted }),
   },
   {
     title: '市值',

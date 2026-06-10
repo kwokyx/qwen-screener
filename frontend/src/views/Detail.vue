@@ -487,6 +487,10 @@ const headerMetrics = computed(() => {
   }
   if (!l) return []
   const fmt = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
+  const fmtPe = (v, d = 2) => {
+    if (v == null) return '—'
+    return Number(v) > 0 ? Number(v).toFixed(d) : '亏损'
+  }
   const fmtPct = (v, d = 2, normalizeFraction = false) => {
     if (v == null) return '—'
     const n = Number(v)
@@ -518,7 +522,7 @@ const headerMetrics = computed(() => {
     { l: '今开', v: fmt(l.open) },
     { l: '最高', v: fmt(l.high) },
     { l: '最低', v: fmt(l.low) },
-    { l: '市盈率', v: fmt(l.pe) },
+    { l: '市盈率', v: fmtPe(l.pe) },
     { l: '市净率', v: fmt(l.pb) },
     { l: '总市值', v: l.market_cap != null ? (l.market_cap >= 10000 ? (l.market_cap / 10000).toFixed(2) + '万亿' : Math.round(l.market_cap).toLocaleString() + '亿') : '—' },
     { l: '股息率', v: fmtPct(l.dividend_yield, 2) },
@@ -556,8 +560,12 @@ const valuationCells = computed(() => {
   const l = detail.value?.latest
   if (!l) return []
   const fmt = (v, d = 2, suf = '') => v == null ? '—' : v.toFixed(d) + suf
+  const fmtPe = (v, d = 2) => {
+    if (v == null) return '—'
+    return Number(v) > 0 ? Number(v).toFixed(d) : '亏损'
+  }
   return [
-    { l: '市盈率 PE', v: fmt(l.pe), s: l.pe == null || l.pe <= 0 ? '—' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高') },
+    { l: '市盈率 PE', v: fmtPe(l.pe), s: l.pe == null ? '—' : (l.pe <= 0 ? '亏损' : (l.pe < 15 ? '低估区' : l.pe < 30 ? '合理' : '偏高')) },
     { l: '市净率 PB', v: fmt(l.pb), s: l.pb == null ? '—' : (l.pb < 1.5 ? '破净 / 低 PB' : l.pb < 3 ? '合理' : '偏高') },
     { l: '股息率 TTM', v: fmt(l.dividend_yield, 2, '%'), s: l.dividend_yield == null ? '—' : (l.dividend_yield > 4 ? '高股息' : l.dividend_yield > 2 ? '一般' : '偏低') },
     { l: '总市值', v: l.market_cap == null ? '—' : Math.round(l.market_cap).toLocaleString(), s: l.market_cap == null ? '—' : (l.market_cap > 1000 ? '大盘股' : l.market_cap > 100 ? '中盘股' : '小盘股') },
@@ -565,6 +573,10 @@ const valuationCells = computed(() => {
 })
 
 const fmtPeer = (v, d = 2) => v != null ? Number(v).toFixed(d) : '—'
+const fmtPeerPe = (v, d = 2) => {
+  if (v == null) return '—'
+  return Number(v) > 0 ? Number(v).toFixed(d) : '亏损'
+}
 const peerColumns = computed(() => [
   {
     title: '名称', key: 'name', minWidth: 120,
@@ -577,7 +589,7 @@ const peerColumns = computed(() => [
   },
   { title: '代码', key: 'code', width: 96, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', color: Preview.textMuted, fontSize: '10.5px' } }, p.code) },
   { title: '现价', key: 'close', align: 'right', width: 78, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace', fontWeight: 700 } }, fmtPeer(p.close)) },
-  { title: 'PE', key: 'pe', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, p.pe != null && p.pe > 0 ? p.pe.toFixed(2) : '—') },
+  { title: 'PE', key: 'pe', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeerPe(p.pe)) },
   { title: 'PB', key: 'pb', align: 'right', width: 70, render: (p) => h('span', { style: { fontFamily: 'IBM Plex Mono, monospace' } }, fmtPeer(p.pb)) },
   {
     title: 'ROE', key: 'roe', align: 'right', width: 78,

@@ -383,7 +383,10 @@ const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value
 const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
 
 const fmtNum = (v, d = 2) => v != null ? v.toFixed(d) : '—'
-const fmtPositive = (v, d = 2) => v != null && v > 0 ? v.toFixed(d) : '—'
+const fmtPe = (v, d = 2) => {
+  if (v == null) return '—'
+  return Number(v) > 0 ? Number(v).toFixed(d) : '亏损'
+}
 const metricUnits = {
   roe: '%',
   dividend_yield: '%',
@@ -555,7 +558,7 @@ const columns = computed(() => [
     align: 'right',
     width: 70,
     ...remoteSort('pe'),
-    render: (s) => rightMonoCell(fmtPositive(s.pe)),
+    render: (s) => rightMonoCell(fmtPe(s.pe)),
   },
   {
     title: 'PB',

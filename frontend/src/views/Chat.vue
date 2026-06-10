@@ -89,11 +89,15 @@ const hasConversation = computed(() => conversationTurns.value.length > 0)
 const latestTurn = computed(() => conversationTurns.value[conversationTurns.value.length - 1] || liveTurn.value || null)
 const resultPreviewItems = computed(() => (latestTurn.value?.result?.items || result.value?.items || []).slice(0, 6))
 const fmtMetric = (v, d = 2) => v == null ? '—' : Number(v).toFixed(d)
+const fmtPe = (v, d = 2) => {
+  if (v == null) return '—'
+  return Number(v) > 0 ? Number(v).toFixed(d) : '亏损'
+}
 const fmtChange = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`
 function resultFacts(s) {
   if (s.signals?.length) return s.signals.slice(0, 2)
   return [
-    s.pe != null ? `PE ${fmtMetric(s.pe)}` : null,
+    s.pe != null ? `PE ${fmtPe(s.pe)}` : null,
     s.roe != null ? `ROE ${fmtMetric(s.roe)}%` : null,
     s.dividend_yield != null ? `股息 ${fmtMetric(s.dividend_yield)}%` : null,
   ].filter(Boolean)
@@ -763,7 +767,7 @@ const stageColor = (s) => ({
                                 <em>{{ turnDetailBasics(turn).close?.toFixed(2) }}</em> 收盘
                               </span>
                               <span v-if="turnDetailBasics(turn).pe != null" class="detail-stat">
-                                <em>{{ turnDetailBasics(turn).pe?.toFixed(1) }}</em> PE
+                                <em>{{ fmtPe(turnDetailBasics(turn).pe, 1) }}</em> PE
                               </span>
                               <span v-if="turnDetailBasics(turn).pb != null" class="detail-stat">
                                 <em>{{ turnDetailBasics(turn).pb?.toFixed(2) }}</em> PB
