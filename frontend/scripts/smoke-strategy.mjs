@@ -271,6 +271,37 @@ async function clickFirst(cdp, selector) {
   return result
 }
 
+async function chooseVisibleOrVirtualSelectOption(cdp, text, label = text) {
+  const result = await evaluate(cdp, `(async () => {
+    ${browserClickHelperSource()}
+    const wanted = ${JSON.stringify(text)};
+    const optionText = (el) => (el.innerText || el.textContent || '').trim();
+    const findOption = () => [...document.querySelectorAll('.n-base-select-option')]
+      .find((el) => optionText(el) === wanted);
+    const scrollEl = document.querySelector('.n-virtual-list.v-vl')
+      || document.querySelector('.n-base-select-menu .n-scrollbar')
+      || document.querySelector('.n-base-select-menu');
+    for (let step = 0; step < 36; step += 1) {
+      const option = findOption();
+      if (option) return { ok: smokeClick(option), text: optionText(option), step };
+      if (!scrollEl) break;
+      const maxTop = Math.max(0, (scrollEl.scrollHeight || 0) - (scrollEl.clientHeight || 0));
+      scrollEl.scrollTop = Math.min(maxTop, step * 48);
+      scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    return {
+      ok: false,
+      reason: 'option not found',
+      options: [...document.querySelectorAll('.n-base-select-option')]
+        .map((el) => optionText(el))
+        .filter(Boolean),
+    };
+  })()`)
+  if (!result?.ok) fail(`Could not choose select option: ${label}.`, result)
+  return result
+}
+
 async function verifyIndustryConditionDropdown(cdp) {
   await waitForExpression(
     cdp,
@@ -291,20 +322,7 @@ async function verifyIndustryConditionDropdown(cdp) {
     return { ok: smokeClick(fieldSelect) };
   })()`)
   if (!openedField?.ok) fail('Could not open condition field selector.', openedField)
-  await waitForExpression(
-    cdp,
-    `[...document.querySelectorAll('.n-base-select-option')]
-      .some((el) => (el.innerText || el.textContent || '').trim() === '行业')`,
-    'industry field option',
-  )
-  const choseIndustry = await evaluate(cdp, `(() => {
-    ${browserClickHelperSource()}
-    const option = [...document.querySelectorAll('.n-base-select-option')]
-      .find((el) => (el.innerText || el.textContent || '').trim() === '行业');
-    if (!option) return { ok: false, reason: 'industry option not found' };
-    return { ok: smokeClick(option) };
-  })()`)
-  if (!choseIndustry?.ok) fail('Could not choose industry field.', choseIndustry)
+  await chooseVisibleOrVirtualSelectOption(cdp, '行业', 'industry field option')
 
   await waitForExpression(
     cdp,
