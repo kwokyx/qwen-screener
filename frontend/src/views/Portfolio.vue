@@ -11,6 +11,7 @@ import {
   NGrid,
   NPopconfirm,
   NProgress,
+  NSelect,
   NSpace,
   NSwitch,
   NTag,
@@ -32,6 +33,8 @@ const loading = ref(false)
 const errorMsg = ref('')
 const snapshots = ref({})
 const selectedRowKeys = ref([])
+const sortBy = ref('addedAt')
+const sortDesc = ref(true)
 let loadSeq = 0
 const watchPagination = {
   pageSize: 10,
@@ -128,6 +131,66 @@ const allAlerts = computed(() => {
   }
   return out
 })
+
+const sortOptions = [
+  { label: '加入日期', value: 'addedAt' },
+  { label: '今日涨跌', value: 'changePct' },
+  { label: '现价', value: 'close' },
+  { label: '加入以来', value: 'sinceCost' },
+  { label: '市盈率', value: 'pe' },
+  { label: '市净率', value: 'pb' },
+  { label: '净资产收益率', value: 'roe' },
+  { label: '总市值', value: 'marketCap' },
+  { label: '预警数量', value: 'alertCount' },
+  { label: '名称', value: 'name' },
+  { label: '行业', value: 'industry' },
+]
+const defaultSortDesc = {
+  addedAt: true,
+  changePct: true,
+  close: true,
+  sinceCost: true,
+  pe: false,
+  pb: false,
+  roe: true,
+  marketCap: true,
+  alertCount: true,
+  name: false,
+  industry: false,
+}
+
+function sortValue(row, key) {
+  if (key === 'alertCount') return row.alerts?.length || 0
+  return row[key]
+}
+
+function compareSortValue(a, b, key, desc = false) {
+  const av = sortValue(a, key)
+  const bv = sortValue(b, key)
+  if (av == null && bv == null) return a.code.localeCompare(b.code)
+  if (av == null) return 1
+  if (bv == null) return -1
+  let result
+  if (typeof av === 'string' || typeof bv === 'string') {
+    result = String(av).localeCompare(String(bv), 'zh-Hans-CN')
+  } else {
+    result = Number(av) - Number(bv)
+  }
+  return (desc ? -result : result) || a.code.localeCompare(b.code)
+}
+
+const sortedRows = computed(() => {
+  return [...rows.value].sort((a, b) => compareSortValue(a, b, sortBy.value, sortDesc.value))
+})
+
+function handleSortByChange(value) {
+  sortBy.value = value
+  sortDesc.value = defaultSortDesc[value] !== false
+}
+
+function toggleSortOrder() {
+  sortDesc.value = !sortDesc.value
+}
 
 const selectedKeySet = computed(() => new Set(selectedRowKeys.value))
 const selectedRows = computed(() => rows.value.filter((row) => selectedKeySet.value.has(row.code)))
@@ -253,7 +316,6 @@ const watchColumns = computed(() => [
     key: 'close',
     align: 'right',
     width: 68,
-    sorter: (a, b) => (a.close ?? -Infinity) - (b.close ?? -Infinity),
     render: row => mono(fmtNum(row.close), {
       color: row.changePct == null ? Preview.textMain : (row.changePct >= 0 ? Preview.positive : Preview.negative),
       fontWeight: 700,
@@ -264,7 +326,6 @@ const watchColumns = computed(() => [
     key: 'changePct',
     align: 'right',
     width: 68,
-    sorter: (a, b) => (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity),
     render: row => pctNode(row.changePct),
   },
   { title: '市盈率', key: 'pe', align: 'right', width: 60, render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
@@ -411,7 +472,19 @@ const rowProps = (row) => ({
       <div class="portfolio-main-layout">
         <NCard :bordered="false" title="自选明细" class="panel-card portfolio-detail-card">
           <template #header-extra>
-            <NButton size="small" secondary :loading="loading" @click="loadAll">刷新</NButton>
+            <div class="detail-header-actions">
+              <NSelect
+                size="small"
+                :value="sortBy"
+                :options="sortOptions"
+                class="sort-select"
+                @update:value="handleSortByChange"
+              />
+              <NButton size="small" secondary class="sort-order-btn" @click="toggleSortOrder">
+                {{ sortDesc ? '降序' : '升序' }}
+              </NButton>
+              <NButton size="small" secondary :loading="loading" @click="loadAll">刷新</NButton>
+            </div>
           </template>
           <div v-if="selectedRows.length" class="batch-toolbar">
             <div class="batch-summary">
@@ -460,7 +533,7 @@ const rowProps = (row) => ({
             v-if="rows.length"
             class="watch-detail-table"
             :columns="watchColumns"
-            :data="rows"
+            :data="sortedRows"
             :row-key="(row) => row.code"
             :checked-row-keys="selectedRowKeys"
             :scroll-x="808"
@@ -640,6 +713,17 @@ const rowProps = (row) => ({
   min-height: 0;
   overflow: auto;
 }
+.detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sort-select {
+  width: 116px;
+}
+.sort-order-btn {
+  min-width: 58px;
+}
 .batch-toolbar {
   display: flex;
   align-items: center;
@@ -793,6 +877,15 @@ const rowProps = (row) => ({
   .batch-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .detail-header-actions {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sort-select,
+  .sort-order-btn {
+    width: 100%;
   }
   .sector-strip {
     grid-template-columns: minmax(0, 1fr);
