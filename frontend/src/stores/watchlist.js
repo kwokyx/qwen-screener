@@ -2,7 +2,7 @@
 // 双向同步策略：
 //   - localStorage 始终读写（offline 兜底）
 //   - 登录后调 syncFromServer()：服务端列表合并进本地 + 把本地独有的项推上去
-//   - 本地任一变更（add / remove / addAlert / removeAlert / setAlertEnabled）在
+//   - 本地任一变更（add / remove / addAlert / removeAlert / setAlertEnabled / batch alert ops）在
 //     登录态下都会 push 到后端，失败静默（保持离线可用）
 //
 // 数据结构：
@@ -197,6 +197,33 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     }
   }
 
+  function setAlertsEnabled(code, alertIds, enabled) {
+    const it = get(code)
+    if (!it) return 0
+    const ids = new Set(alertIds)
+    let changed = 0
+    for (const alert of it.alerts || []) {
+      if (!ids.has(alert.id)) continue
+      if ((alert.enabled !== false) !== enabled) {
+        alert.enabled = enabled
+        changed += 1
+      }
+    }
+    if (changed) _pushByCode(code)
+    return changed
+  }
+
+  function removeAlerts(code, alertIds) {
+    const it = get(code)
+    if (!it) return 0
+    const ids = new Set(alertIds)
+    const before = it.alerts?.length || 0
+    it.alerts = (it.alerts || []).filter((alert) => !ids.has(alert.id))
+    const removed = before - it.alerts.length
+    if (removed) _pushByCode(code)
+    return removed
+  }
+
   function markTriggered(code, alertId) {
     const it = get(code)
     if (!it) return
@@ -288,6 +315,8 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     addAlert,
     removeAlert,
     setAlertEnabled,
+    setAlertsEnabled,
+    removeAlerts,
     markTriggered,
     evaluateAlerts,
     syncFromServer,

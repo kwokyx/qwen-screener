@@ -33,6 +33,7 @@ const loading = ref(false)
 const errorMsg = ref('')
 const snapshots = ref({})
 const selectedRowKeys = ref([])
+const selectedAlertRowKeys = ref([])
 const sortBy = ref('addedAt')
 const sortDesc = ref(true)
 let loadSeq = 0
@@ -127,7 +128,7 @@ const sectorAlloc = computed(() => {
 const allAlerts = computed(() => {
   const out = []
   for (const r of rows.value) {
-    for (const a of r.alerts) out.push({ ...a, code: r.code, name: r.name })
+    for (const a of r.alerts) out.push({ ...a, rowKey: `${r.code}:${a.id}`, code: r.code, name: r.name })
   }
   return out
 })
@@ -204,6 +205,10 @@ const selectedPausedAlertCount = computed(() => selectedRows.value.reduce(
   (sum, row) => sum + (row.alerts || []).filter((alert) => alert.enabled === false).length,
   0,
 ))
+const selectedAlertKeySet = computed(() => new Set(selectedAlertRowKeys.value))
+const checkedAlertRows = computed(() => allAlerts.value.filter((alert) => selectedAlertKeySet.value.has(alert.rowKey)))
+const checkedEnabledAlertCount = computed(() => checkedAlertRows.value.filter((alert) => alert.enabled !== false).length)
+const checkedPausedAlertCount = computed(() => checkedAlertRows.value.filter((alert) => alert.enabled === false).length)
 
 function syncSelectedRows() {
   const visibleCodes = new Set(rows.value.map((row) => row.code))
@@ -214,11 +219,21 @@ function handleSelectedRowKeys(keys) {
   selectedRowKeys.value = keys
 }
 
+function syncSelectedAlerts() {
+  const visibleKeys = new Set(allAlerts.value.map((alert) => alert.rowKey))
+  selectedAlertRowKeys.value = selectedAlertRowKeys.value.filter((key) => visibleKeys.has(key))
+}
+
+function handleSelectedAlertRowKeys(keys) {
+  selectedAlertRowKeys.value = keys
+}
+
 function removeSelectedRows() {
   const rowsToRemove = [...selectedRows.value]
   if (!rowsToRemove.length) return
   rowsToRemove.forEach((row) => wl.remove(row.code))
   selectedRowKeys.value = []
+  selectedAlertRowKeys.value = []
   toast.success(`已移出自选 ${rowsToRemove.length} 只`)
 }
 
@@ -248,7 +263,38 @@ function clearSelectedAlerts() {
   else toast.info('已选股票没有预警规则')
 }
 
+function groupCheckedAlertsByCode() {
+  const grouped = new Map()
+  for (const alert of checkedAlertRows.value) {
+    if (!grouped.has(alert.code)) grouped.set(alert.code, [])
+    grouped.get(alert.code).push(alert.id)
+  }
+  return grouped
+}
+
+function setCheckedAlertsEnabled(enabled) {
+  const grouped = groupCheckedAlertsByCode()
+  let changed = 0
+  for (const [code, ids] of grouped.entries()) {
+    changed += wl.setAlertsEnabled(code, ids, enabled)
+  }
+  if (changed) toast.success(`已${enabled ? '启用' : '暂停'}预警 ${changed} 条`)
+  else toast.info(enabled ? '已选预警都处于启用状态' : '已选预警都处于暂停状态')
+}
+
+function removeCheckedAlerts() {
+  const grouped = groupCheckedAlertsByCode()
+  let removed = 0
+  for (const [code, ids] of grouped.entries()) {
+    removed += wl.removeAlerts(code, ids)
+  }
+  selectedAlertRowKeys.value = []
+  if (removed) toast.success(`已删除预警 ${removed} 条`)
+  else toast.info('没有可删除的预警规则')
+}
+
 watch(rows, syncSelectedRows)
+watch(allAlerts, syncSelectedAlerts)
 
 const fmtPE = (v) => v == null ? '—' : Number(v) > 0 ? Number(v).toFixed(1) : '亏损'
 const fmtROE = (v) => v == null ? '—' : `${v.toFixed(1)}%`
@@ -367,8 +413,14 @@ const watchColumns = computed(() => [
 
 const alertColumns = computed(() => [
   {
+    type: 'selection',
+    key: 'selection',
+    width: 42,
+  },
+  {
     title: '股票',
     key: 'name',
+    width: 104,
     render(row) {
       return h('div', [
         h('div', { class: 'stock-name' }, row.name),
@@ -376,12 +428,12 @@ const alertColumns = computed(() => [
       ])
     },
   },
-  { title: '规则', key: 'rule', render: row => h('span', { class: 'muted' }, alertText(row)) },
+  { title: '规则', key: 'rule', minWidth: 132, render: row => h('span', { class: 'muted' }, alertText(row)) },
   {
     title: '状态',
     key: 'enabled',
     align: 'right',
-    width: 112,
+    width: 92,
     render(row) {
       const enabled = row.enabled !== false
       return h('div', {
@@ -556,15 +608,50 @@ const rowProps = (row) => ({
           <template #header-extra>
             <NTag size="small" round :bordered="false">{{ allAlerts.length }} 条</NTag>
           </template>
+          <div v-if="checkedAlertRows.length" class="batch-toolbar alert-batch-toolbar">
+            <div class="batch-summary">
+              已选 <strong>{{ checkedAlertRows.length }}</strong> 条
+            </div>
+            <NSpace size="small" :wrap="true">
+              <NButton
+                size="small"
+                secondary
+                :disabled="!checkedPausedAlertCount"
+                @click="setCheckedAlertsEnabled(true)"
+              >
+                启用
+              </NButton>
+              <NButton
+                size="small"
+                secondary
+                :disabled="!checkedEnabledAlertCount"
+                @click="setCheckedAlertsEnabled(false)"
+              >
+                暂停
+              </NButton>
+              <NPopconfirm @positive-click="removeCheckedAlerts">
+                <template #trigger>
+                  <NButton size="small" secondary type="error">
+                    删除
+                  </NButton>
+                </template>
+                删除已选的 {{ checkedAlertRows.length }} 条预警规则？
+              </NPopconfirm>
+            </NSpace>
+          </div>
           <NDataTable
             v-if="allAlerts.length"
             :columns="alertColumns"
             :data="allAlerts"
+            :row-key="(row) => row.rowKey"
+            :checked-row-keys="selectedAlertRowKeys"
+            :scroll-x="370"
             :bordered="false"
             :single-line="false"
             :row-props="rowProps"
             :pagination="alertPagination"
             size="small"
+            @update:checked-row-keys="handleSelectedAlertRowKeys"
           />
           <NEmpty v-else description="暂无告警规则" class="empty-panel">
             <template #extra>
@@ -743,6 +830,12 @@ const rowProps = (row) => ({
   color: #111111;
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 800;
+}
+.alert-batch-toolbar {
+  align-items: flex-start;
+  flex-direction: column;
+  margin-top: -2px;
+  padding: 8px;
 }
 .portfolio-page :deep(.stock-cell) {
   display: flex;
