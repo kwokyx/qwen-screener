@@ -272,30 +272,47 @@ const total = ref(0)
 const tradeDate = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
+const selectedRowKeys = ref([])
 let loadRequestId = 0
 
-const pageWatchCandidates = computed(() => items.value.filter((s) => s?.code && !wl.has(s.code)))
-const batchWatchLabel = computed(() => (
-  pageWatchCandidates.value.length
-    ? `本页加入自选 ${pageWatchCandidates.value.length}`
-    : '本页已加入'
-))
+const selectedKeySet = computed(() => new Set(selectedRowKeys.value))
+const selectedRows = computed(() => items.value.filter((s) => s?.code && selectedKeySet.value.has(s.code)))
+const selectedWatchCandidates = computed(() => selectedRows.value.filter((s) => s?.code && !wl.has(s.code)))
+const selectedWatchLabel = computed(() => {
+  if (!selectedRows.value.length) return '选择后加入自选'
+  if (!selectedWatchCandidates.value.length) return '已选已加入'
+  return `加入已选 ${selectedWatchCandidates.value.length}`
+})
 
-function addCurrentPageToWatchlist() {
+function syncSelectedRows() {
+  const visibleCodes = new Set(items.value.map((s) => s?.code).filter(Boolean))
+  selectedRowKeys.value = selectedRowKeys.value.filter((code) => visibleCodes.has(code) && !wl.has(code))
+}
+
+function handleSelectedRowKeys(keys) {
+  selectedRowKeys.value = keys
+}
+
+function addSelectedToWatchlist() {
   if (!auth.token) {
     toast.info('登录后可以保存自选股')
     router.push({ name: 'login', query: { redirect: route.fullPath } })
     return
   }
-  const candidates = pageWatchCandidates.value
+  if (!selectedRows.value.length) {
+    toast.info('先勾选要加入自选的股票')
+    return
+  }
+  const candidates = selectedWatchCandidates.value
   if (!candidates.length) {
-    toast.info('当前页股票已在自选中')
+    toast.info('已选股票已在自选中')
     return
   }
   candidates.forEach((s) => {
     wl.add({ code: s.code, name: s.name, sector: s.industry, refPrice: s.close })
   })
   toast.success(`已加入自选 ${candidates.length} 只`)
+  syncSelectedRows()
 }
 
 const hasRunnableFilter = computed(() => {
@@ -307,7 +324,11 @@ const hasRunnableFilter = computed(() => {
 })
 
 const { load: loadResultKlines, get: resultSpark } = useKlineCache(30)
-watch(items, () => loadResultKlines(items.value.map((s) => s.code)))
+watch(items, () => {
+  loadResultKlines(items.value.map((s) => s.code))
+  syncSelectedRows()
+})
+watch(() => wl.items.map((s) => s.code).join('|'), syncSelectedRows)
 
 const pageCoverage = computed(() => summarizeQuality(items.value, screeningQualityFields))
 const weakCoverageText = computed(() => {
@@ -487,6 +508,12 @@ function rightMonoCell(text, extra = {}) {
 }
 
 const columns = computed(() => [
+  {
+    type: 'selection',
+    key: 'selection',
+    width: 42,
+    disabled: (row) => wl.has(row.code),
+  },
   {
     title: '#',
     key: 'index',
@@ -810,6 +837,10 @@ function gotoDetail(code) {
   router.push(`/detail/${code}`)
 }
 
+function isInteractiveTarget(event) {
+  return Boolean(event?.target?.closest?.('button, a, input, .n-checkbox, .n-base-selection, .n-pagination'))
+}
+
 function backToAgentChat() {
   const sessionId = agentContext.value?.session_id
   const target = sessionId
@@ -821,7 +852,10 @@ function backToAgentChat() {
 function rowProps(row) {
   return {
     style: 'cursor: pointer;',
-    onClick: () => gotoDetail(row.code),
+    onClick: (event) => {
+      if (isInteractiveTarget(event)) return
+      gotoDetail(row.code)
+    },
   }
 }
 
@@ -868,10 +902,10 @@ watch(
             v-if="hasRunnableFilter && items.length"
             size="small"
             secondary
-            :disabled="loading || !pageWatchCandidates.length"
-            @click="addCurrentPageToWatchlist"
+            :disabled="loading || !selectedWatchCandidates.length"
+            @click="addSelectedToWatchlist"
           >
-            {{ batchWatchLabel }}
+            {{ selectedWatchLabel }}
           </NButton>
           <NButton
             v-if="filterMode === 'agent'"
@@ -970,13 +1004,15 @@ watch(
           :columns="columns"
           :data="items"
           :row-key="(row) => row.code"
+          :checked-row-keys="selectedRowKeys"
           :row-props="rowProps"
           :pagination="false"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1440"
+          :scroll-x="1482"
           size="small"
           remote
+          @update:checked-row-keys="handleSelectedRowKeys"
           @update:sorter="handleSorterChange"
         >
           <template #empty>

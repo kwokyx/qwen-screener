@@ -49,6 +49,7 @@ const structuredSortBy = ref('market_cap')
 const structuredSortDesc = ref(true)
 const workspaceMode = ref('structured')
 const storageReady = ref(false)
+const selectedRowKeys = ref([])
 const industryOptions = ref([])
 const industryLoading = ref(false)
 const STATE_STORAGE_KEY = 'qwen-stock:strategy-page-state:v1'
@@ -65,12 +66,14 @@ const rows = computed(() => {
   }
   return result.value?.items || []
 })
-const resultWatchCandidates = computed(() => rows.value.filter((item) => item?.code && !wl.has(item.code)))
-const batchWatchLabel = computed(() => (
-  resultWatchCandidates.value.length
-    ? `结果加入自选 ${resultWatchCandidates.value.length}`
-    : '结果已加入'
-))
+const selectedKeySet = computed(() => new Set(selectedRowKeys.value))
+const selectedRows = computed(() => rows.value.filter((item) => item?.code && selectedKeySet.value.has(item.code)))
+const selectedWatchCandidates = computed(() => selectedRows.value.filter((item) => item?.code && !wl.has(item.code)))
+const batchWatchLabel = computed(() => {
+  if (!selectedRows.value.length) return '选择后加入自选'
+  if (!selectedWatchCandidates.value.length) return '已选已加入'
+  return `加入已选 ${selectedWatchCandidates.value.length}`
+})
 const displayTotal = computed(() => structuredResult.value?.total ?? result.value?.total ?? 0)
 const displayTradeDate = computed(() => structuredResult.value?.items?.[0]?.trade_date
   || structuredResult.value?.items?.[0]?.trade_date
@@ -401,15 +404,28 @@ function mapScreenRows(items, labels) {
   })
 }
 
-function addResultRowsToWatchlist() {
+function syncSelectedRows() {
+  const visibleCodes = new Set(rows.value.map((item) => item?.code).filter(Boolean))
+  selectedRowKeys.value = selectedRowKeys.value.filter((code) => visibleCodes.has(code) && !wl.has(code))
+}
+
+function handleSelectedRowKeys(keys) {
+  selectedRowKeys.value = keys
+}
+
+function addSelectedRowsToWatchlist() {
   if (!auth.token) {
     toast.info('登录后可以保存自选股')
     router.push({ name: 'login', query: { redirect: route.fullPath } })
     return
   }
-  const candidates = resultWatchCandidates.value
+  if (!selectedRows.value.length) {
+    toast.info('先勾选要加入自选的股票')
+    return
+  }
+  const candidates = selectedWatchCandidates.value
   if (!candidates.length) {
-    toast.info('当前结果已在自选中')
+    toast.info('已选股票已在自选中')
     return
   }
   candidates.forEach((item) => {
@@ -421,9 +437,16 @@ function addResultRowsToWatchlist() {
     })
   })
   toast.success(`已加入自选 ${candidates.length} 只`)
+  syncSelectedRows()
 }
 
 const columns = [
+  {
+    type: 'selection',
+    key: 'selection',
+    width: 42,
+    disabled: (row) => wl.has(row.code),
+  },
   {
     title: '股票',
     key: 'stock',
@@ -673,6 +696,9 @@ watch([
   result,
   structuredResult,
 ], persistState, { deep: true })
+
+watch(rows, syncSelectedRows)
+watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
 </script>
 
 <template>
@@ -887,8 +913,8 @@ watch([
                   v-if="hasResult && rows.length"
                   size="small"
                   secondary
-                  :disabled="tableLoading || !resultWatchCandidates.length"
-                  @click="addResultRowsToWatchlist"
+                  :disabled="tableLoading || !selectedWatchCandidates.length"
+                  @click="addSelectedRowsToWatchlist"
                 >
                   {{ batchWatchLabel }}
                 </n-button>
@@ -903,10 +929,13 @@ watch([
             v-if="rows.length"
             :columns="displayColumns"
             :data="rows"
+            :row-key="(row) => row.code"
+            :checked-row-keys="selectedRowKeys"
             :loading="tableLoading"
             :pagination="{ pageSize: 20 }"
             size="small"
             striped
+            @update:checked-row-keys="handleSelectedRowKeys"
           />
           <n-empty
             v-else-if="!tableLoading"
