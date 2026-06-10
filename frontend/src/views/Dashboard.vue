@@ -333,7 +333,7 @@ onMounted(loadAll)
       </NAlert>
 
       <NGrid :cols="24" :x-gap="20" :y-gap="20" responsive="screen" class="main-grid">
-        <NGi :span="16">
+        <NGi :span="16" class="main-grid-item">
           <NCard class="terminal-card table-card" :bordered="false">
             <template #header>
               <div class="card-heading">
@@ -384,7 +384,7 @@ onMounted(loadAll)
           </NCard>
         </NGi>
 
-        <NGi :span="8">
+        <NGi :span="8" class="main-grid-item">
           <NCard class="terminal-card sector-card" :bordered="false">
             <template #header>
               <div>
@@ -781,17 +781,37 @@ onMounted(loadAll)
 }
 
 .main-grid {
-  align-items: start;
+  align-items: stretch;
+  --dashboard-main-card-height: 718px;
+}
+
+.main-grid-item {
+  display: flex;
+  min-width: 0;
 }
 
 .table-card,
 .sector-card {
+  width: 100%;
+  height: var(--dashboard-main-card-height);
   overflow: hidden;
+}
+
+.sector-card {
+  display: flex;
+  flex-direction: column;
 }
 
 .table-card :deep(.n-card__content),
 .sector-card :deep(.n-card__content) {
   padding-top: 4px;
+}
+
+.sector-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .table-card :deep(.n-data-table-th),
@@ -830,7 +850,10 @@ onMounted(loadAll)
 }
 
 .sector-rank-scroll {
-  max-height: 560px;
+  flex: 1 1 auto;
+  height: 624px;
+  max-height: 624px;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -974,6 +997,10 @@ onMounted(loadAll)
     grid-column: span 24 / span 24 !important;
   }
 
+  .main-grid-item {
+    display: block;
+  }
+
   .main-grid :deep(.n-gi) {
     width: 100% !important;
     max-width: 100% !important;
@@ -985,7 +1012,16 @@ onMounted(loadAll)
   .sector-card {
     width: min(100%, calc(100vw - 24px));
     max-width: 100%;
+    height: auto;
     min-width: 0;
+  }
+
+  .sector-card {
+    display: block;
+  }
+
+  .sector-card :deep(.n-card__content) {
+    display: block;
   }
 
   .table-card :deep(.n-card__content),
@@ -1008,6 +1044,7 @@ onMounted(loadAll)
   }
 
   .sector-rank-scroll {
+    height: auto;
     max-height: none;
     overflow-y: visible;
     padding-right: 0;
