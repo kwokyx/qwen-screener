@@ -9,6 +9,7 @@ import {
   NEmpty,
   NGi,
   NGrid,
+  NPopconfirm,
   NProgress,
   NSpace,
   NSwitch,
@@ -30,6 +31,7 @@ const wl = useWatchlistStore()
 const loading = ref(false)
 const errorMsg = ref('')
 const snapshots = ref({})
+const selectedRowKeys = ref([])
 let loadSeq = 0
 const watchPagination = {
   pageSize: 10,
@@ -127,6 +129,64 @@ const allAlerts = computed(() => {
   return out
 })
 
+const selectedKeySet = computed(() => new Set(selectedRowKeys.value))
+const selectedRows = computed(() => rows.value.filter((row) => selectedKeySet.value.has(row.code)))
+const selectedAlertRows = computed(() => selectedRows.value.filter((row) => row.alerts?.length))
+const selectedAlertCount = computed(() => selectedRows.value.reduce((sum, row) => sum + (row.alerts?.length || 0), 0))
+const selectedEnabledAlertCount = computed(() => selectedRows.value.reduce(
+  (sum, row) => sum + (row.alerts || []).filter((alert) => alert.enabled !== false).length,
+  0,
+))
+const selectedPausedAlertCount = computed(() => selectedRows.value.reduce(
+  (sum, row) => sum + (row.alerts || []).filter((alert) => alert.enabled === false).length,
+  0,
+))
+
+function syncSelectedRows() {
+  const visibleCodes = new Set(rows.value.map((row) => row.code))
+  selectedRowKeys.value = selectedRowKeys.value.filter((code) => visibleCodes.has(code))
+}
+
+function handleSelectedRowKeys(keys) {
+  selectedRowKeys.value = keys
+}
+
+function removeSelectedRows() {
+  const rowsToRemove = [...selectedRows.value]
+  if (!rowsToRemove.length) return
+  rowsToRemove.forEach((row) => wl.remove(row.code))
+  selectedRowKeys.value = []
+  toast.success(`已移出自选 ${rowsToRemove.length} 只`)
+}
+
+function setSelectedAlertsEnabled(enabled) {
+  let changed = 0
+  selectedRows.value.forEach((row) => {
+    ;(row.alerts || []).forEach((alert) => {
+      if ((alert.enabled !== false) !== enabled) {
+        wl.setAlertEnabled(row.code, alert.id, enabled)
+        changed += 1
+      }
+    })
+  })
+  if (changed) toast.success(`已${enabled ? '启用' : '暂停'}预警 ${changed} 条`)
+  else toast.info(enabled ? '已选股票没有暂停中的预警' : '已选股票没有启用中的预警')
+}
+
+function clearSelectedAlerts() {
+  let removed = 0
+  selectedRows.value.forEach((row) => {
+    ;[...(row.alerts || [])].forEach((alert) => {
+      wl.removeAlert(row.code, alert.id)
+      removed += 1
+    })
+  })
+  if (removed) toast.success(`已清空预警 ${removed} 条`)
+  else toast.info('已选股票没有预警规则')
+}
+
+watch(rows, syncSelectedRows)
+
 const fmtPE = (v) => v == null ? '—' : Number(v) > 0 ? Number(v).toFixed(1) : '亏损'
 const fmtROE = (v) => v == null ? '—' : `${v.toFixed(1)}%`
 const fmtNum = (v, digits = 2) => v == null ? '—' : Number(v).toFixed(digits)
@@ -164,6 +224,11 @@ function compactHeader(top, bottom) {
 }
 
 const watchColumns = computed(() => [
+  {
+    type: 'selection',
+    key: 'selection',
+    width: 42,
+  },
   {
     title: '名称/代码',
     key: 'name',
@@ -274,9 +339,16 @@ const alertColumns = computed(() => [
   },
 ])
 
+function isInteractiveTarget(event) {
+  return Boolean(event?.target?.closest?.('button, a, input, .n-checkbox, .n-switch, .n-popover, .n-base-selection'))
+}
+
 const rowProps = (row) => ({
   style: 'cursor: pointer;',
-  onClick: () => gotoDetail(row.code),
+  onClick: (event) => {
+    if (isInteractiveTarget(event)) return
+    gotoDetail(row.code)
+  },
 })
 </script>
 
@@ -341,18 +413,64 @@ const rowProps = (row) => ({
           <template #header-extra>
             <NButton size="small" secondary :loading="loading" @click="loadAll">刷新</NButton>
           </template>
+          <div v-if="selectedRows.length" class="batch-toolbar">
+            <div class="batch-summary">
+              已选 <strong>{{ selectedRows.length }}</strong> 只
+              <span v-if="selectedAlertCount">· 预警 {{ selectedAlertCount }} 条</span>
+            </div>
+            <NSpace size="small" :wrap="true">
+              <NButton
+                size="small"
+                secondary
+                :disabled="!selectedPausedAlertCount"
+                @click="setSelectedAlertsEnabled(true)"
+              >
+                启用预警
+              </NButton>
+              <NButton
+                size="small"
+                secondary
+                :disabled="!selectedEnabledAlertCount"
+                @click="setSelectedAlertsEnabled(false)"
+              >
+                暂停预警
+              </NButton>
+              <NPopconfirm
+                :disabled="!selectedAlertRows.length"
+                @positive-click="clearSelectedAlerts"
+              >
+                <template #trigger>
+                  <NButton size="small" secondary :disabled="!selectedAlertRows.length">
+                    清空预警
+                  </NButton>
+                </template>
+                清空已选股票的全部预警规则？
+              </NPopconfirm>
+              <NPopconfirm @positive-click="removeSelectedRows">
+                <template #trigger>
+                  <NButton size="small" secondary type="error">
+                    移出自选
+                  </NButton>
+                </template>
+                从自选中移出已选的 {{ selectedRows.length }} 只股票？
+              </NPopconfirm>
+            </NSpace>
+          </div>
           <NDataTable
             v-if="rows.length"
             class="watch-detail-table"
             :columns="watchColumns"
             :data="rows"
-            :scroll-x="766"
+            :row-key="(row) => row.code"
+            :checked-row-keys="selectedRowKeys"
+            :scroll-x="808"
             :loading="loading"
             :row-props="rowProps"
             :bordered="false"
             :single-line="false"
             :pagination="watchPagination"
             size="small"
+            @update:checked-row-keys="handleSelectedRowKeys"
           />
           <NEmpty v-else description="自选列表为空" class="empty-panel">
             <template #extra>
@@ -522,6 +640,26 @@ const rowProps = (row) => ({
   min-height: 0;
   overflow: auto;
 }
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: #ffffff;
+}
+.batch-summary {
+  color: #71717a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.batch-summary strong {
+  color: #111111;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 800;
+}
 .portfolio-page :deep(.stock-cell) {
   display: flex;
   align-items: center;
@@ -651,6 +789,10 @@ const rowProps = (row) => ({
   .portfolio-alert-card :deep(.n-card__content) {
     display: block;
     overflow: visible;
+  }
+  .batch-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .sector-strip {
     grid-template-columns: minmax(0, 1fr);
