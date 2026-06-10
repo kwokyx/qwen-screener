@@ -231,7 +231,6 @@ const watchColumns = computed(() => [
     key: 'alerts',
     align: 'right',
     width: 52,
-    fixed: 'right',
     render(row) {
       return h('div', { onClick: e => e.stopPropagation() }, [
         h(AlertRuleEditor, { code: row.code, compact: true }),
@@ -337,56 +336,52 @@ const rowProps = (row) => ({
         </NGi>
       </NGrid>
 
-      <NGrid :cols="3" :x-gap="12" :y-gap="12" responsive="screen" item-responsive class="portfolio-main-grid">
-        <NGi span="3 l:2" class="portfolio-main-cell">
-          <NCard :bordered="false" title="自选明细" class="panel-card portfolio-detail-card">
-            <template #header-extra>
-              <NButton size="small" secondary :loading="loading" @click="loadAll">刷新</NButton>
+      <div class="portfolio-main-layout">
+        <NCard :bordered="false" title="自选明细" class="panel-card portfolio-detail-card">
+          <template #header-extra>
+            <NButton size="small" secondary :loading="loading" @click="loadAll">刷新</NButton>
+          </template>
+          <NDataTable
+            v-if="rows.length"
+            class="watch-detail-table"
+            :columns="watchColumns"
+            :data="rows"
+            :scroll-x="766"
+            :loading="loading"
+            :row-props="rowProps"
+            :bordered="false"
+            :single-line="false"
+            :pagination="watchPagination"
+            size="small"
+          />
+          <NEmpty v-else description="自选列表为空" class="empty-panel">
+            <template #extra>
+              <span class="muted">在搜索、行情、详情页点星标加入</span>
             </template>
-            <NDataTable
-              v-if="rows.length"
-              class="watch-detail-table"
-              :columns="watchColumns"
-              :data="rows"
-              :scroll-x="766"
-              :loading="loading"
-              :row-props="rowProps"
-              :bordered="false"
-              :single-line="false"
-              :pagination="watchPagination"
-              size="small"
-            />
-            <NEmpty v-else description="自选列表为空" class="empty-panel">
-              <template #extra>
-                <span class="muted">在搜索、行情、详情页点星标加入</span>
-              </template>
-            </NEmpty>
-          </NCard>
-        </NGi>
+          </NEmpty>
+        </NCard>
 
-        <NGi span="3 l:1" class="portfolio-main-cell">
-          <NCard :bordered="false" title="已设告警" class="panel-card portfolio-alert-card">
-            <template #header-extra>
-              <NTag size="small" round :bordered="false">{{ allAlerts.length }} 条</NTag>
+        <NCard :bordered="false" title="已设告警" class="panel-card portfolio-alert-card">
+          <template #header-extra>
+            <NTag size="small" round :bordered="false">{{ allAlerts.length }} 条</NTag>
+          </template>
+          <NDataTable
+            v-if="allAlerts.length"
+            :columns="alertColumns"
+            :data="allAlerts"
+            :bordered="false"
+            :single-line="false"
+            :row-props="rowProps"
+            :pagination="alertPagination"
+            size="small"
+          />
+          <NEmpty v-else description="暂无告警规则" class="empty-panel">
+            <template #extra>
+              <span class="muted">在自选明细右侧设置价格 / 涨跌幅告警</span>
             </template>
-            <NDataTable
-              v-if="allAlerts.length"
-              :columns="alertColumns"
-              :data="allAlerts"
-              :bordered="false"
-              :single-line="false"
-              :row-props="rowProps"
-              :pagination="alertPagination"
-              size="small"
-            />
-            <NEmpty v-else description="暂无告警规则" class="empty-panel">
-              <template #extra>
-                <span class="muted">在自选明细右侧设置价格 / 涨跌幅告警</span>
-              </template>
-            </NEmpty>
-          </NCard>
-        </NGi>
-      </NGrid>
+          </NEmpty>
+        </NCard>
+      </div>
 
       <NCard :bordered="false" class="panel-card sector-panel">
         <template #header>
@@ -501,11 +496,11 @@ const rowProps = (row) => ({
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.portfolio-main-grid {
+.portfolio-main-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 340px);
+  gap: 12px;
   align-items: stretch;
-}
-.portfolio-main-cell {
-  display: flex;
   min-width: 0;
 }
 .portfolio-detail-card,
@@ -646,12 +641,6 @@ const rowProps = (row) => ({
   .portfolio-page {
     padding: 12px;
   }
-  .portfolio-main-grid {
-    align-items: start;
-  }
-  .portfolio-main-cell {
-    display: block;
-  }
   .portfolio-detail-card {
     height: auto;
   }
@@ -664,6 +653,11 @@ const rowProps = (row) => ({
     overflow: visible;
   }
   .sector-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 1120px) {
+  .portfolio-main-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 }
