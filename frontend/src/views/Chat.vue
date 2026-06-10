@@ -144,6 +144,16 @@ function strategyIdForTurn(turn) {
   return turn?.result?.strategy?.id || turn?.agentPlan?.strategy_id || null
 }
 
+const resultPreviewActionLabel = (turn) => strategyIdForTurn(turn) ? '完整列表' : '查看完整结果'
+
+async function handleResultPreviewAction(turn) {
+  if (strategyIdForTurn(turn)) {
+    await openFullResults(turn)
+    return
+  }
+  await openResultsPage(turn)
+}
+
 function conditionsForTurn(turn) {
   return turn?.result?.parsed_conditions || turn?.parsedConditions || parsedConditions.value || []
 }
@@ -801,8 +811,8 @@ const stageColor = (s) => ({
                             <div class="result-preview-title">{{ turnResultTitle(turn) }}</div>
                             <div class="result-preview-sub">命中 <strong>{{ turn.result.total }}</strong> 只 · 预览前 {{ turnResultItems(turn).length }} 只</div>
                           </div>
-                          <button class="result-preview-more" @click="openFullResults(turn)">
-                            完整列表 <Icon name="arrowRight" :size="12" />
+                          <button class="result-preview-more" @click="handleResultPreviewAction(turn)">
+                            {{ resultPreviewActionLabel(turn) }} <Icon name="arrowRight" :size="12" />
                           </button>
                         </div>
                         <div v-if="turn.result.items.length" class="result-preview-list">

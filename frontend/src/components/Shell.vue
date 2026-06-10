@@ -38,7 +38,6 @@ const menuOptions = [
     }, 'AI选股'),
     key: 'chat',
   },
-  { label: '结果', key: 'results' },
   { label: '自选', key: 'portfolio' },
   { label: '策略', key: 'strategy' },
 ]

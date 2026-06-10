@@ -24,7 +24,6 @@ const isLoggedIn = computed(() => !!auth.token)
 const tabs = [
   { id: 'dashboard', label: '行情' },
   { id: 'chat', label: '千问筛选' },
-  { id: 'results', label: '因子' },
   { id: 'detail', label: '详情' },
   { id: 'portfolio', label: '自选监控' },
   { id: 'strategy', label: '策略' },

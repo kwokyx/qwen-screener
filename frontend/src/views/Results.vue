@@ -892,8 +892,8 @@ watch(
         <NEmpty description="还没有筛选结果">
           <template #extra>
             <div class="empty-results-actions">
-              <span>先在智能筛选里输入条件，再进入这里查看完整列表、分页和排序。</span>
-              <NButton type="primary" size="small" @click="router.push('/chat')">去智能筛选</NButton>
+              <span>先从 AI选股或条件选股发起筛选，再在这里查看完整列表、排序和分页。</span>
+              <NButton type="primary" size="small" @click="router.push('/chat')">去 AI选股</NButton>
             </div>
           </template>
         </NEmpty>
