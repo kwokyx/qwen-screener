@@ -433,7 +433,7 @@ def get_industries(db: Session = Depends(get_db)):
 
 
 @router.get("/sectors", response_model=list[SectorQuote])
-def get_sectors(limit: int = Query(default=8, ge=1, le=30), db: Session = Depends(get_db)):
+def get_sectors(limit: int = Query(default=8, ge=1, le=100), db: Session = Depends(get_db)):
     """行业涨跌幅：流通市值加权平均，跨日 (close vs prev_close)。
 
     若 DB 只存了 1 个交易日（冷启动），退回 (close - open) / open 这个盘中口径，
