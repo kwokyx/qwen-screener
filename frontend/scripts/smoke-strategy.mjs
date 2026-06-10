@@ -224,6 +224,8 @@ async function seedAuth(cdp, loginData) {
   await evaluate(cdp, `(() => {
     localStorage.setItem('token', ${JSON.stringify(loginData.access_token)});
     localStorage.setItem('user', ${JSON.stringify(JSON.stringify(loginData.user))});
+    localStorage.removeItem('qwen-stock:saved-condition-strategies:v1');
+    sessionStorage.removeItem('qwen-stock:strategy-page-state:v1');
     return true;
   })()`)
 }
@@ -302,65 +304,24 @@ async function chooseVisibleOrVirtualSelectOption(cdp, text, label = text) {
   return result
 }
 
-async function verifyIndustryConditionDropdown(cdp) {
+async function verifyConditionBuilderDefault(cdp) {
   await waitForExpression(
     cdp,
-    'document.querySelectorAll(".condition-row").length > 0 && document.body.innerText.includes("条件选股")',
-    'structured condition builder',
+    'document.body.innerText.includes("条件选股") && document.querySelectorAll(".condition-row").length === 0 && document.body.innerText.includes("暂无条件")',
+    'empty structured condition builder',
   )
+  await clickByText(cdp, '添加条件', { selector: 'button' })
+  await waitForExpression(cdp, 'document.querySelectorAll(".condition-row").length === 1', 'first structured condition row')
   await waitForExpression(
     cdp,
-    `[...document.querySelectorAll('.condition-row .n-select')]
-      .some((el) => (el.innerText || el.textContent || '').includes('市盈率'))`,
+    'document.querySelector(".condition-row .n-select .n-base-selection")',
     'structured field metadata',
   )
-  const openedField = await evaluate(cdp, `(() => {
-    ${browserClickHelperSource()}
-    const row = document.querySelector('.condition-row');
-    const fieldSelect = row?.querySelector('.n-select .n-base-selection');
-    if (!fieldSelect) return { ok: false, reason: 'field select not found' };
-    return { ok: smokeClick(fieldSelect) };
-  })()`)
-  if (!openedField?.ok) fail('Could not open condition field selector.', openedField)
-  await chooseVisibleOrVirtualSelectOption(cdp, '行业', 'industry field option')
-
-  await waitForExpression(
-    cdp,
-    `(document.querySelector('.condition-row')?.innerText || '').includes('行业')`,
-    'industry field selected',
-  )
-  await waitForExpression(cdp, 'document.querySelector(".condition-row .condition-value-control")', 'industry value select')
-  const openedIndustry = await evaluate(cdp, `(() => {
-    ${browserClickHelperSource()}
-    const valueSelect = document.querySelector('.condition-row .condition-value-control .n-base-selection');
-    if (!valueSelect) return { ok: false, reason: 'industry select not found' };
-    return { ok: smokeClick(valueSelect), text: (valueSelect.innerText || valueSelect.textContent || '').trim() };
-  })()`)
-  if (!openedIndustry?.ok) fail('Could not open industry value selector.', openedIndustry)
-  await waitForExpression(
-    cdp,
-    `[...document.querySelectorAll('.n-base-select-option')]
-      .some((el) => (el.innerText || el.textContent || '').includes('半导体'))`,
-    'industry dropdown options',
-  )
-  const selected = await evaluate(cdp, `(() => {
-    ${browserClickHelperSource()}
-    const option = [...document.querySelectorAll('.n-base-select-option')]
-      .find((el) => (el.innerText || el.textContent || '').includes('半导体'));
-    if (!option) return { ok: false, reason: 'semiconductor industry option not found' };
-    return { ok: smokeClick(option) };
-  })()`)
-  if (!selected?.ok) {
-    fail('Industry condition did not use a selectable dropdown value.', selected)
-  }
-  await waitForExpression(
-    cdp,
-    `(document.querySelector('.condition-row .condition-value-control')?.innerText || '').includes('半导体')`,
-    'selected industry value',
-  )
-  const valueText = await evaluate(cdp, `(document.querySelector('.condition-row .condition-value-control')?.innerText || '').replace(/\\s+/g, ' ').trim()`)
-  selected.text = valueText
-  return selected
+  return evaluate(cdp, `(() => ({
+    ok: document.querySelectorAll('.condition-row').length === 1,
+    sawEmptyDefault: true,
+    rowText: (document.querySelector('.condition-row')?.innerText || '').replace(/\\s+/g, ' ').trim(),
+  }))()`)
 }
 
 async function strategySnapshot(cdp) {
@@ -474,7 +435,37 @@ async function run() {
 
     await setViewport(cdp, 1440, 900)
     await navigate(cdp, `${BASE_URL}/strategy`)
-    const industryDropdown = await verifyIndustryConditionDropdown(cdp)
+    const conditionBuilder = await verifyConditionBuilderDefault(cdp)
+    await clickByText(cdp, '保存为策略', { selector: 'button' })
+    await waitForExpression(cdp, 'document.querySelectorAll(".saved-condition-entry").length === 1', 'saved condition strategy card')
+    const savedConditionSelectClick = await evaluate(cdp, `(() => {
+      const entry = document.querySelector('.saved-condition-entry');
+      const card = entry?.querySelector('.saved-condition-card');
+      if (!card) return { ok: false, reason: 'saved condition card not found' };
+      card.scrollIntoView({ block: 'center', inline: 'nearest' });
+      card.click();
+      return { ok: true, text: card.textContent.trim() };
+    })()`)
+    if (!savedConditionSelectClick?.ok) fail('Saved condition strategy card is not clickable.', savedConditionSelectClick)
+    await waitForExpression(cdp, 'document.querySelector(".saved-condition-entry")?.getAttribute("data-active") === "true"', 'saved condition selected')
+    const savedConditionSelect = await evaluate(cdp, `(() => ({
+      ok: document.querySelector('.saved-condition-entry')?.getAttribute('data-active') === 'true',
+      rows: document.querySelectorAll('.n-data-table tbody tr').length,
+    }))()`)
+    if (!savedConditionSelect?.ok) fail('Saved condition strategy card was not selected.', savedConditionSelect)
+    if (savedConditionSelect.rows) fail('Saved condition strategy card ran before explicit execute.', savedConditionSelect)
+    await clickByText(cdp, '执行筛选', { selector: 'button' })
+    const savedConditionRun = { ok: true, text: '执行筛选' }
+    await waitForExpression(
+      cdp,
+      'document.querySelector(".n-data-table tbody tr") || document.body.innerText.includes("当前条件没有命中股票")',
+      'saved condition strategy result table or empty state',
+      60000,
+    )
+    const savedConditionSnapshot = await strategySnapshot(cdp)
+    if (!savedConditionSnapshot.rows && !savedConditionSnapshot.emptyText.includes('当前条件没有命中股票')) {
+      fail('Saved condition strategy did not finish with rows or a clear empty state.', savedConditionSnapshot)
+    }
     await clickByText(cdp, '策略选股', { selector: 'label,button' })
     await waitForExpression(
       cdp,
@@ -536,7 +527,9 @@ async function run() {
       status: 'ok',
       baseUrl: BASE_URL,
       desktop: {
-        industryDropdown,
+        conditionBuilder,
+        savedConditionRun,
+        savedConditionSnapshot,
         strategyCards: beforeRun.strategyCards,
         loadingSeen,
         heading: afterRun.heading,

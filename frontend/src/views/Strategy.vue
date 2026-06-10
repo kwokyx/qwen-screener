@@ -39,11 +39,8 @@ const bootstrapLoading = ref(true)
 const structuredLoading = ref(false)
 const errorMsg = ref('')
 const structuredError = ref('')
-let structuredConditionId = 2
-const structuredConditions = ref([
-  { id: 1, field: 'pe', op: 'lt', value: 20, value2: null },
-  { id: 2, field: 'roe', op: 'gt', value: 10, value2: null },
-])
+let structuredConditionId = 0
+const structuredConditions = ref([])
 const structuredLogic = ref('AND')
 const structuredSortBy = ref('market_cap')
 const structuredSortDesc = ref(true)
@@ -55,6 +52,7 @@ const industryLoading = ref(false)
 const STATE_STORAGE_KEY = 'qwen-stock:strategy-page-state:v1'
 const SAVED_FILTERS_KEY = 'qwen-stock:saved-condition-strategies:v1'
 const savedConditionStrategies = ref([])
+const activeSavedConditionId = ref('')
 const saveConditionName = ref('')
 const saveConditionError = ref('')
 
@@ -230,7 +228,6 @@ function addStructuredCondition() {
 }
 
 function removeStructuredCondition(id) {
-  if (structuredConditions.value.length <= 1) return
   structuredConditions.value = structuredConditions.value.filter((item) => item.id !== id)
 }
 
@@ -322,6 +319,10 @@ function persistSavedConditionStrategies() {
 
 function saveCurrentConditionsAsStrategy() {
   saveConditionError.value = ''
+  if (!structuredConditions.value.length) {
+    saveConditionError.value = '请先添加至少一个条件'
+    return
+  }
   let normalized
   try {
     normalized = structuredConditions.value.map(normalizeStructuredCondition)
@@ -346,8 +347,9 @@ function saveCurrentConditionsAsStrategy() {
   persistSavedConditionStrategies()
 }
 
-function applySavedConditionStrategy(item) {
-  if (!item?.conditions?.length || isBusy.value) return
+function applySavedConditionStrategy(item, options = {}) {
+  if (!item?.conditions?.length || isBusy.value) return false
+  const silent = options.silent === true
   const baseId = structuredConditionId
   workspaceMode.value = 'structured'
   structuredConditions.value = item.conditions.map((condition, index) => normalizeRestoredCondition({
@@ -362,11 +364,23 @@ function applySavedConditionStrategy(item) {
   structuredSortDesc.value = item.sortDesc !== false
   structuredResult.value = null
   result.value = null
+  selectedRowKeys.value = []
+  structuredError.value = ''
+  errorMsg.value = ''
+  activeSavedConditionId.value = item.id
   persistState()
+  if (!silent) toast.info(`已载入：${item.name}`)
+  return true
+}
+
+async function runSavedConditionStrategy(item) {
+  if (!applySavedConditionStrategy(item, { silent: true })) return
+  await runStructuredScreen()
 }
 
 function deleteSavedConditionStrategy(id) {
   savedConditionStrategies.value = savedConditionStrategies.value.filter((item) => item.id !== id)
+  if (activeSavedConditionId.value === id) activeSavedConditionId.value = ''
   persistSavedConditionStrategies()
 }
 
@@ -375,6 +389,24 @@ function savedConditionSummary(item) {
     .map((condition) => formatStructuredCondition(condition))
     .slice(0, 3)
   return labels.join(' / ') || '条件组合'
+}
+
+function savedConditionMeta(item) {
+  const logic = item.logic === 'OR' ? '满足任一' : '全部满足'
+  const count = item.conditions?.length || 0
+  const sortField = item.sortBy ? (fieldLabelMap.value[item.sortBy] || item.sortBy) : '默认排序'
+  const sortDirection = item.sortBy ? (item.sortDesc === false ? '升序' : '降序') : ''
+  return `${logic} · ${count} 个条件 · ${sortField}${sortDirection}`
+}
+
+function formatSavedTime(ts) {
+  const time = Number(ts)
+  if (!Number.isFinite(time)) return ''
+  const d = new Date(time)
+  if (Number.isNaN(d.getTime())) return ''
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${mm}/${dd}`
 }
 
 function mapScreenRows(items, labels) {
@@ -438,6 +470,20 @@ function addSelectedRowsToWatchlist() {
   })
   toast.success(`已加入自选 ${candidates.length} 只`)
   syncSelectedRows()
+}
+
+function setWorkspaceMode(mode) {
+  if (!['structured', 'strategy'].includes(mode) || mode === workspaceMode.value || isBusy.value) return
+  workspaceMode.value = mode
+  selectedRowKeys.value = []
+  errorMsg.value = ''
+  structuredError.value = ''
+  if (mode === 'strategy') {
+    structuredResult.value = null
+  } else {
+    result.value = null
+  }
+  persistState()
 }
 
 const columns = [
@@ -538,6 +584,10 @@ async function runSelection(id = activeId.value) {
 
 async function runStructuredScreen() {
   if (isBusy.value) return
+  if (!structuredConditions.value.length) {
+    structuredError.value = '请先添加至少一个条件'
+    return
+  }
   structuredLoading.value = true
   structuredError.value = ''
   errorMsg.value = ''
@@ -710,7 +760,7 @@ watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
 
       <n-card size="small" :bordered="false" class="workspace-card">
         <div class="workspace-bar">
-          <n-radio-group v-model:value="workspaceMode" size="small" :disabled="isBusy">
+          <n-radio-group :value="workspaceMode" size="small" :disabled="isBusy" @update:value="setWorkspaceMode">
             <n-radio-button value="structured">条件选股</n-radio-button>
             <n-radio-button value="strategy">策略选股</n-radio-button>
           </n-radio-group>
@@ -725,30 +775,13 @@ watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
                 <n-radio-button value="OR">满足任一</n-radio-button>
               </n-radio-group>
             </div>
-            <div class="structured-control sort-control">
-              <span>排序</span>
-              <n-select v-model:value="structuredSortBy" :options="structuredSortOptions" size="small" />
-              <n-button size="small" secondary @click="structuredSortDesc = !structuredSortDesc">
-                {{ structuredSortDesc ? '降序' : '升序' }}
-              </n-button>
-            </div>
             <n-button size="small" secondary :disabled="isBusy" @click="addStructuredCondition">添加条件</n-button>
           </div>
 
-          <div class="condition-save-bar">
-            <n-input
-              v-model:value="saveConditionName"
-              size="small"
-              maxlength="32"
-              placeholder="策略名，例如：低估值高ROE"
-              :disabled="isBusy"
-            />
-            <n-button size="small" secondary :disabled="isBusy" @click="saveCurrentConditionsAsStrategy">
-              保存为策略
-            </n-button>
-          </div>
-
           <div class="condition-builder">
+            <div v-if="!structuredConditions.length" class="condition-empty">
+              暂无条件
+            </div>
             <div v-for="(condition, index) in structuredConditions" :key="condition.id" class="condition-row">
               <span class="condition-index">{{ String(index + 1).padStart(2, '0') }}</span>
               <n-select
@@ -771,7 +804,6 @@ watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
                 v-model:value="condition.value"
                 :options="industrySelectOptions"
                 :multiple="condition.op === 'in'"
-                :max-tag-count="2"
                 filterable
                 clearable
                 size="small"
@@ -800,7 +832,7 @@ watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
                 size="small"
                 text
                 type="error"
-                :disabled="structuredConditions.length <= 1 || isBusy"
+                :disabled="isBusy"
                 @click="removeStructuredCondition(condition.id)"
               >
                 删除
@@ -808,55 +840,100 @@ watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
             </div>
           </div>
 
-          <div v-if="savedConditionStrategies.length" class="saved-condition-list">
+          <div class="condition-action-row">
+            <div class="condition-save-panel">
+              <div class="condition-save-title">
+                <strong>保存当前条件</strong>
+                <span>保存当前条件组合，后续可从下方快速载入和执行</span>
+              </div>
+              <div class="condition-save-bar">
+                <n-input
+                  v-model:value="saveConditionName"
+                  size="small"
+                  maxlength="32"
+                  placeholder="策略名，例如：低估值高ROE"
+                  :disabled="isBusy"
+                />
+                <n-button size="small" secondary :disabled="isBusy || !structuredConditions.length" @click="saveCurrentConditionsAsStrategy">
+                  保存为策略
+                </n-button>
+              </div>
+              <n-alert v-if="saveConditionError" type="warning" :bordered="false" class="notice compact">
+                {{ saveConditionError }}
+              </n-alert>
+            </div>
+
+            <div class="structured-foot">
+              <div>
+                <n-tag v-for="label in structuredConditionLabels" :key="label" size="small" :bordered="false">
+                  {{ label }}
+                </n-tag>
+              </div>
+              <n-button type="primary" size="small" strong :disabled="isBusy || !structuredConditions.length" :loading="structuredLoading" @click="runStructuredScreen">
+                执行筛选
+              </n-button>
+            </div>
+          </div>
+
+          <div class="saved-condition-list">
             <div class="saved-condition-head">
-              <span>已保存条件策略</span>
+              <div>
+                <strong>已保存条件策略</strong>
+              </div>
               <n-tag size="small" :bordered="false">{{ savedConditionStrategies.length }} 个</n-tag>
             </div>
-            <div class="saved-condition-grid">
+            <div v-if="savedConditionStrategies.length" class="saved-condition-grid">
               <div
                 v-for="item in savedConditionStrategies"
                 :key="item.id"
                 class="saved-condition-entry"
+                :data-active="item.id === activeSavedConditionId"
               >
                 <button
                   type="button"
-                  class="saved-condition-item"
+                  class="saved-condition-card"
                   :disabled="isBusy"
                   @click="applySavedConditionStrategy(item)"
                 >
-                  <strong>{{ item.name }}</strong>
+                  <div class="saved-condition-title-row">
+                    <strong>{{ item.name }}</strong>
+                    <span v-if="formatSavedTime(item.createdAt)">{{ formatSavedTime(item.createdAt) }}</span>
+                  </div>
                   <small>{{ savedConditionSummary(item) }}</small>
+                  <span class="saved-condition-meta">{{ savedConditionMeta(item) }}</span>
+                  <span class="saved-condition-hover-action">
+                    {{ item.id === activeSavedConditionId ? '已选中，点击执行按钮筛选' : '点击选中条件策略' }}
+                  </span>
                 </button>
-                <n-button
-                  class="saved-condition-delete"
-                  size="tiny"
-                  text
-                  type="error"
-                  :disabled="isBusy"
-                  @click.stop="deleteSavedConditionStrategy(item.id)"
-                >
-                  删除
-                </n-button>
+                <div class="saved-condition-actions">
+                  <n-button
+                    class="saved-condition-run"
+                    size="tiny"
+                    secondary
+                    type="primary"
+                    :disabled="isBusy"
+                    @click="runSavedConditionStrategy(item)"
+                  >
+                    执行
+                  </n-button>
+                  <n-button
+                    class="saved-condition-delete"
+                    size="tiny"
+                    text
+                    type="error"
+                    :disabled="isBusy"
+                    @click="deleteSavedConditionStrategy(item.id)"
+                  >
+                    删除
+                  </n-button>
+                </div>
               </div>
             </div>
+            <n-empty v-else size="small" description="还没有保存的条件策略" />
           </div>
 
-          <div class="structured-foot">
-            <div>
-              <n-tag v-for="label in structuredConditionLabels" :key="label" size="small" :bordered="false">
-                {{ label }}
-              </n-tag>
-            </div>
-            <n-button type="primary" size="small" strong :disabled="isBusy" :loading="structuredLoading" @click="runStructuredScreen">
-              执行筛选
-            </n-button>
-          </div>
           <n-alert v-if="structuredError" type="error" :bordered="false" class="notice compact">
             {{ structuredError }}
-          </n-alert>
-          <n-alert v-if="saveConditionError" type="warning" :bordered="false" class="notice compact">
-            {{ saveConditionError }}
           </n-alert>
         </div>
 
@@ -909,6 +986,16 @@ watch(() => wl.items.map((item) => item.code).join('|'), syncSelectedRows)
                 <span v-else-if="tableLoading">请稍候，正在计算</span>
               </div>
               <div class="table-head-actions">
+                <div v-if="workspaceMode === 'structured'" class="result-sort-control">
+                  <span>结果排序</span>
+                  <n-select v-model:value="structuredSortBy" :options="structuredSortOptions" size="small" :disabled="isBusy" />
+                  <n-button size="small" secondary :disabled="isBusy" @click="structuredSortDesc = !structuredSortDesc">
+                    {{ structuredSortDesc ? '降序' : '升序' }}
+                  </n-button>
+                  <n-button size="small" secondary :disabled="isBusy || !structuredConditions.length" :loading="structuredLoading" @click="runStructuredScreen">
+                    应用排序
+                  </n-button>
+                </div>
                 <n-button
                   v-if="hasResult && rows.length"
                   size="small"
@@ -1068,6 +1155,8 @@ h1 {
 
 .structured-toolbar {
   gap: 16px;
+  justify-content: space-between;
+  flex-wrap: wrap;
   padding: 10px 12px;
   border: 1px solid #EDEDED;
   border-radius: 8px;
@@ -1086,18 +1175,22 @@ h1 {
   margin-top: 10px;
 }
 
-.sort-control {
-  margin-left: auto;
-}
-
-.sort-control :deep(.n-select) {
-  width: 138px;
-}
-
 .condition-builder {
   display: grid;
   gap: 10px;
   margin-top: 14px;
+}
+
+.condition-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54px;
+  border: 1px dashed #D4D4D8;
+  border-radius: 8px;
+  background: #FAFAFA;
+  color: #71717A;
+  font-size: 12px;
 }
 
 .condition-row {
@@ -1121,6 +1214,43 @@ h1 {
   min-width: 0;
 }
 
+.condition-value-control :deep(.n-base-selection-tags) {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.condition-action-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  margin-top: 14px;
+}
+
+.condition-save-panel,
+.condition-action-row .structured-foot {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.condition-save-title {
+  display: grid;
+  gap: 3px;
+}
+
+.condition-save-title strong {
+  color: #111111;
+  font-size: 12px;
+}
+
+.condition-save-title span {
+  color: #71717A;
+  font-size: 11px;
+}
+
 .saved-condition-list {
   margin-top: 12px;
   padding: 10px 12px;
@@ -1140,6 +1270,22 @@ h1 {
   font-weight: 700;
 }
 
+.saved-condition-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.saved-condition-head strong {
+  color: #111111;
+  font-size: 12px;
+}
+
+.saved-condition-head span {
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .saved-condition-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1147,57 +1293,124 @@ h1 {
 }
 
 .saved-condition-entry {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
+  gap: 10px;
+  align-items: stretch;
   min-width: 0;
-}
-
-.saved-condition-item {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  padding: 8px 10px;
+  padding: 10px;
   border: 1px solid #EDEDED;
-  border-radius: 7px;
+  border-radius: 8px;
   background: #FAFAFA;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.saved-condition-entry:hover,
+.saved-condition-entry:focus-within,
+.saved-condition-entry[data-active="true"] {
+  border-color: #111111;
+  background: #FFFFFF;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.saved-condition-entry[data-active="true"] {
+  background: #FAFAFA;
+}
+
+.saved-condition-card {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
   color: #3F3F46;
-  cursor: pointer;
   text-align: left;
-  transition: border-color 0.16s ease, background 0.16s ease;
+  cursor: pointer;
 }
 
-.saved-condition-item:hover {
-  border-color: #B8B8B8;
-  background: #F5F5F5;
-}
-
-.saved-condition-item:disabled {
+.saved-condition-card:disabled {
   cursor: wait;
   opacity: 0.62;
 }
 
-.saved-condition-item strong,
-.saved-condition-item small {
+.saved-condition-card:focus-visible {
+  outline: 2px solid #99F6E4;
+  outline-offset: 3px;
+  border-radius: 5px;
+}
+
+.saved-condition-card strong,
+.saved-condition-card small,
+.saved-condition-meta,
+.saved-condition-hover-action {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.saved-condition-item strong {
+.saved-condition-card strong {
   color: #111111;
   font-size: 12px;
 }
 
-.saved-condition-item small {
+.saved-condition-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.saved-condition-title-row span {
+  flex: 0 0 auto;
+  color: #A1A1AA;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.saved-condition-card small,
+.saved-condition-meta {
   color: #71717A;
   font-size: 11px;
 }
 
+.saved-condition-hover-action {
+  color: #0F766E;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.saved-condition-entry:hover .saved-condition-hover-action,
+.saved-condition-entry:focus-within .saved-condition-hover-action {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.saved-condition-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.saved-condition-entry:hover .saved-condition-actions,
+.saved-condition-entry:focus-within .saved-condition-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .structured-foot {
-  margin-top: 14px;
+  margin-top: 0;
 }
 
 .structured-foot > div {
@@ -1313,15 +1526,18 @@ h1 {
 
 .table-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .table-head-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   flex-shrink: 0;
 }
 
@@ -1329,6 +1545,29 @@ h1 {
   margin-left: 10px;
   color: #71717A;
   font-size: 12px;
+}
+
+.result-sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid #EDEDED;
+  border-radius: 8px;
+  background: #FAFAFA;
+}
+
+.result-sort-control > span {
+  margin: 0 4px 0 2px;
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.result-sort-control :deep(.n-select) {
+  width: 138px;
 }
 
 .stock-cell {
@@ -1455,6 +1694,12 @@ h1 {
   .sk-pill {
     animation: none;
   }
+
+  .saved-condition-entry,
+  .saved-condition-actions,
+  .saved-condition-hover-action {
+    transition: none;
+  }
 }
 
 @media (max-width: 960px) {
@@ -1464,19 +1709,21 @@ h1 {
     flex-direction: column;
   }
 
-  .sort-control {
-    width: 100%;
-    margin-left: 0;
-  }
-
-  .sort-control :deep(.n-select) {
-    flex: 1;
-    width: auto;
-  }
-
+  .condition-action-row,
   .condition-save-bar,
   .saved-condition-grid {
     grid-template-columns: 1fr;
+  }
+
+  .result-sort-control {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .result-sort-control :deep(.n-select) {
+    flex: 1;
+    min-width: 132px;
+    width: auto;
   }
 
   .condition-row {
@@ -1490,6 +1737,14 @@ h1 {
     width: 100%;
   }
 
+}
+
+@media (hover: none) {
+  .saved-condition-actions,
+  .saved-condition-hover-action {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1510,6 +1765,10 @@ h1 {
   .table-head-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .result-sort-control {
+    justify-content: flex-start;
   }
 }
 </style>
