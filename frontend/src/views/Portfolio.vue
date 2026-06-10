@@ -158,11 +158,18 @@ function pctNode(value, size = 'sm') {
   return value == null ? mono('—', { color: Preview.textFaint }) : h(PctChip, { pct: value, size })
 }
 
+function compactHeader(top, bottom) {
+  return h('span', { class: 'table-header-stack' }, [
+    h('span', top),
+    h('span', bottom),
+  ])
+}
+
 const watchColumns = computed(() => [
   {
-    title: '名称 / 代码',
+    title: '名称/代码',
     key: 'name',
-    width: 144,
+    width: 130,
     render(row) {
       return h('div', { class: 'stock-cell' }, [
         h('div', { onClick: e => e.stopPropagation() }, [
@@ -182,7 +189,7 @@ const watchColumns = computed(() => [
     title: '现价',
     key: 'close',
     align: 'right',
-    width: 76,
+    width: 68,
     sorter: (a, b) => (a.close ?? -Infinity) - (b.close ?? -Infinity),
     render: row => mono(fmtNum(row.close), {
       color: row.changePct == null ? Preview.textMain : (row.changePct >= 0 ? Preview.positive : Preview.negative),
@@ -193,26 +200,26 @@ const watchColumns = computed(() => [
     title: '今日',
     key: 'changePct',
     align: 'right',
-    width: 70,
+    width: 68,
     sorter: (a, b) => (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity),
     render: row => pctNode(row.changePct),
   },
-  { title: '市盈率', key: 'pe', align: 'right', width: 74, render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
-  { title: '市净率', key: 'pb', align: 'right', width: 74, render: row => mono(row.pb == null ? '—' : row.pb.toFixed(2), { color: Preview.textMuted }) },
-  { title: '净资产收益率', key: 'roe', align: 'right', width: 104, render: row => mono(fmtROE(row.roe), { color: Preview.textMuted }) },
+  { title: '市盈率', key: 'pe', align: 'right', width: 60, render: row => mono(fmtPE(row.pe), { color: Preview.textMuted }) },
+  { title: '市净率', key: 'pb', align: 'right', width: 60, render: row => mono(row.pb == null ? '—' : row.pb.toFixed(2), { color: Preview.textMuted }) },
+  { title: () => compactHeader('净资产', '收益率'), key: 'roe', align: 'right', width: 78, render: row => mono(fmtROE(row.roe), { color: Preview.textMuted }) },
   {
     title: '行业',
     key: 'industry',
-    width: 76,
+    width: 72,
     render: row => row.industry
-      ? h(NTag, { size: 'small', bordered: false, round: true }, { default: () => row.industry })
+      ? h(NTag, { size: 'small', bordered: false, round: true, class: 'industry-tag' }, { default: () => row.industry })
       : mono('—', { color: Preview.textFaint }),
   },
   {
-    title: '加入价 / 至今',
+    title: () => compactHeader('加入价', '至今'),
     key: 'sinceCost',
     align: 'right',
-    width: 96,
+    width: 84,
     render(row) {
       return h('div', { class: 'cost-cell' }, [
         mono(row.refPrice == null ? '—' : row.refPrice.toFixed(2), { color: Preview.textMuted }),
@@ -220,7 +227,7 @@ const watchColumns = computed(() => [
       ])
     },
   },
-  { title: '加入日期', key: 'addedAt', align: 'right', width: 104, render: row => mono(fmtDate(row.addedAt), { color: Preview.textMuted }) },
+  { title: '加入日期', key: 'addedAt', align: 'right', width: 92, render: row => mono(fmtDate(row.addedAt), { color: Preview.textMuted }) },
   {
     title: '预警',
     key: 'alerts',
@@ -343,7 +350,7 @@ const rowProps = (row) => ({
               class="watch-detail-table"
               :columns="watchColumns"
               :data="rows"
-              :scroll-x="794"
+              :scroll-x="766"
               :loading="loading"
               :row-props="rowProps"
               :bordered="false"
@@ -502,13 +509,20 @@ const rowProps = (row) => ({
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   min-height: 42px;
 }
+.portfolio-page :deep(.stock-cell > div:last-child) {
+  min-width: 0;
+}
 .portfolio-page :deep(.stock-name) {
+  overflow: hidden;
   font-size: 13px;
   font-weight: 700;
   color: #111111;
   line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .portfolio-page :deep(.stock-code) {
   margin-top: 2px;
@@ -526,11 +540,26 @@ const rowProps = (row) => ({
   gap: 3px;
 }
 .watch-detail-table :deep(.n-data-table-th) {
-  padding: 10px;
+  padding: 9px 8px;
   white-space: nowrap;
 }
 .watch-detail-table :deep(.n-data-table-td) {
-  padding: 11px 10px;
+  padding: 10px 8px;
+  white-space: nowrap;
+}
+.watch-detail-table :deep(.table-header-stack) {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  line-height: 1.05;
+}
+.watch-detail-table :deep(.industry-tag) {
+  max-width: 68px;
+}
+.watch-detail-table :deep(.industry-tag .n-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .watch-detail-table :deep(.n-data-table-tr) {
