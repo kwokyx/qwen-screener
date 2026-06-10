@@ -69,3 +69,19 @@ def test_market_industries_returns_distinct_local_industries(db, seed_stocks):
     assert by_name["白酒"] == 1
     assert by_name["半导体"] == 1
     assert all(item["name"] for item in payload)
+
+
+def test_market_overview_returns_dashboard_payload(db, seed_stocks, monkeypatch):
+    market_api._local_market_cache.clear()
+    monkeypatch.setattr(market_api, "_real_indices", lambda: {})
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/market/overview?sector_limit=3&movers_limit=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"indices", "sectors", "movers", "ticker"}
+    assert payload["indices"]
+    assert len(payload["sectors"]) <= 3
+    assert set(payload["movers"]) == {"gainers", "losers", "by_amount", "by_turnover"}
+    assert payload["ticker"]["trade_date"]

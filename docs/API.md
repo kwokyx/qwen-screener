@@ -343,8 +343,34 @@ curl -N http://localhost:8000/api/v1/qwen/analysis/600519.SH/stream
 
 ## 5. 行情聚合 `/market`
 
+### GET `/market/overview?sector_limit=100&movers_limit=10`
+Dashboard 首屏聚合接口。一次返回指数、板块、异动榜和市场概况，减少 Railway /公网部署下的多接口往返。
+
+**响应** `200`
+```json
+{
+  "indices": [...],
+  "sectors": [...],
+  "movers": {
+    "gainers": [...],
+    "losers": [...],
+    "by_amount": [...],
+    "by_turnover": [...]
+  },
+  "ticker": {
+    "indices": [...],
+    "total_amount_yi": 8421,
+    "advancers": 3215,
+    "decliners": 2287,
+    "trade_date": "2026-06-10"
+  }
+}
+```
+
+---
+
 ### GET `/market/indices`
-4 大指数（上证、深证、创业板、科创50）的实时点位 + 30 日 sparkline。
+6 个宽基指数（上证、沪深300、中证500、中证1000、创业板、科创50）的真实点位 + 30 日 sparkline。
 
 **响应** `200`
 ```json

@@ -44,3 +44,11 @@ class MoversResponse(BaseModel):
     losers: list[MoverItem]    # 跌幅榜
     by_amount: list[MoverItem] # 成交额
     by_turnover: list[MoverItem]  # 换手率
+
+
+class MarketOverviewResponse(BaseModel):
+    """Dashboard 首屏聚合数据，减少 Railway 公网请求次数。"""
+    indices: list[IndexQuote]
+    sectors: list[SectorQuote]
+    movers: MoversResponse
+    ticker: dict

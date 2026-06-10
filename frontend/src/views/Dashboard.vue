@@ -79,7 +79,23 @@ async function loadAll() {
   loadingMovers.value = true
   loadingTicker.value = true
 
-  Promise.allSettled([
+  try {
+    const overview = await marketApi.overview({ sectorLimit: 100, moversLimit: 10 })
+    indices.value = overview.indices || []
+    sectors.value = overview.sectors || []
+    movers.value = overview.movers || null
+    tickerInfo.value = overview.ticker || null
+    loadingIndices.value = false
+    loadingSectors.value = false
+    loadingMovers.value = false
+    loadingTicker.value = false
+    return
+  } catch {
+    // The aggregate endpoint is an optimization. Keep the older split requests
+    // as a compatibility fallback during rolling Railway deploys.
+  }
+
+  const results = await Promise.allSettled([
     marketApi.indices()
       .then((d) => { indices.value = d })
       .catch((e) => {
@@ -110,10 +126,9 @@ async function loadAll() {
       tickerError.value = friendlyError(e)
       throw e
     }).finally(() => { loadingTicker.value = false }),
-  ]).then((rs) => {
-    const failed = rs.filter((r) => r.status === 'rejected')
-    if (failed.length === rs.length) errorMsg.value = friendlyError(failed[0].reason)
-  })
+  ])
+  const failed = results.filter((r) => r.status === 'rejected')
+  if (failed.length === results.length) errorMsg.value = friendlyError(failed[0].reason)
 }
 
 const moverTabs = [

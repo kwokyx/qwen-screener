@@ -22,6 +22,7 @@ from app.models.stock import StockBasic, StockDaily
 from app.schemas.market import (
     IndustryOption,
     IndexQuote,
+    MarketOverviewResponse,
     MoverItem,
     MoversResponse,
     SectorQuote,
@@ -641,6 +642,39 @@ def get_ticker(db: Session = Depends(get_db)):
     return payload
 
 
+@router.get("/overview", response_model=MarketOverviewResponse)
+def get_market_overview(
+    sector_limit: int = Query(default=100, ge=1, le=100),
+    movers_limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """Dashboard 首屏聚合接口。
+
+    Railway 上单个接口也有公网/TLS 往返开销，把指数、板块、异动和
+    ticker 合并成一次请求，避免首屏并发 4 个小接口。
+    """
+    dates = _covered_trade_dates(db, limit=2)
+    td = dates[0] if dates else None
+    prev_td = dates[1] if len(dates) > 1 else None
+    cache_key = ("overview", str(td), str(prev_td), sector_limit, movers_limit)
+    cached = _local_cache_get(cache_key)
+    if cached is not None:
+        return MarketOverviewResponse(**cached)
+
+    indices = get_indices(db)
+    sectors = get_sectors(sector_limit, db)
+    movers = get_movers(movers_limit, db)
+    ticker = get_ticker(db)
+    payload = {
+        "indices": [item.model_dump() for item in indices],
+        "sectors": [item.model_dump() for item in sectors],
+        "movers": movers.model_dump(),
+        "ticker": ticker,
+    }
+    _local_cache_set(cache_key, payload)
+    return MarketOverviewResponse(**payload)
+
+
 def warm_market_cache() -> None:
     """Precompute dashboard market aggregates after backend startup.
 
@@ -652,9 +686,10 @@ def warm_market_cache() -> None:
     db = SessionLocal()
     try:
         get_indices(db)
-        get_sectors(20, db)
+        get_sectors(100, db)
         get_movers(10, db)
         get_ticker(db)
+        get_market_overview(100, 10, db)
         logger.info("[MARKET] 本地行情概览缓存预热完成")
     except Exception as exc:
         logger.warning("[MARKET] 本地行情概览缓存预热失败: {}", str(exc)[:160])

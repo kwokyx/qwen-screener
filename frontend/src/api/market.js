@@ -7,6 +7,14 @@ export async function indices() {
   return data
 }
 
+export async function overview({ sectorLimit = 100, moversLimit = 10 } = {}) {
+  const { data } = await client.get('/market/overview', {
+    params: { sector_limit: sectorLimit, movers_limit: moversLimit },
+    timeout: MARKET_TIMEOUT_MS,
+  })
+  return data
+}
+
 export async function sectors(limit = 8) {
   const { data } = await client.get('/market/sectors', { params: { limit }, timeout: MARKET_TIMEOUT_MS })
   return data
