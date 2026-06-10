@@ -50,6 +50,8 @@ const sectorsDown = computed(() => [...sectors.value].filter((s) => s.change_pct
 const sectorRankLimit = 10
 const sectorsUpShown = computed(() => sectorsUp.value.slice(0, sectorRankLimit))
 const sectorsDownShown = computed(() => sectorsDown.value.slice(0, sectorRankLimit))
+const sectorAllOpen = ref(false)
+const sectorShownCount = computed(() => sectorsUpShown.value.length + sectorsDownShown.value.length)
 
 const marketStats = computed(() => {
   const t = tickerInfo.value
@@ -236,6 +238,15 @@ function sectorBarWidth(pct) {
   return `${Math.min(100, Math.max(10, Math.abs(Number(pct || 0)) * 10))}%`
 }
 
+function sectorQuery(name) {
+  return `${name} 板块基本面好的股票`
+}
+
+function openSectorQuery(name) {
+  sectorAllOpen.value = false
+  goToScreener(sectorQuery(name))
+}
+
 onMounted(loadAll)
 </script>
 
@@ -393,8 +404,15 @@ onMounted(loadAll)
             <template #header>
               <div>
                 <div class="card-title">板块涨跌</div>
-                <div class="card-subtitle">申万一级 · 点击让千问深挖</div>
+                <div class="card-subtitle">
+                  申万一级 · 显示 {{ sectorShownCount }} / {{ sectors.length || '—' }} · 点击让千问深挖
+                </div>
               </div>
+            </template>
+            <template #header-extra>
+              <NButton v-if="sectors.length" size="tiny" secondary @click="sectorAllOpen = true">
+                全部板块
+              </NButton>
             </template>
 
             <div v-if="loadingSectors && !sectors.length" class="sector-skeleton-grid">
@@ -423,7 +441,7 @@ onMounted(loadAll)
                       v-for="(s, n) in sectorsUpShown"
                       :key="'sector-up-' + s.name"
                       class="sector-rank-row is-up"
-                      @click="goToScreener(`${s.name} 板块基本面好的股票`)"
+                      @click="goToScreener(sectorQuery(s.name))"
                     >
                       <span class="sector-rank-num">{{ n + 1 }}</span>
                       <span class="sector-rank-main">
@@ -448,7 +466,7 @@ onMounted(loadAll)
                       v-for="(s, n) in sectorsDownShown"
                       :key="'sector-down-' + s.name"
                       class="sector-rank-row is-down"
-                      @click="goToScreener(`${s.name} 板块基本面好的股票`)"
+                      @click="goToScreener(sectorQuery(s.name))"
                     >
                       <span class="sector-rank-num">{{ n + 1 }}</span>
                       <span class="sector-rank-main">
@@ -467,6 +485,58 @@ onMounted(loadAll)
           </NCard>
         </NGi>
       </NGrid>
+
+      <Transition name="sector-modal-fade">
+        <div v-if="sectorAllOpen" class="sector-modal-overlay" @click.self="sectorAllOpen = false">
+          <section class="sector-modal" role="dialog" aria-modal="true" aria-label="全部板块涨跌">
+            <header class="sector-modal-head">
+              <div>
+                <p>全部板块</p>
+                <h3>板块涨跌</h3>
+                <span>强势 {{ sectorsUp.length }} 个 · 弱势 {{ sectorsDown.length }} 个 · 共 {{ sectors.length }} 个</span>
+              </div>
+              <NButton size="small" secondary @click="sectorAllOpen = false">关闭</NButton>
+            </header>
+            <div class="sector-modal-body">
+              <section class="sector-modal-group">
+                <div class="sector-modal-title">
+                  <span>强势板块</span>
+                  <span class="sector-count-pill is-up">{{ sectorsUp.length }}</span>
+                </div>
+                <button
+                  v-for="(s, n) in sectorsUp"
+                  :key="'all-sector-up-' + s.name"
+                  class="sector-modal-row is-up"
+                  @click="openSectorQuery(s.name)"
+                >
+                  <span class="sector-rank-num">{{ n + 1 }}</span>
+                  <span class="sector-rank-name">{{ s.name }}</span>
+                  <PctText :pct="s.change_pct" :size="12" />
+                </button>
+                <NEmpty v-if="!sectorsUp.length" size="small" description="无上涨板块" />
+              </section>
+
+              <section class="sector-modal-group">
+                <div class="sector-modal-title">
+                  <span>弱势板块</span>
+                  <span class="sector-count-pill is-down">{{ sectorsDown.length }}</span>
+                </div>
+                <button
+                  v-for="(s, n) in sectorsDown"
+                  :key="'all-sector-down-' + s.name"
+                  class="sector-modal-row is-down"
+                  @click="openSectorQuery(s.name)"
+                >
+                  <span class="sector-rank-num">{{ n + 1 }}</span>
+                  <span class="sector-rank-name">{{ s.name }}</span>
+                  <PctText :pct="s.change_pct" :size="12" />
+                </button>
+                <NEmpty v-if="!sectorsDown.length" size="small" description="无下跌板块" />
+              </section>
+            </div>
+          </section>
+        </div>
+      </Transition>
     </div>
   </Shell>
 </template>
@@ -955,6 +1025,120 @@ onMounted(loadAll)
   background: #16A35C;
 }
 
+.sector-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(17, 17, 17, 0.32);
+}
+
+.sector-modal {
+  width: min(920px, calc(100vw - 32px));
+  max-height: min(780px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: 10px;
+  background: #F7F7F7;
+  box-shadow: 0 24px 80px rgba(17, 17, 17, 0.22);
+}
+
+.sector-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid #E5E5E5;
+}
+
+.sector-modal-head p {
+  margin: 0 0 4px;
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sector-modal-head h3 {
+  margin: 0;
+  color: #111111;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.sector-modal-head span {
+  display: block;
+  margin-top: 4px;
+  color: #71717A;
+  font-size: 12px;
+}
+
+.sector-modal-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  overflow: auto;
+  padding: 16px 18px 20px;
+}
+
+.sector-modal-group {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.sector-modal-title {
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  background: #F7F7F7;
+  color: #3F3F46;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.sector-modal-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: #FFFFFF;
+  color: #111111;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sector-modal-row:hover {
+  border-color: #DADADA;
+  background: #FAFAFA;
+}
+
+.sector-modal-fade-enter-active,
+.sector-modal-fade-leave-active {
+  transition: opacity 160ms ease;
+}
+
+.sector-modal-fade-enter-from,
+.sector-modal-fade-leave-to {
+  opacity: 0;
+}
+
 @media (max-width: 960px) {
   .market-overview-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1022,6 +1206,10 @@ onMounted(loadAll)
   }
 
   .sector-rank-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sector-modal-body {
     grid-template-columns: minmax(0, 1fr);
   }
 
