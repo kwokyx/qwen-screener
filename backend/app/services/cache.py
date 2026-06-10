@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 
@@ -18,6 +19,18 @@ from app.config import settings
 
 _client = None
 _init_attempted = False
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parts = urlsplit(url)
+        if not parts.netloc:
+            return "<configured>"
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+        return urlunsplit((parts.scheme, f"{host}{port}", parts.path, "", ""))
+    except Exception:
+        return "<configured>"
 
 
 def _get_client():
@@ -36,7 +49,7 @@ def _get_client():
         c = redis.from_url(url, socket_connect_timeout=1.0, socket_timeout=1.0, decode_responses=True)
         c.ping()
         _client = c
-        logger.info("[CACHE] Redis 连接成功 ({})", url)
+        logger.info("[CACHE] Redis 连接成功 ({})", _redact_url(url))
     except Exception as e:
         logger.warning("[CACHE] Redis 不可达，缓存禁用：{}", str(e)[:120])
         _client = None

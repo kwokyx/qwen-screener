@@ -46,3 +46,4 @@ Thumbs.db
 # ---- 构建产物 / 临时 ----
 .cache/
 tmp/
+.superpowers/

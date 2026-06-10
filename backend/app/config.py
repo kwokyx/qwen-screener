@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api2.up.railway.app"
     openai_model: str = "gpt-5.4-mini"
     openai_reasoning: str = "high"
-    openai_responses_enabled: bool = True
+    openai_responses_enabled: bool = False
     agent_plan_timeout_seconds: float = 10.0
     agent_react_step_timeout_seconds: float = 18.0
 
