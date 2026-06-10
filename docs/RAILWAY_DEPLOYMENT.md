@@ -127,8 +127,8 @@ python -m scripts.sync_data dividend
 
 | 时间 | 任务 |
 |---|---|
-| 周一-周五 15:05 | 行情快刷 |
-| 周一-周五 15:30 | 全市场日 K |
+| 周一-周五 15:05 | 收盘后行情快刷；若服务重启错过窗口，启动时会检查并补偿 |
+| 周一-周五 15:30 | 全市场日 K 补偿 |
 | 周一-周五 16:00 | 价值面补充 |
 | 周一-周五 18:00 | 策略扫描和飞书推送 |
 | 周六 02:00 | 财务摘要 |
@@ -157,7 +157,7 @@ curl -s https://<frontend-domain>/api/v1/market/indices
 | `/chat` | AI 选股、普通对话、SSE 流式返回 |
 | `/results` | 条件筛选、批量加入自选 |
 | `/strategy` | 条件选股、策略选股 |
-| `/portfolio` | 自选、排序、批量编辑、预警启停 |
+| `/portfolio` | 自选、排序、批量编辑、预警批量启停/删除 |
 | `/detail/600036.SH` | 本地详情、K 线、千问解读 |
 
 如果 `/health/data` 显示 `fresh=false`，优先看 `sync_warnings` 和 `recommended_jobs`。不要手动把 `fresh` 改成 true，应重新运行对应同步任务。

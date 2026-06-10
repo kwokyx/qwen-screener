@@ -60,7 +60,7 @@ onMounted(load)
 
 <template>
   <n-layout-header bordered class="ticker-bar">
-    <!-- 左侧：4 大指数固定 -->
+    <!-- 左侧：6 个宽基指数固定 -->
     <div :style="{ display: 'flex', alignItems: 'center', gap: '20px', padding: '0 14px', flexShrink: 0, borderRight: `1px solid ${A2.borderHair}`, height: '100%' }">
       <div v-for="idx in indices" :key="idx.code" :style="{ display: 'flex', alignItems: 'center', gap: '5px' }">
         <n-tag size="tiny" :bordered="false">{{ idx.name }}</n-tag>

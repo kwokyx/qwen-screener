@@ -1,6 +1,6 @@
 # 实现状态与交接清单
 
-最后更新：2026-06-03 · 测试套件：**166/166 通过**
+最后更新：2026-06-11 · 测试套件：当前容器可收集 **324** 个 pytest 用例；最近定向验证 **42 passed**
 
 ---
 
@@ -28,12 +28,12 @@
 | NL 筛选（结构化 + 一次性 ReAct + SSE ReAct） | [`api/screener.py`](../backend/app/api/screener.py) | ✅ `test_screener.py` + `test_screener_stream.py`（含端到端） |
 | 千问 AI 客户端（FC + JSON + regex 三层降级 + 双后端切换 + 缓存） | [`services/qwen_client/`](../backend/app/services/qwen_client/) | ✅ `test_qwen_transport.py` + 手动端到端验证 |
 | 个股投资分析（一次 + SSE 流式） | [`api/qwen.py`](../backend/app/api/qwen.py) | ⚠️ 无单测，已手动验证 |
-| Agent 智能选股（Chat/Strategy 入口模型优先 bounded ReAct + 结构化筛选工具 + 策略选股工具） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` + `test_strategy_scoring.py` |
+| Agent AI 选股（Chat/Strategy 入口模型优先 bounded ReAct + 结构化筛选工具 + 策略选股工具） | [`services/agent_react.py`](../backend/app/services/agent_react.py) + [`services/strategy_selector.py`](../backend/app/services/strategy_selector.py) | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` + `test_strategy_scoring.py` |
 | 对话历史持久化（跨设备同步） | [`api/chat.py`](../backend/app/api/chat.py) | ✅ `test_chat_sessions.py` |
 | 通知中心（CRUD + 已读 / 全部已读） | [`api/notification.py`](../backend/app/api/notification.py) | ✅ `test_notifications.py` |
 | 数据同步（Baostock 优先，AKShare 少量兜底） | [`services/data_sync.py`](../backend/app/services/data_sync.py) | ✅ `test_data_sync_guard.py` + `test_dividend_sync.py` |
-| APScheduler 6 个定时任务 | [`services/scheduler.py`](../backend/app/services/scheduler.py) | ⚠️ 无单测，已观察到 cron 触发 |
-| Redis 缓存（千问解析 + 个股分析） | [`services/cache.py`](../backend/app/services/cache.py) | ✅ `test_cache.py`（含静默回退测试） |
+| APScheduler 9 个定时任务 | [`services/scheduler.py`](../backend/app/services/scheduler.py) | ✅ `test_scheduler.py` |
+| Redis 缓存（千问解析 + 个股分析 + 部分行情聚合） | [`services/cache.py`](../backend/app/services/cache.py) | ✅ `test_cache.py`（含静默回退测试） |
 | SQLite 冷备份（每 6h） | [`services/db_backup.py`](../backend/app/services/db_backup.py) | ⚠️ 无单测，文件已生成 |
 | 健康检查（AI / 数据 / 缓存 / 手动同步） | [`api/health.py`](../backend/app/api/health.py) | ✅ `test_health_api.py` |
 
@@ -42,12 +42,12 @@
 | 视图 | 文件 | 状态 |
 |---|---|---|
 | 登录 / 注册 | [`views/Login.vue`](../frontend/src/views/Login.vue) | ✅ |
-| 行情 Dashboard（4 指数 + 板块 + 涨跌榜） | [`views/Dashboard.vue`](../frontend/src/views/Dashboard.vue) | ✅ 全部真实数据 |
+| 行情 Dashboard（6 个宽基指数 + `/market/overview` + 板块 + 涨跌榜） | [`views/Dashboard.vue`](../frontend/src/views/Dashboard.vue) | ✅ `smoke:dashboard` |
 | Chat（NL 筛选 + SSE 三阶段流式 + 历史） | [`views/Chat.vue`](../frontend/src/views/Chat.vue) | ✅ |
 | Results（因子筛选 + 价值分排序） | [`views/Results.vue`](../frontend/src/views/Results.vue) | ✅ |
 | 个股详情（K 线 + 千问流式 + 同行业对比） | [`views/Detail.vue`](../frontend/src/views/Detail.vue) | ✅（有部分 UI 占位见 §3） |
-| Portfolio（自选 + 5 种预警 + 跨设备同步） | [`views/Portfolio.vue`](../frontend/src/views/Portfolio.vue) | ✅ |
-| 智能选股工作台（自然语言 Agent + 条件筛选 + 策略选股） | [`views/Strategy.vue`](../frontend/src/views/Strategy.vue) | ✅ |
+| Portfolio（自选 + 排序 + 批量编辑 + 5 种预警 + 跨设备同步） | [`views/Portfolio.vue`](../frontend/src/views/Portfolio.vue) | ✅ |
+| 策略工作台（条件筛选 + 保存条件策略 + 内置策略选股） | [`views/Strategy.vue`](../frontend/src/views/Strategy.vue) | ✅ `smoke:strategy` |
 
 ---
 
@@ -112,13 +112,13 @@ AKShare 没提供涨跌停限价数据，**该字段未展示**（代码里有�
 ```env
 AI_BACKEND=openai
 OPENAI_BASE_URL=https://opencode.ai/zen/go/v1
-OPENAI_MODEL=qwen3.6-plus
+OPENAI_MODEL=deepseek-v4-flash
 OPENAI_RESPONSES_ENABLED=false
 ```
 
-第三方网关或账号权限变化时，三选一：
-- 继续使用 OpenCode Go：确认套餐包含当前 Qwen 模型，并保持 `OPENAI_RESPONSES_ENABLED=false`
-- 若同一 OpenAI-compatible 网关里 `deepseek-v4-flash` 更稳定，可只改 `OPENAI_MODEL=deepseek-v4-flash`，provider/base URL 保持不变
+第三方网关或账号权限变化时，可按以下路径调整：
+- 继续使用 OpenCode Go：确认套餐包含当前模型，并保持 `OPENAI_RESPONSES_ENABLED=false`
+- 若同一 OpenAI-compatible 网关里 `deepseek-v4-flash` 更稳定，可只改 `OPENAI_MODEL=deepseek-v4-flash`，provider/base URL 保持不变。Railway 线上当前使用的是这个完整模型名，不是 `ds4flash` 缩写。
 - 改 `OPENAI_BASE_URL=https://api.openai.com/v1` + 真实 OpenAI Key + 账号可用模型
 - 切到 dashscope：`AI_BACKEND=dashscope` + `DASHSCOPE_API_KEY=your-dashscope-key`
 - 用自己的 OpenAI 兼容网关，相应填 URL + MODEL
@@ -169,7 +169,7 @@ docker 内强制覆盖为 `sqlite:////app/data/stock.db`（挂载卷），本地
 - [ ] 接 tushare 交易日历
 
 ### 优先级 P2（工程化补强）
-- [ ] 补单测：`test_market.py`, `test_backtest.py`, `test_qwen_stream.py`
+- [ ] 补单测：`test_backtest.py`, `test_qwen_stream.py`
 - [ ] 千问 prompt 版本化（A/B 对比命中率）
 - [ ] WebSocket 替代 alertEngine 轮询
 - [ ] refresh token + 续期
@@ -196,24 +196,24 @@ docker 内强制覆盖为 `sqlite:////app/data/stock.db`（挂载卷），本地
 | NL screener | — | ✅ `test_screener.py` | — |
 | qwen client | ✅ `test_qwen_transport.py` | — | 手动验证 |
 | qwen analysis | ❌ | ❌ | 手动验证 |
-| market | ❌ | ❌ | 手动验证 |
+| market | ✅ `test_market_api.py` | — | ✅ `smoke:dashboard` |
 | chat | ✅ `test_chat_sessions.py` | — | — |
 | notifications | ✅ `test_notifications.py` | — | — |
 | strategy selector / Agent | ✅ `test_strategy_scoring.py` | ✅ `test_strategy_agent.py` | 手动验证 |
 | data_sync | ✅ `test_data_sync_guard.py` | — | — |
-| scheduler | ❌ | ❌ | 观察 |
+| scheduler | ✅ `test_scheduler.py` | — | 观察 |
 | cache | ✅ `test_cache.py` | — | — |
 | db_backup | ❌ | ❌ | 文件已生成 |
 | health | ✅ `test_health_api.py` | — | 手动验证 |
 | watchlist | ✅ `test_watchlist_sync.py` | — | — |
 
-**全部 166 个测试用例通过**（2026-06-03 Docker 环境执行 `docker compose exec -T backend pytest`）。
+当前容器环境执行 `pytest --collect-only -q` 可收集到 324 个用例。最近一次与本次变更相关的定向验证为：`test_health_api.py`、`test_scheduler.py`、`test_market_api.py` 共 42 passed；前端 `npm run build` 与 `smoke:strategy` 通过。
 
 ---
 
 ## 7. 接手快速上手清单
 
-1. **跑测试** `docker compose exec -T backend pytest` → 应见 166 passed
+1. **跑测试** `docker compose exec -T backend pytest` → 当前应收集约 324 个用例
 2. **改 `.env`**：见 4.1，至少能调通一种 AI 后端
 3. **拉数据**：`python -m scripts.sync_data full` → Baostock 全 A 基础信息、日线、财务与分红
 4. **启动**：`uvicorn app.main:app --reload` + `cd frontend && npm run dev`

@@ -648,12 +648,13 @@ Strategy 工作台自然语言入口。该端点复用 bounded ReAct：除 unsup
   "latency_ms": 8349,
   "reason": null,
   "backend": "openai",
-  "model": "qwen3.6-plus",
+  "model": "deepseek-v4-flash",
   "configured": true,
   "fallback": false,
   "mode": "ai_agent"
 }
 ```
+`model` 取当前运行环境的 `OPENAI_MODEL` 或 `QWEN_MODEL`，上例仅表示线上 smoke 使用过的 OpenAI-compatible 模型名。
 或
 ```json
 {
@@ -673,7 +674,7 @@ Strategy 工作台自然语言入口。该端点复用 bounded ReAct：除 unsup
   "latency_ms": null,
   "reason": "AI 健康检测中，暂不阻塞页面",
   "backend": "openai",
-  "model": "qwen3.6-plus",
+  "model": "deepseek-v4-flash",
   "configured": true,
   "fallback": false,
   "mode": "ai_agent",
@@ -754,7 +755,7 @@ Redis 缓存命中率。
 ### POST `/health/sync/{job_name}?wait=false`
 手动触发一个 sync 任务（前端「立即更新」按钮用）。
 
-**Path**：`job_name` ∈ `daily_market | daily_value | weekly_fundamentals | weekly_basic | weekly_kline_backfill | db_backup`
+**Path**：`job_name` ∈ `market_refresh | daily_market | daily_value | weekly_fundamentals | weekly_dividend | weekly_basic | weekly_kline_backfill | db_backup`
 
 **Query**：
 - `wait=false`（默认）：后台守护线程跑，立即返回

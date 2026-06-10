@@ -382,8 +382,9 @@ def build_document(out_path: Path):
     add_bullet(doc, "FR-9 排序与分页：支持按任意可筛字段升降序，结果上限可配置（默认 50，最大 500）。")
 
     add_h3(doc, "2.3.4 自选股管理")
-    add_bullet(doc, "FR-10 增删自选：登录用户可对自选股进行增删，支持备注；")
-    add_bullet(doc, "FR-11 自选列表：按时间倒序展示用户的全部自选股。")
+    add_bullet(doc, "FR-10 增删自选：登录用户可对自选股进行增删，支持加入价、加入日期和预警规则同步；")
+    add_bullet(doc, "FR-11 自选列表：支持按加入日期、涨跌幅、估值、行业等字段排序，并支持批量编辑；")
+    add_bullet(doc, "FR-12 预警规则：支持价格突破、价格跌破、累计涨跌幅、日内涨跌幅等规则，并可批量启用、暂停或删除。")
 
     add_h3(doc, "2.3.5 千问智能分析")
     add_bullet(doc, "FR-12 个股分析：传入股票代码，由千问基于最新基本面数据生成 300-500 字的投资分析文本；")
@@ -626,7 +627,7 @@ def build_document(out_path: Path):
         header=["表名", "中文名", "记录量级", "主要用途"],
         rows=[
             ["users", "用户表", "≤ 1,000", "账户注册、登录、自选关联"],
-            ["watchlist", "自选股表", "≤ 50,000", "用户与股票的多对多关系（带备注）"],
+            ["watchlist", "自选股表", "≤ 50,000", "用户与股票的多对多关系（带加入价、预警规则）"],
             ["stock_basic", "股票基本信息表", "5,500+", "全 A 股代码 / 名称 / 行业 / 板块"],
             ["stock_daily", "日线行情与估值表", "≈ 30 万 / 年", "OHLCV、PE、PB、市值、股息率"],
             ["stock_financial", "财务摘要表", "约 6 万 / 年", "ROE、营收、同比、毛利率、负债率"],
@@ -720,7 +721,7 @@ def build_document(out_path: Path):
             ["id", "INT", "PK, AUTO_INCREMENT", "主键"],
             ["user_id", "INT", "FK→users.id, INDEX", "所属用户"],
             ["code", "VARCHAR(16)", "INDEX", "股票代码"],
-            ["note", "VARCHAR(255)", "NULLABLE", "用户备注"],
+            ["note", "VARCHAR(255)", "NULLABLE", "用户备注（兼容字段）"],
             ["created_at", "DATETIME", "DEFAULT NOW", "加入时间"],
             ["—", "—", "UNIQUE(user_id, code)", "唯一索引 ix_user_code"],
         ],
@@ -1005,9 +1006,9 @@ def build_document(out_path: Path):
     )
     add_paragraph(
         doc,
-        "qwen_client.parse_nl_query 内部优先调用 OpenAI 兼容的 Responses API（支持 reasoning effort 与 JSON 模式），"
-        "失败时自动回退到 chat.completions；解析阶段使用正则在文本中提取 ``{...}`` 片段后再 json.loads，"
-        "保证模型偶发返回带 Markdown 代码块时仍能正常解析。"
+        "当前自然语言选股采用 bounded ReAct：模型只输出 final 或白名单工具 action，后端执行通过 schema 校验的工具。"
+        "OpenAI-compatible 网关使用 Chat Completions 路径，Responses API 默认关闭；模型超时或不可达时安全停止，"
+        "不会把本地兜底伪装成 AI 筛选。"
     )
 
     add_h2(doc, "5.5 安全设计")
@@ -1023,18 +1024,18 @@ def build_document(out_path: Path):
         doc,
         "前端使用 Vue 3 单文件组件 + Pinia 状态管理 + Vue Router 4 客户端路由，按业务划分为 7 个核心视图："
         "Dashboard（首页）、Chat（千问对话筛选）、Results（因子筛选结果）、Detail（股票详情）、Portfolio（自选）、"
-        "Strategy（策略回测占位）、Login。axios 实例统一注入 JWT，并在响应拦截器中处理 401 → 自动跳转登录页。"
+        "Strategy（条件筛选与策略选股）、Login。axios 实例统一注入 JWT，并在响应拦截器中处理 401 → 自动跳转登录页。"
     )
     add_table(
         doc,
         header=["页面", "路径", "主要交互"],
         rows=[
-            ["Dashboard", "/dashboard", "行情概览、跑马灯、热门板块"],
-            ["Chat", "/chat", "用户输入自然语言 → 千问解析 → 展示回显条件"],
+            ["Dashboard", "/dashboard", "6 个宽基指数、市场概况、板块与异动榜，首屏聚合接口加载"],
+            ["Chat", "/chat", "用户输入自然语言 → Agent 选择工具或普通回复 → SSE 展示结果"],
             ["Results", "/results", "因子条件可视化编辑 + 结果列表 + 排序"],
             ["Detail", "/detail/:code", "K 线 + 财务卡片 + 千问解读按钮"],
-            ["Portfolio", "/portfolio", "自选增删 + 备注 + 实时估值"],
-            ["Strategy", "/strategy", "策略回测占位（后续 Roadmap）"],
+            ["Portfolio", "/portfolio", "自选排序 + 批量编辑 + 预警启停/删除"],
+            ["Strategy", "/strategy", "条件筛选、保存条件策略、6 个内置日线策略"],
             ["Login", "/login", "用户名 / 密码登录 + 注册入口"],
         ],
         col_widths=[2.4, 3.6, 9.0],
@@ -1123,8 +1124,8 @@ def build_document(out_path: Path):
         "    │\n"
         "    ▼\n"
         "  ┌─────────────────────────┐\n"
-        "  │  调用 OpenAI Responses  │── 失败 ──► 回退 chat.completions\n"
-        "  │  (json_object 模式)     │\n"
+        "  │  调用 Chat Completions  │── 超时/不可达 ──► 安全停止\n"
+        "  │  (action/final schema) │\n"
         "  └─────────────┬───────────┘\n"
         "                │ JSON 文本\n"
         "                ▼\n"
@@ -1429,8 +1430,8 @@ def build_document(out_path: Path):
     add_paragraph(
         doc,
         "Portfolio 页面对应登录用户的私域，要求用户登录后访问。表格形式展示用户的全部自选股，每一行包含代码、名称、"
-        "现价、当日涨跌幅、加入日期、备注与「移除」按钮；列头支持点击排序；右上角「添加」按钮触发模态框，"
-        "可通过搜索接口选择股票并填写备注。"
+        "现价、当日涨跌幅、加入日期、估值指标和预警入口；页面支持按加入日期、涨跌幅、估值、行业等字段排序，"
+        "并支持批量移出自选、批量启用/暂停/删除预警规则。"
     )
     add_caption(doc, "图 7-5　Portfolio 自选股（建议插入实际截图）")
 

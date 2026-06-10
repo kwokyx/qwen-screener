@@ -595,7 +595,7 @@ def get_movers(limit: int = Query(default=8, ge=1, le=50), db: Session = Depends
 
 @router.get("/ticker")
 def get_ticker(db: Session = Depends(get_db)):
-    """Ticker 条用的简化数据：4 大指数 + 几个聚合数字。"""
+    """Ticker 条用的简化数据：6 个宽基指数 + 几个聚合数字。"""
     dates = _covered_trade_dates(db, limit=2)
     td = dates[0] if dates else None
     prev_td = dates[1] if len(dates) > 1 else None
