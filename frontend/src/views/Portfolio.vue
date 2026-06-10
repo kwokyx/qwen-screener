@@ -339,9 +339,9 @@ const rowProps = (row) => ({
         </NGi>
       </NGrid>
 
-      <NGrid :cols="3" :x-gap="12" :y-gap="12" responsive="screen" item-responsive>
-        <NGi span="3 l:2">
-          <NCard :bordered="false" title="自选明细" class="panel-card">
+      <NGrid :cols="3" :x-gap="12" :y-gap="12" responsive="screen" item-responsive class="portfolio-main-grid">
+        <NGi span="3 l:2" class="portfolio-main-cell">
+          <NCard :bordered="false" title="自选明细" class="panel-card portfolio-detail-card">
             <template #header-extra>
               <NButton size="small" secondary :loading="loading" @click="loadAll">刷新</NButton>
             </template>
@@ -366,9 +366,9 @@ const rowProps = (row) => ({
           </NCard>
         </NGi>
 
-        <NGi span="3 l:1">
-          <NSpace vertical :size="12">
-            <NCard :bordered="false" class="panel-card">
+        <NGi span="3 l:1" class="portfolio-main-cell">
+          <div class="portfolio-side-stack">
+            <NCard :bordered="false" class="panel-card side-card">
               <template #header>
                 <div class="panel-title">
                   <span>行业分布</span>
@@ -376,7 +376,7 @@ const rowProps = (row) => ({
                 </div>
               </template>
               <NEmpty v-if="!sectorAlloc.length" description="暂无行业数据" class="small-empty" />
-              <NSpace v-else vertical :size="10">
+              <NSpace v-else vertical :size="10" class="side-scroll-list">
                 <div v-for="s in sectorAlloc" :key="s.label" class="sector-row">
                   <div class="sector-top">
                     <span>{{ s.label }}</span>
@@ -394,7 +394,7 @@ const rowProps = (row) => ({
               </NSpace>
             </NCard>
 
-            <NCard :bordered="false" title="已设告警" class="panel-card">
+            <NCard :bordered="false" title="已设告警" class="panel-card side-card">
               <template #header-extra>
                 <NTag size="small" round :bordered="false">{{ allAlerts.length }} 条</NTag>
               </template>
@@ -414,7 +414,7 @@ const rowProps = (row) => ({
                 </template>
               </NEmpty>
             </NCard>
-          </NSpace>
+          </div>
         </NGi>
       </NGrid>
     </div>
@@ -504,6 +504,40 @@ const rowProps = (row) => ({
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.portfolio-main-grid {
+  align-items: stretch;
+}
+.portfolio-main-cell {
+  display: flex;
+  min-width: 0;
+}
+.portfolio-detail-card,
+.portfolio-side-stack {
+  width: 100%;
+}
+.portfolio-detail-card {
+  height: 100%;
+}
+.portfolio-side-stack {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.side-card {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.side-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.side-scroll-list {
+  min-height: 0;
 }
 .portfolio-page :deep(.stock-cell) {
   display: flex;
@@ -611,6 +645,26 @@ const rowProps = (row) => ({
 @media (max-width: 760px) {
   .portfolio-page {
     padding: 12px;
+  }
+  .portfolio-main-grid {
+    align-items: start;
+  }
+  .portfolio-main-cell {
+    display: block;
+  }
+  .portfolio-detail-card {
+    height: auto;
+  }
+  .portfolio-side-stack {
+    display: flex;
+    flex-direction: column;
+  }
+  .side-card {
+    display: block;
+  }
+  .side-card :deep(.n-card__content) {
+    display: block;
+    overflow: visible;
   }
 }
 </style>
