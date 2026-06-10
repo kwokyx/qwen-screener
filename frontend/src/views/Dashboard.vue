@@ -390,7 +390,7 @@ onMounted(loadAll)
               <div>
                 <div class="card-title">板块涨跌</div>
                 <div class="card-subtitle">
-                  申万一级 · 共 {{ sectors.length || '—' }} 个 · 滚动查看全部
+                  本地行业 · 共 {{ sectors.length || '—' }} 个
                 </div>
               </div>
             </template>
