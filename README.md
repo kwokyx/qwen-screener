@@ -1,237 +1,335 @@
 # 基于千问的股票筛选系统
 
-- 哪些功能做完了、哪些没做：[docs/STATUS.md](docs/STATUS.md)
-- 接口怎么调：[docs/API.md](docs/API.md)
+FastAPI 后端 + Vue 3 前端的 A 股选股系统，支持行情概览、条件筛选、自然语言选股、策略选股、自选股、预警通知、个股详情和数据健康检查。后端以本地行情/财务数据库为核心，AI 只负责理解意图和选择白名单工具，实际筛选与策略计算都由服务端确定性执行。
+
+- 实现状态与交接清单：[docs/STATUS.md](docs/STATUS.md)
+- API 细节与 curl 示例：[docs/API.md](docs/API.md)
+- 内置策略说明：[docs/STRATEGIES.md](docs/STRATEGIES.md)
+- Railway 部署：[docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md)
 - 许可证：[MIT](LICENSE)
 
 ---
 
-FastAPI 后端 + Vue 3 前端，集成大模型实现「自然语言筛选 + 基本面投资分析」，支持沪深 300/500 行情、财务、行业数据的离线同步与定时刷新。
+## 系统架构
 
-```
-浏览器 (Vue 3 SPA)
-   │ /api/* via nginx 反代
+```text
+浏览器（Vue 3 SPA）
+   │
+   │ /api/*（开发环境 Vite 代理；生产环境 nginx 反代）
    ▼
-FastAPI 后端  ──┬──  SQLite / MySQL（行情 / 财务 / 用户 / 自选 / 对话历史）
-                ├──  Redis 缓存（千问解析结果、个股分析）
-                ├──  Baostock（沪深 K 线、财务、分红）+ AKShare/Sina（北交所 K 线与兜底）
-                └──  AI 后端：OpenAI 兼容（默认） / 阿里云百炼千问（备用）
+FastAPI 后端
+   ├── SQLite / MySQL：股票基础信息、行情、财务、分红、自选股、预警、对话历史
+   ├── Redis：AI 解析、个股分析和部分行情聚合的可选缓存，连接失败时自动降级
+   ├── Baostock：沪深日 K、周/月 K、分钟 K、财务、分红
+   ├── AKShare / Sina：北交所和少量兜底数据
+   ├── APScheduler：收盘后同步、周末回填、策略推送、SQLite 冷备份
+   └── AI 后端：OpenAI 兼容接口（默认）或 DashScope
 ```
 
 ---
 
 ## 功能一览
 
-| 模块 | 路径 | 说明 |
+| 模块 | 前端路径 | 说明 |
 |---|---|---|
-| 行情 Dashboard | `/dashboard` | 大盘指数、行业涨跌、Top 涨/跌幅 |
-| 千问对话筛选 | `/chat` | 自然语言输入 → bounded ReAct 模型选择工具或普通回复 → SSE 流式返回 |
-| 因子筛选器 | `/results` | 13 字段 × 7 操作符的可组合筛选 |
-| 个股详情 | `/detail/:code` | K 线 + 关键指标 + 千问基本面分析（流式） |
-| 自选监控 | `/portfolio` | 自选股 + 价格预警，登录后跨设备同步 |
-| 智能选股工作台 | `/strategy` | 自然语言 Agent → 模型路由工具；支持结构化条件与内置策略 |
-
-> 完整 API 接口文档见 [`docs/API.md`](docs/API.md)，含所有端点的 curl 示例与响应样本。
+| 登录 / 注册 | `/login` | JWT 登录，注册和登录都带一次性图形验证码 |
+| 行情概览 | `/dashboard` | 指数、行业、涨跌榜、成交额榜、换手率榜和数据新鲜度 |
+| 自然语言选股 | `/chat` | SSE 流式对话，模型选择筛选、策略、解释、排序、分页或详情工具 |
+| 条件选股 | `/results` | 多条件组合筛选、排序、分页、批量加入自选 |
+| 策略选股 | `/strategy` | 自然语言策略入口、结构化条件筛选和 6 个内置日线策略 |
+| 自选与预警 | `/portfolio` | 自选股跨设备同步，价格/涨跌幅预警和通知中心 |
+| 个股详情 | `/detail/:code?` | 本地详情、实时行情兜底、日/周/月 K、分钟 K 和 AI 解读 |
 
 ---
 
 ## 技术栈
 
-### 后端（Python 3.10+）
-- **FastAPI 0.115** + Uvicorn + SQLAlchemy 2.0 + Pydantic v2
-- **APScheduler** 定时任务（每日收盘后行情、周末财务回填、6h 一次 SQLite 冷备份）
-- **Baostock 优先** 数据源（沪深日 K、周/月 K、分钟 K、财务与分红；北交所历史 K 线走 AKShare/Sina）
-- **OpenAI SDK + dashscope** 双 AI 后端，可一键切换
-- **Redis**（可选）缓存千问解析结果
+### 后端
 
-### 前端（Node 20+）
-- **Vue 3.5** + Vite + Vue Router 4 + Pinia 2
-- Naive UI 浅色金融终端主题 + IBM Plex 字体 + klinecharts K 线图（Sparkline 保留用于小趋势图）
-- Axios（普通请求） + fetch + ReadableStream（SSE 流式）
-- `marked` 渲染千问输出的 Markdown
+- Python 3.10+
+- FastAPI 0.115、Uvicorn、SQLAlchemy 2.0、Pydantic v2
+- APScheduler 定时任务
+- Baostock 优先数据源，AKShare/Sina 少量兜底
+- OpenAI SDK + DashScope 双 AI 后端
+- Redis 可选缓存
+- pytest 回归测试
+
+### 前端
+
+- Vue 3.5、Vite 6、Vue Router 4、Pinia 2
+- Naive UI、klinecharts、marked
+- Axios 普通请求，fetch + ReadableStream 处理 SSE
+- nginx 生产静态服务与 `/api/*` 反代
 
 ### 部署
-- Docker Compose（backend + redis + frontend nginx）
-- Nginx SSE 反代（`proxy_buffering off` + 30 分钟超时）
+
+- Docker Compose：`backend + redis + frontend`
+- 前端 nginx 支持 SSE：`proxy_buffering off`，长超时
+- Railway：前后端各一个服务，Redis 可选，SQLite 需挂载 Volume
 
 ---
 
 ## 快速开始
 
-### 方式 A：Docker Compose 一键起（推荐）
+### Docker Compose
 
 ```bash
-# 1. 配置环境变量
 cp backend/.env.example backend/.env
-# 编辑 backend/.env，至少填一项 AI 后端：
-#   - OPENAI_API_KEY  （默认走 OpenCode Go/Qwen OpenAI 兼容网关）
-#   - 或 AI_BACKEND=dashscope + DASHSCOPE_API_KEY  （阿里云百炼）
+# 编辑 backend/.env，至少配置一种 AI 后端：
+# - AI_BACKEND=openai + OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+# - 或 AI_BACKEND=dashscope + DASHSCOPE_API_KEY
 
-# 2. 启动全栈
 docker compose up -d --build
 
-# 3. 首次拉数据（容器内执行）
-docker exec qwen-backend python -m scripts.sync_data full
+# 首次初始化数据
+docker compose exec -T backend python -m scripts.sync_data full
 
-# 4. 浏览器打开
-#    前端：http://localhost:8080
-#    后端 API 文档（直连调试）：先在 docker-compose.yml 解开 ports 8001 → 8000
+# 前端
+open http://localhost:8080
 ```
 
-### 方式 B：本地开发模式
+后端容器默认只在 Docker 网络内暴露 `8000`。如果需要直接访问 Swagger，可在 `docker-compose.yml` 中打开 backend 的端口映射，再访问 `http://localhost:8001/docs`。
 
-需要本机有 Python 3.10、Node 20、MySQL 或保留 SQLite 默认。
+### 本地开发
 
 ```bash
-# === 后端 ===
+# 后端
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env                            # 填入 AI Key
-python -m scripts.sync_data full                # 首次拉数据（~5 分钟）
+cp .env.example .env
+python -m scripts.sync_data full
 uvicorn app.main:app --reload --port 8000
 
-# === 前端（新开一个 terminal）===
+# 前端，另开一个终端
 cd frontend
-npm install                                     # 或 pnpm install
-npm run dev                                     # → http://localhost:5173
+npm install
+npm run dev
 ```
 
-`vite.config.js` 已配置 `/api` 代理到 `http://127.0.0.1:8000`，开发模式直接同源调用。
+开发环境的 Vite 已把 `/api` 代理到 `http://127.0.0.1:8000`，前端默认地址是 `http://localhost:5173`。
 
 ---
 
-## 配置项（`backend/.env`）
+## 关键配置
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `DATABASE_URL` | `sqlite:///./stock.db` | 改 MySQL：`mysql+pymysql://user:pass@host:3306/db?charset=utf8mb4` |
-| `REDIS_URL` | `redis://localhost:6379/0` | 留空则禁用缓存（业务不中断） |
-| `BAOSTOCK_INTRADAY_TIMEOUT` | `6` | 分钟 K 首次拉取的最长等待秒数 |
-| `BAOSTOCK_INTRADAY_BREAKER_SECONDS` | `300` | 分钟 K 拉取失败后的短路秒数，避免页面反复阻塞 |
-| `BAOSTOCK_SYNC_WORKERS` | `4` | 全市场日线回填并发数；过高会增加免费数据源抖动 |
-| `BAOSTOCK_BATCH_TIMEOUT` | `90` | 单批日线回填最长等待秒数，超时后保留已提交批次 |
-| `QUOTE_TIMEOUT` | `0.8` | 详情页实时行情 provider 单次 HTTP 超时 |
-| `QUOTE_REQUEST_BUDGET` | `0.35` | 详情页等待实时行情的页面请求预算；超时后立即使用本地日线回退 |
-| `QUOTE_FAILURE_TTL` | `30` | 实时行情失败缓存秒数，避免重复打慢上游 |
-| `QUOTE_CIRCUIT_FAILURES` / `QUOTE_CIRCUIT_SECONDS` | `3` / `60` | 实时行情连续失败后的短期熔断 |
-| `SECRET_KEY` | dev-secret | JWT 签名密钥，生产必须改 |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | 1440 | JWT 有效期 |
-| **`AI_BACKEND`** | `openai` | `openai` 或 `dashscope` |
-| `OPENAI_API_KEY` | — | OpenAI 或兼容网关的 Key |
-| `OPENAI_BASE_URL` | `https://opencode.ai/zen/go/v1` | OpenCode Go 的 OpenAI 兼容接口；也可换成官方或自建兼容网关 |
-| `OPENAI_MODEL` | `qwen3.6-plus` | OpenCode Go 当前示例模型 |
-| `OPENAI_REASONING` | `high` | Responses API reasoning effort（Chat Completions 兼容模式不会使用） |
-| `OPENAI_RESPONSES_ENABLED` | `false` | OpenCode Go/Qwen 走 Chat Completions 时保持关闭，避免先探测不支持的 Responses API |
-| `AGENT_PLAN_TIMEOUT_SECONDS` | `10` | 旧 FC Agent 规划超时；超时后不执行本地筛选 |
-| `AGENT_REACT_STEP_TIMEOUT_SECONDS` | `18` | bounded ReAct 单步模型超时；慢时安全停止并保留 `fallback_reason` |
-| `DASHSCOPE_API_KEY` | — | 阿里云百炼 Key（[控制台](https://bailian.console.aliyun.com)） |
-| `QWEN_MODEL` | `qwen-plus` | dashscope 模型 |
-| `CORS_ORIGINS` | `http://localhost:5173` | 多个用逗号分隔 |
+配置文件在 `backend/.env`，示例见 [backend/.env.example](backend/.env.example)。
 
-> **AI 后端两种配法选其一即可**。OpenCode Go 属于 OpenAI-compatible Chat Completions 网关，因此 `AI_BACKEND=openai`、`OPENAI_RESPONSES_ENABLED=false`。不要把真实 Key 提交进仓库。
-> 若当前账号/网关对 `deepseek-v4-flash` 更稳定，可只在本地 `backend/.env` 改 `OPENAI_MODEL=deepseek-v4-flash`；`release_smoke.py` 会按运行环境里的模型校验，不再固定某个模型名。
+| 变量 | 说明 |
+|---|---|
+| `DATABASE_URL` | 默认 SQLite，可改 MySQL：`mysql+pymysql://user:pass@host:3306/db?charset=utf8mb4` |
+| `REDIS_URL` | 可选；留空或连接失败时业务自动退回无缓存模式 |
+| `DATA_PROVIDER` | 数据源后端，默认 `baostock`，`akshare` 为 legacy |
+| `SECRET_KEY` | JWT 签名密钥，生产必须替换 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT 有效期 |
+| `AI_BACKEND` | `openai` 或 `dashscope` |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI 兼容后端配置，可接 OpenAI、OpenCode Go 或自建网关 |
+| `OPENAI_RESPONSES_ENABLED` | 兼容网关不支持 Responses API 时保持 `false` |
+| `AGENT_PLAN_TIMEOUT_SECONDS` | 旧规划路径超时 |
+| `AGENT_REACT_STEP_TIMEOUT_SECONDS` | bounded ReAct 单步模型超时 |
+| `DASHSCOPE_API_KEY` / `QWEN_MODEL` | DashScope 后端配置 |
+| `CORS_ORIGINS` | 允许的前端来源，逗号分隔 |
+| `FEISHU_*` | 飞书 webhook 或企业应用配置；不填则不推送 |
+| `BAOSTOCK_INTRADAY_TIMEOUT` | 分钟 K 拉取超时 |
+| `BAOSTOCK_INTRADAY_BREAKER_SECONDS` | 分钟 K 失败后的短期熔断时间 |
+
+不要提交真实 `.env`、数据库文件或任何 API Key。
 
 ---
 
-## 数据同步命令
+## 数据同步
 
 ```bash
 python -m scripts.sync_data <子命令> [参数]
 ```
 
-| 子命令 | 数据源 | 内容 | 耗时 |
-|---|---|---|---|
-| `basic` | Baostock | 全 A 股 5500+ 代码 + 名称 | 几秒 |
-| `daily [days]` | Baostock | 全市场日 K（OHLCV + PE/PB + 换手率） | 视回填天数而定 |
-| `kline [code] [days]` | Baostock | 单只股票日 K 回填 | 几秒 |
-| `financial [pool]` | Baostock | ROE / 营收同比 / 净利同比 / 毛利率 / 负债率 | 视股票池而定 |
-| `dividend [code]` | Baostock | 已实施现金分红 + 本地计算近 12 个月股息率 | 视股票池而定 |
-| `full` | Baostock | 基本信息 + 日 K + 全市场财务 + 全市场分红 | 较长任务 |
+| 子命令 | 内容 |
+|---|---|
+| `basic` | 拉取全 A 股基础信息 |
+| `daily [days]` | 拉取全市场最近 N 天日 K，默认 5 天 |
+| `kline [code] [days]` | 回填单只股票 K 线，默认 `600519.SH 120` |
+| `financial [pool]` | 同步财务指标，`pool` 支持 `csi300`、`csi500`、`all` |
+| `dividend [code]` | 同步现金分红并计算 TTM 股息率；不传 code 时全市场 |
+| `full` | `basic + daily(10) + financial(all) + dividend(all)` |
 
-支持的股票池：`csi300`（沪深300）、`csi500`（中证500）、`sse50`（上证50）。
-
-启动后会**自动定时刷新**，无需手动重跑（见下方「定时任务」）。
+`DATA_PROVIDER=akshare` 时仍保留 `basic-ak`、`daily-sina`、`daily-em`、`pool`、`industry`、`financial-ak` 等 legacy 命令。
 
 ---
 
-## API 概览（前缀 `/api/v1`）
+## API 概览
 
-完整 Swagger 文档在 `http://localhost:8000/docs`。
+所有业务接口默认前缀为 `/api/v1`。
 
-```
-auth/               注册 / 登录 / me
-stock/              搜索 / 详情 / K线 / 自选股 CRUD
-screener/           POST  /screener        多条件筛选
-                    POST  /screener/nl     自然语言（一次返回）
-                    POST  /screener/nl/stream  自然语言（SSE 流式）
-qwen/               GET   /qwen/analysis/{code}            一次返回
-                    GET   /qwen/analysis/{code}/stream     SSE 流式
-market/             指数 / 板块 / 涨跌幅榜 / Ticker
-chat/               对话历史 CRUD（登录后跨设备同步）
-notifications/      预警通知中心
-strategy/           Agent 智能选股 / 条件筛选 / 内置策略选股
-health/             AI 探活 / 数据健康度 / 缓存命中率 / 手动触发同步
-```
+| 路由 | 说明 |
+|---|---|
+| `/auth` | 验证码、注册、登录、当前用户 |
+| `/stock` | 搜索、详情、实时行情兜底、K 线、分钟 K、自选股 CRUD |
+| `/screener` | 结构化筛选、自然语言一次性筛选、自然语言 SSE 流式筛选 |
+| `/qwen` | 个股 AI 解读，一次性和 SSE 两种返回 |
+| `/strategy` | 策略模板、Agent 工具清单、内置策略执行、自然语言策略入口 |
+| `/market` | Dashboard 聚合、指数、行业列表、板块、涨跌榜、ticker |
+| `/chat` | 对话历史 CRUD 和上下文快照 |
+| `/notifications` | 通知中心、已读、清空、飞书预警推送 |
+| `/health` | AI 探活、数据健康、缓存状态、手动同步、备份、数据源状态 |
 
-支持的筛选字段：
-| 字段 | 含义 | 表 |
+Swagger 文档在 `http://localhost:8000/docs`，Docker Compose 默认通过前端访问接口：`http://localhost:8080/api/v1/...`。
+
+---
+
+## 筛选字段
+
+操作符：`gt`、`gte`、`lt`、`lte`、`eq`、`between`、`in`。
+
+| 字段 | 含义 | 来源 |
 |---|---|---|
 | `pe` / `pb` | 市盈率 / 市净率 | `stock_daily` |
-| `market_cap` | 总市值（亿） | `stock_daily` |
-| `close` / `turnover` / `dividend_yield` | 价格 / 换手率 / 股息率 % | `stock_daily` |
-| `roe` | 净资产收益率 % | `stock_financial` |
-| `revenue_yoy` / `profit_yoy` | 营收 / 净利同比 % | `stock_financial` |
-| `gross_margin` / `debt_ratio` | 毛利率 / 资产负债率 % | `stock_financial` |
-| `industry` / `market` | 行业 / 板块；`market` 仅限主板/创业板/科创板/北交所，A 股/全 A 是默认股票池 | `stock_basic` |
+| `market_cap` | 总市值，单位亿 | `stock_daily` |
+| `close` / `turnover` / `dividend_yield` | 收盘价 / 换手率 / 股息率 | `stock_daily` |
+| `roe` | 净资产收益率 | `stock_financial` |
+| `revenue_yoy` / `profit_yoy` | 营收同比 / 净利润同比 | `stock_financial` |
+| `gross_margin` / `debt_ratio` | 毛利率 / 资产负债率 | `stock_financial` |
+| `industry` / `market` | 行业 / 市场板块 | `stock_basic` |
+| `risk_flag` | ST / 退市风险名称标记 | `stock_basic` |
+| `ma5` / `ma20` | 5 日 / 20 日均线 | 本地日 K 计算 |
+| `volume_ratio_20` | 当前成交量相对 20 日均量 | 本地日 K 计算 |
+| `breakout_20` | 是否突破 20 日高点 | 本地日 K 计算 |
+| `ma5_above_ma20` | 5 日均线是否高于 20 日均线 | 本地日 K 计算 |
+| `pct_change_20` | 20 日涨跌幅 | 本地日 K 计算 |
 
-操作符：`gt / gte / lt / lte / eq / between / in`
-
-完整字段能力、缺失行为和不支持指标原因见 [`docs/FIELD_CAPABILITIES.md`](docs/FIELD_CAPABILITIES.md)。
+排序字段还支持 `change_pct` 和 `score`。完整字段边界和不支持指标说明见 [docs/FIELD_CAPABILITIES.md](docs/FIELD_CAPABILITIES.md)。
 
 ---
 
-## 定时任务（APScheduler，东八区）
+## 定时任务
 
-| Cron | 任务 | 内容 |
+调度器随 FastAPI 启动，使用东八区时间。执行状态写入 `sync_meta`，前端数据面板和 `/health/data` 会读取这些状态。
+
+| 时间 | 任务 | 内容 |
 |---|---|---|
-| 周一-周五 15:30 | `daily_market` | 全市场日 K（OHLCV + PE/PB + 换手率） |
-| 周一-周五 16:00 | `daily_value` | 全市场价值面补充 |
-| 周六 02:00 | `weekly_fundamentals` | 行业 + 财务摘要 |
-| 周六 03:00 | `weekly_dividend` | 已实施现金分红 + 本地计算近 12 个月股息率 |
-| 周日 02:00 | `sync_basic` | 全 A 股代码列表（新股 / 退市） |
-| 周日 03:00 | `weekly_kline_backfill` | 全市场 60d K 线回填 |
-| 每 6h | `db_backup` | SQLite 冷备份 → `/app/data/backups/` |
-
-任务执行结果落 `sync_meta` 表，前端 `/health/data` 可查「最后更新于…」。接口会同时返回 `freshness` 诊断对象，区分全市场行情落后、详情页稀疏新数据和后台同步中。
-
-`fresh=true` 只表示全市场日线已覆盖到 `expected_trade_date`，不代表所有后台任务都成功。若同时存在 `sync_warnings`，前端会继续展示异常任务；财务、分红、K 线回填等异常可能影响 ROE、同比、股息率或历史 K 线相关功能，但不会伪造成数据新鲜。
+| 周一至周五 15:05 | `market_refresh` | 收盘后快刷日 K 与估值面 |
+| 周一至周五 15:30 | `daily_market` | 全市场日 K 补偿 |
+| 周一至周五 16:00 | `daily_value` | 估值与股息率补充 |
+| 周一至周五 18:00 | `strategy_push` | 全策略扫描并推送飞书 |
+| 周六 02:00 | `weekly_fundamentals` | 财务指标 |
+| 周六 03:00 | `weekly_dividend` | 现金分红与 TTM 股息率 |
+| 周日 02:00 | `weekly_basic` | 股票列表、新股、退市更新 |
+| 周日 03:00 | `weekly_kline_backfill` | 全市场近期 K 线回填 |
+| 每 6 小时 | `db_backup` | SQLite 冷备份 |
 
 手动触发：
-```bash
-# 异步（守护线程，立即返回）
-curl -X POST http://localhost:8000/api/v1/health/sync/daily_market
 
-# 同步（短任务用）
-curl -X POST 'http://localhost:8000/api/v1/health/sync/db_backup?wait=true'
+```bash
+curl -X POST http://localhost:8080/api/v1/health/sync/daily_market
+curl -X POST 'http://localhost:8080/api/v1/health/sync/db_backup?wait=true'
 ```
 
-健康检查和 Agent smoke：
+`/health/data` 的 `fresh=true` 只表示全市场日线覆盖到最近应有交易日；仍需同时查看 `coverage`、`sync_warnings`、`active_jobs` 和推荐修复任务。
 
-```bash
-curl -s http://127.0.0.1:8080/api/v1/health/ai
-curl -s http://127.0.0.1:8080/api/v1/health/data
-python3 backend/scripts/agent_smoke.py
-docker compose exec -T backend python scripts/agent_reliability_smoke.py
+---
+
+## 项目结构
+
+```text
+qwen-stock-screener-naive/
+├── docker-compose.yml
+├── backend/
+│   ├── Dockerfile
+│   ├── railway.toml
+│   ├── requirements.txt
+│   ├── app/
+│   │   ├── main.py              # FastAPI 入口、lifespan、router 注册
+│   │   ├── config.py            # pydantic-settings 配置
+│   │   ├── database.py          # SQLAlchemy engine/session
+│   │   ├── api/                 # 9 个业务 router
+│   │   ├── core/                # JWT、密码哈希、依赖
+│   │   ├── models/              # user / stock / watchlist / chat / notification
+│   │   ├── schemas/             # Pydantic 模型
+│   │   ├── services/
+│   │   │   ├── agent_react.py
+│   │   │   ├── qwen_client/
+│   │   │   ├── screener_engine.py
+│   │   │   ├── strategy_selector.py
+│   │   │   ├── strategies/
+│   │   │   ├── data_sync.py
+│   │   │   ├── scheduler.py
+│   │   │   ├── feishu.py
+│   │   │   ├── cache.py
+│   │   │   ├── db_backup.py
+│   │   │   └── migrations.py
+│   │   └── prompts/
+│   ├── scripts/
+│   └── tests/
+├── frontend/
+│   ├── Dockerfile
+│   ├── railway.toml
+│   ├── nginx.conf.template
+│   ├── package.json
+│   └── src/
+│       ├── router/
+│       ├── api/
+│       ├── stores/
+│       ├── views/
+│       ├── components/
+│       ├── composables/
+│       ├── services/
+│       ├── shared/
+│       └── assets/
+└── docs/
 ```
 
-普通自动化测试不依赖真实 AI；后端用 fake model 锁定模型 action/final、schema 校验和工具执行语义，前端 smoke 用浏览器内 mock SSE 覆盖真实 UI 流程。需要验证真实 Qwen/OpenCode Go 时，先看 `/health/ai`，再手动运行 `agent_smoke.py` 或容器内的 `agent_reliability_smoke.py`。Chat Agent 除 unsupported metric 字段能力边界会在模型前硬拦截外，意图判断交给 bounded ReAct 模型：普通问候和帮助类问题由模型直接 final，筛选、策略、解释、排序、分页和详情由模型选择白名单工具 action。后端只执行通过 schema 校验的 action；模型慢、超时、不可达或没有给出合法 action/final 时会安全停止并保留 `model_ms` / `fallback_reason`，不会把不完整条件或不支持字段伪装成命中。工具执行成功后使用后端确定性总结返回，不再等待第二次模型总结。完整本地浏览器 smoke：
+---
 
-Agent query regression 是 RC 门禁的一部分，使用普通 pytest 固化真实中文语料，不依赖真实 AI：
+## 后端模块
+
+| 模块 | 关键文件 | 说明 |
+|---|---|---|
+| 认证 | [backend/app/api/auth.py](backend/app/api/auth.py) | 图形验证码、注册、登录、`me` |
+| 股票数据 | [backend/app/api/stock.py](backend/app/api/stock.py) | 搜索、详情、quote、K 线、分钟 K、自选股 |
+| 筛选引擎 | [backend/app/services/screener_engine.py](backend/app/services/screener_engine.py) | 字段校验、SQL 查询、技术指标、排序分页 |
+| 自然语言选股 | [backend/app/api/screener.py](backend/app/api/screener.py) | 一次性和 SSE 流式入口 |
+| Agent 执行 | [backend/app/services/agent_react.py](backend/app/services/agent_react.py) | bounded ReAct、工具白名单、schema 校验、安全停止 |
+| 策略选股 | [backend/app/services/strategy_selector.py](backend/app/services/strategy_selector.py) | 6 个内置日线策略、缓存、singleflight、飞书推送 |
+| AI 客户端 | [backend/app/services/qwen_client/](backend/app/services/qwen_client/) | OpenAI 兼容和 DashScope 传输层 |
+| 行情聚合 | [backend/app/api/market.py](backend/app/api/market.py) | Dashboard 首屏 overview、指数、行业、板块、榜单、ticker 和缓存预热 |
+| 对话历史 | [backend/app/api/chat.py](backend/app/api/chat.py) | 会话快照 CRUD、上下文恢复 |
+| 通知中心 | [backend/app/api/notification.py](backend/app/api/notification.py) | 通知 CRUD、已读、飞书预警入口 |
+| 数据同步 | [backend/app/services/data_sync.py](backend/app/services/data_sync.py) | 基础信息、日 K、财务、分红、北交所兜底 |
+| 定时调度 | [backend/app/services/scheduler.py](backend/app/services/scheduler.py) | 自动同步、任务状态、手动触发、卡住任务修复 |
+| 健康检查 | [backend/app/api/health.py](backend/app/api/health.py) | AI、数据、缓存、备份、provider 状态 |
+
+---
+
+## 前端模块
+
+| 模块 | 关键文件 | 说明 |
+|---|---|---|
+| 应用壳 | [frontend/src/components/Shell.vue](frontend/src/components/Shell.vue) | 导航、顶部栏、全局状态入口 |
+| 行情概览 | [frontend/src/views/Dashboard.vue](frontend/src/views/Dashboard.vue) | 大盘、板块、榜单、数据状态；首屏优先请求 `/market/overview` |
+| 对话选股 | [frontend/src/views/Chat.vue](frontend/src/views/Chat.vue) | SSE 状态机、工具轨迹、结果预览 |
+| 条件选股 | [frontend/src/views/Results.vue](frontend/src/views/Results.vue) | 因子筛选、排序、分页、自选操作 |
+| 策略工作台 | [frontend/src/views/Strategy.vue](frontend/src/views/Strategy.vue) | Agent 输入、条件筛选、内置策略 |
+| 自选监控 | [frontend/src/views/Portfolio.vue](frontend/src/views/Portfolio.vue) | 自选股、预警规则、通知同步 |
+| 个股详情 | [frontend/src/views/Detail.vue](frontend/src/views/Detail.vue) | K 线图、分钟线、AI 解读 |
+| 数据新鲜度 | [frontend/src/components/DataFreshness.vue](frontend/src/components/DataFreshness.vue) | `/health/data` 展示和修复入口 |
+| 自选浮窗 | [frontend/src/components/WatchlistDock.vue](frontend/src/components/WatchlistDock.vue) | 全局快速查看自选 |
+| 预警引擎 | [frontend/src/services/alertEngine.js](frontend/src/services/alertEngine.js) | 前端轮询触发预警并写通知 |
+| SSE 客户端 | [frontend/src/api/sse.js](frontend/src/api/sse.js) | ReadableStream 流式解析和 JWT 注入 |
+
+---
+
+## 测试与验收
+
+后端测试：
 
 ```bash
+docker compose exec -T backend pytest
 docker compose exec -T backend pytest tests/test_agent_query_regression.py
 ```
+
+当前容器环境执行 `pytest --collect-only -q` 可收集到 324 个 pytest 用例。覆盖范围包括认证、筛选、Agent 规划、SSE、策略、数据同步保护、健康检查、缓存、实时行情兜底、自选和通知。
+
+前端 smoke：
 
 ```bash
 cd frontend
@@ -242,219 +340,43 @@ npm run smoke:chat
 npm run smoke:detail
 ```
 
-交付前 release smoke：
+发布前 smoke：
 
 ```bash
 python3 backend/scripts/release_smoke.py
 docker compose exec -T backend python scripts/release_smoke.py
 ```
 
-`release_smoke.py` 会检查 Docker 服务、AI/数据健康、SSE 普通对话模型 final、策略/详情模型 action、真实筛选返回结果或安全停止，以及定向密钥扫描，并在末尾输出 `pass/warn/fail` 汇总。在 backend 容器内运行时没有 docker/rg CLI，会把 `docker compose ps` 降级为 WARN；外层 `docker compose ps` 是单独验证项，容器内脚本继续使用 HTTP 检查和 Python 密钥扫描。AI 已配置但上游暂不可达时会输出 `WARN health/ai`；Chat Agent 不会私自本地筛选，模型不可用或没有合法 action/final 时会返回普通回复并显示 `fallback_reason`。存在 `sync_warnings` 或重同步任务正在运行时也会输出 WARN 和下一步建议，不会伪装成模型或同步任务完全正常。`agent_reliability_smoke.py` 会额外覆盖真实支持字段筛选、内置策略、普通对话 final、解释、排序、分页、详情和 unsupported metric 边界，逐轮输出 `tool`、`conditions`、`screened/result`、`model_ms`、`tool_ms`、`fallback_reason` 和总耗时；如果 `/health/ai` 未配置或不健康，它只输出 WARN 并跳过真实 Qwen 回归。
-
-Chat Agent 采用 bounded ReAct，不是无限自主 Agent。模型每步只能选择一个白名单工具或给出最终回答：普通帮助类对话和问候应直接 final，不调用筛选或策略工具，也不会生成工具调用列表；只有用户想筛股票但缺少必要条件时才显示“补充追问”。筛选、内置策略、解释上一轮、排序、分页、确认执行、调严/放宽和个股详情都必须由模型 action 明确选择。只有模型返回通过 schema 校验的工具 action，后端才会执行工具；后端安全层仍会拦截 unsupported metric、空条件全市场筛选和非法参数。工具执行成功后直接使用后端确定性总结结束本轮，不再请求第二次模型总结。模型慢、超时、上游不可达或没有给出合法 action/final 时，后端返回普通回复，不调用筛选工具，并在 SSE 中保留 `model_ms` 与 `fallback_reason`。普通 final / 安全停止的 SSE 只返回 `agent/done`，且 `tool_calls=[]`；只有工具 action 路径才会出现 `planning`、`tool_call`、`react_step/tool_start/tool_observation/tool_done/final`、`parsed/screening/result` 等工具流程事件。前端只展示公开步骤摘要，不展示模型私有思考链。
-
-Unsupported metric 是进入模型前的本地快速路径。命中三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构/基金/北向资金持仓、研报评级、目标价等字段时，后端直接返回不支持说明，不调用 Qwen，不调用筛选引擎，SSE 不会出现 `screening/result`，`model_ms=0` 且 `fallback_reason=local_fast_path`。
-
-`/health/ai` 在运行时不会为首次上游探测阻塞页面：缓存未命中时先返回 `pending=true`，后台短超时刷新真实状态；已有过期状态时返回 `stale=true` 并继续刷新。AI 上游不可达属于预期降级路径；Chat UI 会提示暂不自动筛选且不调用本地兜底工具。结构化筛选页始终可手动使用。
-
-个股详情的实时行情只在短预算内等待外部 provider。超时、DNS 失败或熔断时，`/stock/{code}/quote` 会使用本地最新日线返回 `source=local`；页面仍应展示详情、K 线和本地指标，并明确不是实时行情。
-`npm run smoke:detail` 会打开 `/detail/600036.SH`，检查本地详情、K 线 canvas / 容器、阻塞性加载错误和移动端横向溢出。
-
-登录和注册都要求一次性图形验证码。验证码由后端生成 SVG data URL，错误或过期会返回明确提示；前端失败后会刷新验证码。浏览器回归用 `npm run smoke:auth` 覆盖验证码加载、刷新、空值/错误提示、注册后切回登录、登录、退出和重登。
-
-Dashboard 市场概览使用本地 EOD 聚合缓存。后端启动后会在后台预热 `indices/sectors/movers/ticker`，数据同步成功后会清理并重新预热缓存；冷启动首个请求可能仍比热缓存慢，但不应长期阻塞页面。需要复测时，重启 backend/frontend 后连续请求 `/api/v1/market/indices`、`/api/v1/market/sectors?limit=20`、`/api/v1/market/movers?limit=10`、`/api/v1/market/ticker`、`/api/v1/health/data`，对比 cold/warm 耗时。
-
-Dashboard 顶部“数据”面板直接来自 `/health/data`：`latest_trade_date` 是本地最新交易日，`expected_trade_date` 是按交易日历推断应更新到的日期，`fresh=true` 只表示全市场日线覆盖已达标；仍需同时查看 `coverage`、`sync_warnings` 与执行中/异常任务。未登录也可查看任务状态，手动同步或修复异常需要登录后按面板的“下一步”执行。
-
-提交前可做一次定向密钥扫描：
-
-```bash
-rg -n "OPENAI_API_KEY=.*[A-Za-z0-9]{20}|DASHSCOPE_API_KEY=.*[A-Za-z0-9]{20}|sk-[A-Za-z0-9]{20,}" backend/app backend/tests frontend/src docker-compose.yml README.md docs backend/.env.example || true
-```
+真实 AI 不参与普通 pytest。需要验证线上模型时，先看 `/health/ai`，再运行 `agent_smoke.py`、`agent_reliability_smoke.py` 或 `release_smoke.py`。
 
 ---
 
-## 项目结构
-
-```
-qwen-stock-screener/
-├── docker-compose.yml          # 三服务编排（backend + redis + frontend）
-├── backend/
-│   ├── Dockerfile              # 多阶段构建（slim runtime + healthcheck）
-│   ├── requirements.txt
-│   ├── app/
-│   │   ├── main.py             # FastAPI 入口 + lifespan + 9 个 router
-│   │   ├── config.py           # pydantic-settings
-│   │   ├── database.py         # SQLAlchemy 引擎
-│   │   ├── models/             # ORM（user / stock / watchlist / chat / notification）
-│   │   ├── schemas/            # Pydantic 模型
-│   │   ├── api/                # 9 个 router
-│   │   ├── core/               # JWT + 密码哈希 + deps
-│   │   ├── services/
-│   │   │   ├── qwen_client/    # AI 调用层（FC + JSON 模式兜底 + 重试 + 流式）
-│   │   │   │   ├── __init__.py
-│   │   │   │   └── transport.py
-│   │   │   ├── screener_engine.py
-│   │   │   ├── data_sync.py    # Baostock-first 同步 + AKShare 少量兜底
-│   │   │   ├── scheduler.py    # APScheduler 任务
-│   │   │   ├── backtest_engine.py
-│   │   │   ├── cache.py        # Redis（静默回退）
-│   │   │   ├── db_backup.py
-│   │   │   └── migrations.py
-│   │   └── prompts/            # 千问 prompt 模板
-│   ├── scripts/sync_data.py    # CLI 同步入口
-│   └── tests/                  # pytest 回归测试
-│
-├── frontend/
-│   ├── Dockerfile              # builder(node) + runtime(nginx)
-│   ├── nginx.conf              # SSE 反代（proxy_buffering off）
-│   ├── package.json
-│   └── src/
-│       ├── main.js + App.vue + router/
-│       ├── api/                # 10 个端点封装 + SSE 通用客户端
-│       ├── stores/             # Pinia（auth / chatHistory / watchlist / notifications / toast / aiStatus）
-│       ├── composables/        # useNlStream / useKlineCache
-│       ├── services/           # 前端预警引擎
-│       ├── views/              # 6 个页面 + Login
-│       ├── components/         # Shell / TopBar / Toaster / Skeleton / charts/
-│       ├── shared/             # theme.js（A2 调色板）+ errors.js
-│       └── assets/global.css
-│
-└── docs/
-    ├── build_design_doc.py     # python-docx 论文生成器
-    └── 基于千问的股票筛选系统设计与实现.docx
-```
-
----
-
-## 系统模块清单
-
-系统按「后端服务 + 前端视图 + 工程基础设施」三层组织，下表为每个模块的实现状态。
-
-### 后端模块（[backend/app/](backend/app/)）
-
-| 模块 | 关键能力 | 测试覆盖 |
-|---|---|---|
-| **认证** [`api/auth.py`](backend/app/api/auth.py) | JWT 注册 / 登录 / `me`；bcrypt 密码哈希；OAuth2 form 登录 | ✅ `test_auth_e2e.py` |
-| **股票数据** [`api/stock.py`](backend/app/api/stock.py) | 模糊搜索、个股详情（基本面 + 最新行情 + 财务）、K 线（任意 N 日，自动回填）、自选 CRUD | ✅ `test_stock_api.py` |
-| **筛选引擎** [`services/screener_engine.py`](backend/app/services/screener_engine.py) | 13 字段 × 7 操作符 × AND/OR 组合 + 排序 + 分页 | ✅ `test_screener.py` |
-| **千问 AI 客户端** [`services/qwen_client/`](backend/app/services/qwen_client/) | Function Calling + bounded ReAct step；OpenAI / DashScope 双后端切换；SSE 流式；指数退避重试；Redis 缓存 | ✅ `test_agent_planner.py` |
-| **NL 筛选** [`api/screener.py`](backend/app/api/screener.py) | 三个端点：结构化 / NL 一次性 / NL SSE 流式；NL 入口复用 bounded ReAct，只有模型选择 `stock_screen` 才执行筛选 | ✅ `test_screener.py` + `test_screener_stream.py` |
-| **基本面分析** [`api/qwen.py`](backend/app/api/qwen.py) | 个股投资分析：一次性 + SSE 流式两个端点；1h Redis 缓存 | — |
-| **行情聚合** [`api/market.py`](backend/app/api/market.py) | 4 大指数（实时点位 + 30 日 sparkline）；板块涨跌；涨/跌/成交额/换手率四榜；全市场 Ticker | — |
-| **对话历史** [`api/chat.py`](backend/app/api/chat.py) | 历史快照 CRUD；每用户上限 50 条，超出自动删最旧 | ✅ `test_chat_sessions.py` |
-| **通知中心** [`api/notification.py`](backend/app/api/notification.py) | 预警通知持久化、已读 / 全部已读 / 删除 | ✅ `test_notifications.py` |
-| **智能选股 Agent** [`services/agent_react.py`](backend/app/services/agent_react.py) + [`services/strategy_selector.py`](backend/app/services/strategy_selector.py) + [`services/strategies/`](backend/app/services/strategies/) | Chat 与 Strategy Agent 入口都走 bounded ReAct：模型 final/action → 后端 schema 校验 → 工具执行或普通回复；AI 慢/不可达时不本地兜底筛选；内置策略由本地策略 registry 执行 | ✅ `test_strategy_agent.py` + `test_screener_stream.py` + `test_strategy_agent_api.py` + `test_strategy_scoring.py` |
-| **数据同步** [`services/data_sync.py`](backend/app/services/data_sync.py) | Baostock-first；7 个 sync 子命令；< 80% 防误删保护；K 线自动回填 | ✅ `test_data_sync_guard.py` |
-| **定时调度** [`services/scheduler.py`](backend/app/services/scheduler.py) | APScheduler 6 任务（行情 / 财务 / 基本信息 / K 线回填 / 备份） + `sync_meta` 元数据落库 | — |
-| **缓存层** [`services/cache.py`](backend/app/services/cache.py) | Redis 千问解析结果 / 个股分析缓存；不可达时静默回退 | ✅ `test_cache.py` |
-| **冷备份** [`services/db_backup.py`](backend/app/services/db_backup.py) | SQLite 每 6h 物理备份；启动时立即一份；备份列表查询 | — |
-| **健康检查** [`api/health.py`](backend/app/api/health.py) | AI 探活、数据新鲜度、缓存命中率、手动触发同步、备份列表 | — |
-
-### 前端视图（[frontend/src/views/](frontend/src/views/)）
-
-| 视图 | 接的后端 | 关键能力 |
-|---|---|---|
-| **Login** [`Login.vue`](frontend/src/views/Login.vue) | `/auth/*` | 登录 / 注册一体页，A2 主题 |
-| **行情 Dashboard** [`Dashboard.vue`](frontend/src/views/Dashboard.vue) | `/market/*` | 4 指数 + 30 日 sparkline + 板块涨跌 + 涨跌榜（4 个 tab） |
-| **千问对话筛选** [`Chat.vue`](frontend/src/views/Chat.vue) | `/screener/nl/stream` | SSE 展示 bounded ReAct 公开步骤；历史持久化 + 跨设备同步；0 命中建议；预设提示 |
-| **因子筛选器** [`Results.vue`](frontend/src/views/Results.vue) | `/screener` | 默认条件可视化 + 实时 sparkline + 价值分排序 |
-| **个股详情** [`Detail.vue`](frontend/src/views/Detail.vue) | `/stock/{code}` + `/stock/{code}/kline` + `/stock/{code}/intraday` | klinecharts K 线；5/15/30/60 分钟 K + 日/周/月 K；MA/BOLL/MACD/KDJ/RSI 切换；分钟线失败时明确提示，不用日线伪装 |
-| **自选监控** [`Portfolio.vue`](frontend/src/views/Portfolio.vue) | `/stock/me/watchlist` + alertEngine 轮询 | 5 种预警类型（涨跌 % / 价格突破 / 当日 %）；跨设备同步 |
-| **智能选股工作台** [`Strategy.vue`](frontend/src/views/Strategy.vue) | `/strategy/agent` + `/strategy/select` + `/screener` | 自然语言 Agent 选股 + 结构化条件筛选 + 内置策略选股；结果可跳转详情页 |
-
-### 前端基础设施
-
-| 组件 / 模块 | 路径 | 用途 |
-|---|---|---|
-| **全局错误边界** | [`components/ErrorBoundary.vue`](frontend/src/components/ErrorBoundary.vue) | Vue `errorHandler` 兜底，组件抛错不白屏 |
-| **命令面板** | [`components/CommandPalette.vue`](frontend/src/components/CommandPalette.vue) | ⌘K 全局搜索股票 / 跳转视图 |
-| **自选浮窗** | [`components/WatchlistDock.vue`](frontend/src/components/WatchlistDock.vue) | 全局浮动自选股快捷面板 |
-| **预警引擎** | [`services/alertEngine.js`](frontend/src/services/alertEngine.js) | 30s 轮询每只自选股最新价，触发预警 → 写通知中心 |
-| **数据新鲜度** | [`components/DataFreshness.vue`](frontend/src/components/DataFreshness.vue) | 顶部条显示「最后更新于…」+ 一键刷新 |
-| **状态管理** | [`stores/`](frontend/src/stores/) | 6 个 Pinia store：auth / chatHistory / watchlist / notifications / toast / aiStatus，全部带 localStorage 离线兜底 |
-| **Composables** | [`composables/`](frontend/src/composables/) | `useNlStream`（SSE 状态机） + `useKlineCache`（按 code 缓存 sparkline） |
-| **SSE 客户端** | [`api/sse.js`](frontend/src/api/sse.js) | 通用 fetch + ReadableStream 流式解析，自动注入 JWT |
-| **错误翻译** | [`shared/errors.js`](frontend/src/shared/errors.js) | errno / 401 / 503 / network → 中文产品文案 |
-| **UI 基元** | Skeleton / EmptyState / Toaster / StarButton / AlertRuleEditor | 骨架屏 / 空态 / Toast / 一键加自选 / 预警规则编辑器 |
-
-### 策略后端边界
-
-内置策略是本地规则引擎，不是 AI 算分。每个策略位于 `backend/app/services/strategies/`，继承 `BaseStrategy`，声明 `id/name/tag/description/rules/history_days/max_codes` 并实现 `run(histories)`；`strategy_selector.py` 只负责 API 门面、缓存、日线数据加载和执行分发。AI 选股里的 `strategy_select` 只做路由，真实命中结果由本地策略类计算。
-
-策略结果中的 `score` 字段仅保留为 API 兼容，页面和文档按“命中强度 / 策略排序值”理解：只用于当前策略内部排序，不代表投资评级，也不能跨策略比较。完整策略列表、候选池限制、缺失 K 线行为和新增策略方式见 [`docs/STRATEGIES.md`](docs/STRATEGIES.md)。
-
-### 工程基础设施
-
-| 设施 | 状态 | 文件 |
-|---|---|---|
-| Docker Compose 三服务编排 | ✅ | [`docker-compose.yml`](docker-compose.yml) |
-| 后端 Dockerfile 多阶段 + healthcheck | ✅ | [`backend/Dockerfile`](backend/Dockerfile) |
-| 前端 Dockerfile (node builder + nginx runtime) | ✅ | [`frontend/Dockerfile`](frontend/Dockerfile) |
-| nginx SSE 反代（buffering off + 30 分钟超时） | ✅ | [`frontend/nginx.conf`](frontend/nginx.conf) |
-| pytest 166 个用例全通过 | ✅ | [`backend/tests/`](backend/tests/) |
-| 接口文档 | ✅ | [`docs/API.md`](docs/API.md) |
-| 学年设计 docx | ✅ | [`docs/`](docs/) |
-
----
-
-## 测试
-
-```bash
-cd backend
-source .venv/bin/activate
-pytest tests/ -v
-```
-
-Docker 环境可直接运行：
-
-```bash
-docker compose exec -T backend pytest
-```
-
-涵盖：
-- `test_smoke.py` — 启动 + 基本路由
-- `test_auth_e2e.py` — 注册 / 登录端到端
-- `test_screener.py` — 筛选引擎单元
-- `test_stock_api.py` — 个股 / 搜索 / K 线
-- `test_watchlist_sync.py` / `test_chat_sessions.py` / `test_notifications.py` — 跨设备同步
-- `test_data_sync_guard.py` — 防误删（上游 < DB 80% 跳过）
-- `test_cache.py` — Redis 缓存回退
-
-测试用独立 SQLite 文件（`/tmp/pytest_qwen.db`），跟生产 `stock.db` 物理隔离。
-
----
-
-## 健壮性设计要点
+## 健壮性设计
 
 | 场景 | 处理 |
 |---|---|
-| 免费数据源偶发网络抖动 | Baostock-first；同步批次限时并保留已提交数据；分钟 K 失败后短期熔断 |
-| 详情页首次历史 K 线不足 | 先返回已有日线，后台补充历史；前端自动刷新图表，不阻塞详情页 |
-| 详情页实时行情上游慢或不可达 | 短预算等待 + 失败缓存 + 熔断；超时后返回本地日线 `source=local` |
-| OpenAI 兼容网关不支持 Responses API | 自动回退 Chat Completions，并在短期熔断窗口内跳过不兼容接口 |
-| 千问输出不是合法 JSON / 工具参数非法 | 后端 schema 强校验；ReAct step 最多修复一次；模型路径仍无合法 action 时普通回复，不自动筛选 |
-| 上游 AI 瞬时网络错误 | `/health/ai` pending/stale 快速返回 + 后台短超时刷新；前端降级后自动复测；业务调用指数退避重试 3 次 |
-| 全市场同步上游返回异常少 | `< DB 80%` 直接跳过该次任务（防止部分快照 wipe） |
-| 北交所历史 K 线不足 | baostock 不支持 `bj.*` 历史查询；`.BJ` 单股和周回填自动走 AKShare/Sina，并发补齐可用历史 |
-| Redis 不可达 | 静默回退到无缓存模式，业务不中断 |
-| 千问 Key 未配置 | 千问相关功能给出明确错误，其他功能正常 |
-| 登录 / 注册验证码错误或过期 | 本次请求失败并刷新验证码；验证码一次性使用，不降低后端校验 |
-| 用户未登录 | 自选股 / 对话历史走 localStorage 离线兜底 |
-| 任意 Vue 组件抛错 | 全局 ErrorBoundary + Vue errorHandler 兜底，不白屏 |
+| AI 未配置、超时或不可达 | 普通回复或安全停止，不把本地兜底伪装成模型筛选 |
+| 模型返回非法工具或参数 | 后端 schema 校验失败即停止，不执行未知工具 |
+| 用户请求不支持指标 | 本地前置拦截并说明原因，不返回部分满足结果 |
+| 免费数据源抖动 | 同步任务限时、保留已提交批次，异常写入 `sync_meta` |
+| 全市场快照异常少 | 基础列表同步有防误删保护 |
+| 详情页 K 线不足 | 先返回已有数据，后台回填，不长时间阻塞页面 |
+| 实时行情慢或失败 | 短预算等待、失败缓存、熔断，本地日线兜底 |
+| Redis 不可用 | 静默退回无缓存模式 |
+| Vue 组件异常 | ErrorBoundary 和全局 errorHandler 防白屏 |
+| 用户未登录 | 私有功能跳登录；部分前端状态用 localStorage 兜底 |
 
 ---
 
 ## 已知限制
 
-- 财务字段是「最新一期」快照，适合当前选股，不适合严肃历史回测
-- Agent 只能筛选本地白名单字段：PE、PB、ROE、市值、股息率、营收同比、净利润同比、毛利率、负债率、行业、市场、收盘价、换手率；三年 CAGR/复合增速、扣非净利润、经营现金流、EPS/每股收益、PS/市销率、机构持仓、基金持仓、北向资金、研报评级、目标价等会明确说明不支持，不返回部分满足结果
-- Baostock 分红接口不支持北交所 `.BJ`，这类股票股息率会明确显示缺失，不用假数据补 0
-- 分钟 K 依赖 Baostock 实时查询，失败时返回 503；前端明确提示，不会静默切到日线
-- 日 K 接口按旧到新返回；周 K/月 K 直接请求 Baostock 对应周期，不由前端临时聚合
-- 流通市值字段当前用总市值代替
-
-> 完整清单见 [`docs/STATUS.md`](docs/STATUS.md)，含「未完成 / 后续工作」的优先级分级。
+- 财务指标是最新一期快照，适合当前选股，不适合严肃历史回测。
+- 内置策略表示当前条件命中，不是收益回测，也不构成投资评级。
+- `score` 只用于当前列表或策略内部排序，不能跨策略比较。
+- 分钟 K 依赖 Baostock 实时查询，失败时返回 503，不用日线伪装分钟线。
+- 北交所 `.BJ` 数据有兜底路径，但分红和部分历史数据覆盖率仍可能低于沪深市场。
+- 流通市值字段当前没有单独数据源，页面使用总市值口径。
+- 预警引擎是前端轮询，不是 WebSocket 推送。
 
 ---
 
@@ -462,22 +384,22 @@ docker compose exec -T backend pytest
 
 | 文档 | 用途 |
 |---|---|
-| [README.md](README.md)（本文件） | 项目总览、快速开始、系统模块 |
-| [docs/STATUS.md](docs/STATUS.md) | **交接清单**：已完成 / 半实现 / UI 占位 / 已知陷阱 / 后续工作 |
-| [docs/API.md](docs/API.md) | 接口文档：33+ 端点的请求 / 响应 / curl 示例 |
-| [docs/基于千问的股票筛选系统设计与实现.docx](docs/) | 学年设计论文成稿 |
-| [docs/build_design_doc.py](docs/build_design_doc.py) | 论文生成脚本 |
-| [LICENSE](LICENSE) | MIT 许可证 |
+| [docs/STATUS.md](docs/STATUS.md) | 交接清单、完成度、已知问题 |
+| [docs/API.md](docs/API.md) | 端点、请求响应和 curl 示例 |
+| [docs/FIELD_CAPABILITIES.md](docs/FIELD_CAPABILITIES.md) | 筛选字段、缺失行为和不支持指标 |
+| [docs/STRATEGIES.md](docs/STRATEGIES.md) | 内置策略、信号、限制和新增策略方式 |
+| [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) | Railway 部署步骤 |
+| [docs/基于千问的股票筛选系统设计与实现.docx](docs/) | 学年设计文档 |
 
 ---
 
 ## 致谢
 
-- [Baostock](https://baostock.com/) — A 股数据主链路
-- [AKShare](https://github.com/akfamily/akshare) — 少量实时行情与兼容兜底
-- [FastAPI](https://github.com/tiangolo/fastapi) / [Vue 3](https://github.com/vuejs/core)
-- [阿里云百炼](https://bailian.console.aliyun.com) / OpenAI 兼容生态
+- [Baostock](https://baostock.com/)：A 股数据主链路
+- [AKShare](https://github.com/akfamily/akshare)：补充数据和兜底
+- [FastAPI](https://github.com/fastapi/fastapi) / [Vue 3](https://github.com/vuejs/core)
+- OpenAI 兼容生态 / 阿里云百炼 DashScope
 
 ---
 
-**Disclaimer**：本项目仅用于学习与研究，不构成任何投资建议。
+**免责声明**：本项目仅用于课程学习和技术研究，不构成任何投资建议。
