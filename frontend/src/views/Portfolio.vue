@@ -367,56 +367,54 @@ const rowProps = (row) => ({
         </NGi>
 
         <NGi span="3 l:1" class="portfolio-main-cell">
-          <div class="portfolio-side-stack">
-            <NCard :bordered="false" class="panel-card side-card">
-              <template #header>
-                <div class="panel-title">
-                  <span>行业分布</span>
-                  <NTag size="small" round :bordered="false">{{ rows.length }} 只</NTag>
-                </div>
+          <NCard :bordered="false" title="已设告警" class="panel-card portfolio-alert-card">
+            <template #header-extra>
+              <NTag size="small" round :bordered="false">{{ allAlerts.length }} 条</NTag>
+            </template>
+            <NDataTable
+              v-if="allAlerts.length"
+              :columns="alertColumns"
+              :data="allAlerts"
+              :bordered="false"
+              :single-line="false"
+              :row-props="rowProps"
+              :pagination="alertPagination"
+              size="small"
+            />
+            <NEmpty v-else description="暂无告警规则" class="empty-panel">
+              <template #extra>
+                <span class="muted">在自选明细右侧设置价格 / 涨跌幅告警</span>
               </template>
-              <NEmpty v-if="!sectorAlloc.length" description="暂无行业数据" class="small-empty" />
-              <NSpace v-else vertical :size="10" class="side-scroll-list">
-                <div v-for="s in sectorAlloc" :key="s.label" class="sector-row">
-                  <div class="sector-top">
-                    <span>{{ s.label }}</span>
-                    <span class="mono">{{ s.count }} · {{ s.pct }}%</span>
-                  </div>
-                  <NProgress
-                    type="line"
-                    :percentage="s.pct"
-                    :height="8"
-                    :show-indicator="false"
-                    color="#111111"
-                    rail-color="#E7E7E7"
-                  />
-                </div>
-              </NSpace>
-            </NCard>
-
-            <NCard :bordered="false" title="已设告警" class="panel-card side-card">
-              <template #header-extra>
-                <NTag size="small" round :bordered="false">{{ allAlerts.length }} 条</NTag>
-              </template>
-              <NDataTable
-                v-if="allAlerts.length"
-                :columns="alertColumns"
-                :data="allAlerts"
-                :bordered="false"
-                :single-line="false"
-                :row-props="rowProps"
-                :pagination="alertPagination"
-                size="small"
-              />
-              <NEmpty v-else description="暂无告警规则" class="small-empty">
-                <template #extra>
-                  <span class="muted">在自选明细右侧设置价格 / 涨跌幅告警</span>
-                </template>
-              </NEmpty>
-            </NCard>
-          </div>
+            </NEmpty>
+          </NCard>
         </NGi>
       </NGrid>
+
+      <NCard :bordered="false" class="panel-card sector-panel">
+        <template #header>
+          <div class="panel-title">
+            <span>行业分布</span>
+            <NTag size="small" round :bordered="false">{{ rows.length }} 只</NTag>
+          </div>
+        </template>
+        <NEmpty v-if="!sectorAlloc.length" description="暂无行业数据" class="small-empty" />
+        <div v-else class="sector-strip">
+          <div v-for="s in sectorAlloc" :key="s.label" class="sector-row">
+            <div class="sector-top">
+              <span>{{ s.label }}</span>
+              <span class="mono">{{ s.count }} · {{ s.pct }}%</span>
+            </div>
+            <NProgress
+              type="line"
+              :percentage="s.pct"
+              :height="8"
+              :show-indicator="false"
+              color="#111111"
+              rail-color="#E7E7E7"
+            />
+          </div>
+        </div>
+      </NCard>
     </div>
   </Shell>
 </template>
@@ -513,31 +511,23 @@ const rowProps = (row) => ({
   min-width: 0;
 }
 .portfolio-detail-card,
-.portfolio-side-stack {
+.portfolio-alert-card {
   width: 100%;
 }
-.portfolio-detail-card {
+.portfolio-detail-card,
+.portfolio-alert-card {
   height: 100%;
 }
-.portfolio-side-stack {
-  min-width: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-}
-.side-card {
+.portfolio-alert-card {
   min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
-.side-card :deep(.n-card__content) {
+.portfolio-alert-card :deep(.n-card__content) {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-}
-.side-scroll-list {
-  min-height: 0;
 }
 .portfolio-page :deep(.stock-cell) {
   display: flex;
@@ -619,10 +609,22 @@ const rowProps = (row) => ({
 .small-empty {
   padding: 22px 0;
 }
+.sector-panel {
+  margin-top: 12px;
+}
+.sector-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
 .sector-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  min-width: 0;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: #ffffff;
 }
 .sector-top {
   font-size: 12px;
@@ -655,16 +657,16 @@ const rowProps = (row) => ({
   .portfolio-detail-card {
     height: auto;
   }
-  .portfolio-side-stack {
-    display: flex;
-    flex-direction: column;
-  }
-  .side-card {
+  .portfolio-alert-card {
+    height: auto;
     display: block;
   }
-  .side-card :deep(.n-card__content) {
+  .portfolio-alert-card :deep(.n-card__content) {
     display: block;
     overflow: visible;
+  }
+  .sector-strip {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
