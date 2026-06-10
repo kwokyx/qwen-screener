@@ -31,17 +31,12 @@ const loading = ref(false)
 const errorMsg = ref('')
 const snapshots = ref({})
 let loadSeq = 0
-const tablePageSizes = [10, 20, 50]
 const watchPagination = {
   pageSize: 10,
-  showSizePicker: true,
-  pageSizes: tablePageSizes,
   prefix: ({ itemCount }) => `共 ${itemCount} 只`,
 }
 const alertPagination = {
   pageSize: 10,
-  showSizePicker: true,
-  pageSizes: tablePageSizes,
   prefix: ({ itemCount }) => `共 ${itemCount} 条`,
 }
 
