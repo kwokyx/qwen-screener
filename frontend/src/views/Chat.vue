@@ -213,7 +213,6 @@ const turnThinkingPreview = (turn) => {
 const isDesignTurn = (turn) => turn?.agentPlan?.tool === 'strategy_design'
 const isTextOnlyTurn = (turn) => textOnlyTools.includes(turn?.agentPlan?.tool) && !turn?.result
 const isStreamingAnswerTurn = (turn) => Boolean(isStreaming.value && hasTurnAnswer(turn) && latestTurn.value?.id === turn?.id)
-const turnAgentTitle = (turn) => turn?.agentPlan?.tool_label || 'Agent 结论'
 const turnToolLabel = (turn) => turn?.agentPlan?.tool_label || (turn?.result ? '股票筛选' : '待判断')
 function agentSourceLabel(plan, aiRuntime = null) {
   if (aiRuntime?.source === 'ai_agent' || aiRuntime?.used === true) return 'AI Agent'
@@ -701,8 +700,6 @@ const stageColor = (s) => ({
                     <div class="msg assistant">
                       <div class="assistant-head">
                         <span class="assistant-avatar">千</span>
-                        <span>{{ turnAgentTitle(turn) }}</span>
-
                       </div>
 
                       <div v-if="!turnToolCallRows(turn).length && turn.phase !== 'done' && turn.phase !== 'idle'" class="thinking-line">
