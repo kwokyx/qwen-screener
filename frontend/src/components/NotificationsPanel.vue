@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNotificationsStore } from '../stores/notifications'
+import { useWatchlistStore } from '../stores/watchlist'
 import { A2 } from '../shared/theme.js'
 import Icon from './Icon.vue'
 
@@ -9,6 +10,7 @@ const props = defineProps({ open: Boolean })
 const emit = defineEmits(['close'])
 
 const notif = useNotificationsStore()
+const watchlist = useWatchlistStore()
 const router = useRouter()
 const permState = ref(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported')
 const panelStyle = ref({})
@@ -27,6 +29,12 @@ function fmtTime(ts) {
 
 function toneColor(t) {
   return { up: A2.up, down: A2.down, amber: A2.amber, qwen: A2.qwen }[t] || A2.textSub
+}
+
+function displayStock(n) {
+  const stock = String(n.stock || '').trim()
+  if (stock && stock !== n.code) return stock
+  return watchlist.get(n.code)?.name || stock || n.code || '—'
 }
 
 async function requestPerm() {
@@ -127,7 +135,7 @@ onBeforeUnmount(() => {
           <div style="flex:1; min-width: 0">
             <div :style="{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }">
               <span :style="{ fontSize: '9px', padding: '1px 6px', background: toneColor(n.tone) + '18', color: toneColor(n.tone), borderRadius: '3px', fontWeight: 700, whiteSpace: 'nowrap' }">{{ n.tag }}</span>
-              <span :style="{ fontSize: '12px', fontWeight: 700, color: A2.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ n.stock }}</span>
+              <span :style="{ fontSize: '12px', fontWeight: 700, color: A2.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }">{{ displayStock(n) }}</span>
               <span :style="{ marginLeft: 'auto', fontSize: '10px', color: A2.textDim, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }">{{ fmtTime(n.ts) }}</span>
             </div>
             <div :style="{ fontSize: '11.5px', color: A2.textSub, lineHeight: 1.45 }">{{ n.desc }}</div>

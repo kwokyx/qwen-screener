@@ -6,7 +6,7 @@ export async function listNotifications(limit = 100) {
 }
 
 export async function createNotification(payload) {
-  // payload = { kind, tone, stock_code, title, desc }
+  // payload = { kind, tone, stock_code, stock_name, title, desc }
   const { data } = await client.post('/notifications', payload)
   return data
 }

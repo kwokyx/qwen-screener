@@ -20,6 +20,7 @@ class Notification(Base):
     kind: Mapped[str] = mapped_column(String(16))    # alert / system
     tone: Mapped[str | None] = mapped_column(String(16), nullable=True)  # up / down / qwen / amber
     stock_code: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
+    stock_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(128))
     desc: Mapped[str | None] = mapped_column(String(512), nullable=True)
     fired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

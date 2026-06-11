@@ -44,6 +44,7 @@ def create_notification(
         kind=payload.kind,
         tone=payload.tone,
         stock_code=payload.stock_code,
+        stock_name=payload.stock_name,
         title=payload.title,
         desc=payload.desc,
     )

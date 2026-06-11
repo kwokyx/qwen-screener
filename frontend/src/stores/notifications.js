@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import * as notifApi from '../api/notification'
+import { useWatchlistStore } from './watchlist'
 
 const LS_KEY = 'qwen.notifications.v1'
 const MAX = 50
@@ -27,17 +28,29 @@ function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
 
+function stockDisplayName(code, preferred = '') {
+  const name = String(preferred || '').trim()
+  if (name && name !== code) return name
+  if (!code) return name
+  try {
+    return useWatchlistStore().get(code)?.name || name || code
+  } catch {
+    return name || code
+  }
+}
+
 /** 服务端行 → 本地 item。 */
 function fromServer(r) {
   const ts = r.fired_at ? Math.floor(new Date(r.fired_at).getTime() / 1000) : Math.floor(Date.now() / 1000)
+  const code = r.stock_code || ''
   return {
     id: uid(),
     serverId: r.id,
     kind: r.kind || 'alert',
     tone: r.tone || 'qwen',
     tag: r.title || '提醒',
-    stock: r.stock_code || '',   // 显示名未持久化，回退到 code；UI 可再 join watchlist 拿真实 name
-    code: r.stock_code || '',
+    stock: stockDisplayName(code, r.stock_name || ''),
+    code,
     desc: r.desc || '',
     ts,
     read: !!r.dismissed_at,
@@ -50,6 +63,7 @@ function toPayload(n) {
     kind: n.kind || 'alert',
     tone: n.tone || null,
     stock_code: n.code || null,
+    stock_name: n.stock && n.stock !== n.code ? n.stock : null,
     title: n.tag || '提醒',
     desc: n.desc || null,
   }

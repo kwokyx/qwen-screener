@@ -24,6 +24,7 @@ def test_notification_crud_flow(db):
             "kind": "alert",
             "tone": "up",
             "stock_code": "600519.SH",
+            "stock_name": "贵州茅台",
             "title": "涨幅 ≥5%",
             "desc": "现价 1900 较加入价 1742.5 上涨 9.04%",
         }
@@ -33,10 +34,12 @@ def test_notification_crud_flow(db):
         nid = body["id"]
         assert body["dismissed_at"] is None
         assert body["title"] == payload["title"]
+        assert body["stock_name"] == "贵州茅台"
 
         # 列出
         lst = c.get("/api/v1/notifications", headers=h).json()
         assert len(lst) == 1 and lst[0]["id"] == nid
+        assert lst[0]["stock_name"] == "贵州茅台"
 
         # 标记已读
         r = c.post(f"/api/v1/notifications/{nid}/read", headers=h)

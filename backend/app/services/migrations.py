@@ -47,6 +47,7 @@ _MIGRATIONS: list[tuple[str, str]] = [
         "012_chat_sessions_updated_at_index",
         "CREATE INDEX IF NOT EXISTS ix_chat_sessions_updated_at ON chat_sessions(updated_at)",
     ),
+    ("013_notifications_stock_name", "ALTER TABLE notifications ADD COLUMN stock_name VARCHAR(64)"),
 ]
 
 
