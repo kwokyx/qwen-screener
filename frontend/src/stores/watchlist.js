@@ -213,6 +213,41 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     return changed
   }
 
+  function updateAlerts(code, alertIds, patch) {
+    const it = get(code)
+    if (!it) return 0
+    const ids = new Set(alertIds)
+    const hasType = Object.prototype.hasOwnProperty.call(patch, 'type')
+    const hasThreshold = Object.prototype.hasOwnProperty.call(patch, 'threshold')
+    const hasEnabled = Object.prototype.hasOwnProperty.call(patch, 'enabled')
+    let changed = 0
+    for (const alert of it.alerts || []) {
+      if (!ids.has(alert.id)) continue
+      let touched = false
+      if (hasType && patch.type && alert.type !== patch.type) {
+        alert.type = patch.type
+        touched = true
+      }
+      if (hasThreshold) {
+        const threshold = Number(patch.threshold)
+        if (Number.isFinite(threshold) && alert.threshold !== threshold) {
+          alert.threshold = threshold
+          touched = true
+        }
+      }
+      if (hasEnabled && (alert.enabled !== false) !== patch.enabled) {
+        alert.enabled = patch.enabled
+        touched = true
+      }
+      if (touched) {
+        if (hasType || hasThreshold) alert.lastTriggered = null
+        changed += 1
+      }
+    }
+    if (changed) _pushByCode(code)
+    return changed
+  }
+
   function removeAlerts(code, alertIds) {
     const it = get(code)
     if (!it) return 0
@@ -316,6 +351,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     removeAlert,
     setAlertEnabled,
     setAlertsEnabled,
+    updateAlerts,
     removeAlerts,
     markTriggered,
     evaluateAlerts,

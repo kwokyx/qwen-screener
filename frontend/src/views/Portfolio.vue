@@ -9,6 +9,8 @@ import {
   NEmpty,
   NGi,
   NGrid,
+  NInputNumber,
+  NModal,
   NPopconfirm,
   NProgress,
   NSelect,
@@ -36,6 +38,8 @@ const selectedRowKeys = ref([])
 const selectedAlertRowKeys = ref([])
 const sortBy = ref('addedAt')
 const sortDesc = ref(true)
+const bulkAlertEditOpen = ref(false)
+const bulkAlertRule = ref({ type: null, threshold: null, enabledMode: 'keep' })
 let loadSeq = 0
 const watchPagination = {
   pageSize: 10,
@@ -209,6 +213,31 @@ const selectedAlertKeySet = computed(() => new Set(selectedAlertRowKeys.value))
 const checkedAlertRows = computed(() => allAlerts.value.filter((alert) => selectedAlertKeySet.value.has(alert.rowKey)))
 const checkedEnabledAlertCount = computed(() => checkedAlertRows.value.filter((alert) => alert.enabled !== false).length)
 const checkedPausedAlertCount = computed(() => checkedAlertRows.value.filter((alert) => alert.enabled === false).length)
+const alertRuleTypes = [
+  { value: 'pct_up', label: '累计涨幅 >=', unit: '%', placeholder: '20' },
+  { value: 'pct_down', label: '累计跌幅 >=', unit: '%', placeholder: '15' },
+  { value: 'price_gt', label: '现价突破 >=', unit: '元', placeholder: '100' },
+  { value: 'price_lt', label: '现价跌破 <=', unit: '元', placeholder: '50' },
+  { value: 'day_pct', label: '日内涨跌 >=', unit: '%', placeholder: '5' },
+]
+const alertRuleOptions = alertRuleTypes.map(({ value, label }) => ({ value, label }))
+const alertStatusOptions = [
+  { value: 'keep', label: '保持原状态' },
+  { value: 'enable', label: '全部启用' },
+  { value: 'pause', label: '全部暂停' },
+]
+const currentBulkAlertType = computed(() => alertRuleTypes.find((item) => item.value === bulkAlertRule.value.type))
+const canApplyBulkAlertEdit = computed(() => (
+  checkedAlertRows.value.length > 0
+  && !!bulkAlertRule.value.type
+  && Number.isFinite(Number(bulkAlertRule.value.threshold))
+))
+
+function commonAlertValue(alerts, key) {
+  if (!alerts.length) return null
+  const first = alerts[0]?.[key]
+  return alerts.every((item) => item?.[key] === first) ? first : null
+}
 
 function syncSelectedRows() {
   const visibleCodes = new Set(rows.value.map((row) => row.code))
@@ -291,6 +320,42 @@ function removeCheckedAlerts() {
   selectedAlertRowKeys.value = []
   if (removed) toast.success(`已删除预警 ${removed} 条`)
   else toast.info('没有可删除的预警规则')
+}
+
+function openBulkAlertEdit() {
+  if (!checkedAlertRows.value.length) return
+  bulkAlertRule.value = {
+    type: commonAlertValue(checkedAlertRows.value, 'type'),
+    threshold: commonAlertValue(checkedAlertRows.value, 'threshold'),
+    enabledMode: 'keep',
+  }
+  bulkAlertEditOpen.value = true
+}
+
+function applyBulkAlertEdit() {
+  if (!canApplyBulkAlertEdit.value) {
+    toast.warning('请选择规则类型并输入有效阈值')
+    return
+  }
+  const threshold = Number(bulkAlertRule.value.threshold)
+  const patch = {
+    type: bulkAlertRule.value.type,
+    threshold,
+  }
+  if (bulkAlertRule.value.enabledMode === 'enable') patch.enabled = true
+  if (bulkAlertRule.value.enabledMode === 'pause') patch.enabled = false
+
+  const grouped = groupCheckedAlertsByCode()
+  let changed = 0
+  for (const [code, ids] of grouped.entries()) {
+    changed += wl.updateAlerts(code, ids, patch)
+  }
+  if (changed) {
+    toast.success(`已更新告警 ${changed} 条`)
+    bulkAlertEditOpen.value = false
+  } else {
+    toast.info('已选告警无需更新')
+  }
 }
 
 watch(rows, syncSelectedRows)
@@ -629,6 +694,9 @@ const rowProps = (row) => ({
               >
                 暂停
               </NButton>
+              <NButton size="small" secondary @click="openBulkAlertEdit">
+                编辑
+              </NButton>
               <NPopconfirm @positive-click="removeCheckedAlerts">
                 <template #trigger>
                   <NButton size="small" secondary type="error">
@@ -660,6 +728,42 @@ const rowProps = (row) => ({
           </NEmpty>
         </NCard>
       </div>
+
+      <NModal v-model:show="bulkAlertEditOpen" :mask-closable="false">
+        <NCard :bordered="false" title="批量编辑告警" class="bulk-alert-modal">
+          <div class="bulk-edit-summary">
+            已选 <strong>{{ checkedAlertRows.length }}</strong> 条告警，保存后会统一更新规则并清除旧触发时间。
+          </div>
+          <div class="bulk-edit-form">
+            <label>规则类型</label>
+            <NSelect
+              v-model:value="bulkAlertRule.type"
+              :options="alertRuleOptions"
+              placeholder="选择规则"
+            />
+            <label>阈值</label>
+            <div class="threshold-row">
+              <NInputNumber
+                v-model:value="bulkAlertRule.threshold"
+                :show-button="false"
+                :placeholder="currentBulkAlertType?.placeholder || '输入阈值'"
+                class="threshold-input"
+              />
+              <span class="threshold-unit">{{ currentBulkAlertType?.unit || '' }}</span>
+            </div>
+            <label>状态</label>
+            <NSelect v-model:value="bulkAlertRule.enabledMode" :options="alertStatusOptions" />
+          </div>
+          <template #footer>
+            <div class="modal-actions">
+              <NButton secondary @click="bulkAlertEditOpen = false">取消</NButton>
+              <NButton type="primary" :disabled="!canApplyBulkAlertEdit" @click="applyBulkAlertEdit">
+                保存修改
+              </NButton>
+            </div>
+          </template>
+        </NCard>
+      </NModal>
 
       <NCard :bordered="false" class="panel-card sector-panel">
         <template #header>
@@ -952,6 +1056,51 @@ const rowProps = (row) => ({
 .panel-card :deep(.n-data-table-tr:hover .n-data-table-td) {
   background: #eeeeee;
 }
+.bulk-alert-modal {
+  width: min(420px, calc(100vw - 32px));
+  border-radius: 8px;
+}
+.bulk-edit-summary {
+  margin-bottom: 14px;
+  color: #71717a;
+  font-size: 12px;
+}
+.bulk-edit-summary strong {
+  color: #111111;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 800;
+}
+.bulk-edit-form {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: center;
+}
+.bulk-edit-form label {
+  color: #71717a;
+  font-size: 12px;
+  font-weight: 650;
+}
+.threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.threshold-input {
+  flex: 1;
+  min-width: 0;
+}
+.threshold-unit {
+  min-width: 20px;
+  color: #71717a;
+  font-size: 12px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 @media (max-width: 760px) {
   .portfolio-page {
     padding: 12px;
@@ -981,6 +1130,9 @@ const rowProps = (row) => ({
     width: 100%;
   }
   .sector-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bulk-edit-form {
     grid-template-columns: minmax(0, 1fr);
   }
 }
