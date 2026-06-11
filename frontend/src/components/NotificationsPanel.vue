@@ -14,17 +14,29 @@ const watchlist = useWatchlistStore()
 const router = useRouter()
 const permState = ref(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported')
 const panelStyle = ref({})
+const SHANGHAI_DAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+const SHANGHAI_TIME = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Shanghai',
+  month: 'numeric',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
 
 const items = computed(() => notif.items)
 
 function fmtTime(ts) {
   const d = new Date(ts * 1000)
-  const today = new Date()
-  const sameDay = d.toDateString() === today.toDateString()
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  if (sameDay) return `${hh}:${mm}`
-  return `${d.getMonth() + 1}-${d.getDate()} ${hh}:${mm}`
+  const parts = Object.fromEntries(SHANGHAI_TIME.formatToParts(d).map((p) => [p.type, p.value]))
+  const clock = `${parts.hour}:${parts.minute}`
+  if (SHANGHAI_DAY.format(d) === SHANGHAI_DAY.format(new Date())) return clock
+  return `${parts.month}-${parts.day} ${clock}`
 }
 
 function toneColor(t) {

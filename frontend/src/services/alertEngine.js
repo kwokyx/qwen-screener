@@ -1,6 +1,6 @@
 // 预警轮询引擎
 //
-// 思路：每 N 秒拉一次每只自选股的最新价（GET /api/v1/stock/{code}），
+// 思路：A 股交易时段内每 N 秒拉一次每只自选股的最新价（GET /api/v1/stock/{code}），
 // 把 {code, close, open, prevClose} 喂给 watchlist.evaluateAlerts，触发的写入 notifications。
 //
 // 默认严格模式：真实行情拉不到就跳过，不假报价、不触发假告警。
@@ -14,10 +14,49 @@ import client from '../api/client'
 
 const POLL_MS = 30_000          // 真实数据 30s 一次（不烧 API）
 const DEMO_TICK_MS = 8_000      // demo 模式 8s 一次
+const SHANGHAI_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Shanghai',
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+const WEEKDAY_INDEX = {
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+  Sun: 0,
+}
 
 let timer = null
 let firstTimer = null
 let demoMode = false
+
+function isDemoRequested() {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('demo')
+}
+
+function shanghaiClock(now = new Date()) {
+  const parts = Object.fromEntries(SHANGHAI_CLOCK.formatToParts(now).map((p) => [p.type, p.value]))
+  const hour = Number(parts.hour)
+  const minute = Number(parts.minute)
+  return {
+    weekday: WEEKDAY_INDEX[parts.weekday] ?? -1,
+    minutes: hour * 60 + minute,
+  }
+}
+
+export function isTradingSession(now = new Date()) {
+  const { weekday, minutes } = shanghaiClock(now)
+  if (weekday < 1 || weekday > 5) return false
+  return (
+    (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30)
+    || (minutes >= 13 * 60 && minutes <= 15 * 60)
+  )
+}
 
 function gaussian() {
   // Box–Muller
@@ -59,6 +98,10 @@ async function fetchQuote(code) {
 }
 
 async function tick() {
+  const demoRequested = isDemoRequested()
+  if (demoRequested) demoMode = true
+  if (!demoRequested && !isTradingSession()) return
+
   const wl = useWatchlistStore()
   const notif = useNotificationsStore()
   if (!wl.items.length) return
@@ -103,6 +146,7 @@ function alertTag(a) {
 
 export function startAlertEngine() {
   if (timer || firstTimer) return
+  demoMode = isDemoRequested()
   firstTimer = setTimeout(() => {
     firstTimer = null
     tick().catch(() => {})

@@ -13,7 +13,7 @@
 //     refPrice:    1742.50,             // 加入时的基准价
 //     addedAt:     1714530000,          // unix 秒
 //     alerts: [
-//       { id, type, threshold, enabled, lastTriggered }
+//       { id, type, threshold, enabled, lastTriggered, lastConditionMet }
 //     ]
 //   }
 //
@@ -175,6 +175,7 @@ export const useWatchlistStore = defineStore('watchlist', () => {
       id: uid(),
       enabled: true,
       lastTriggered: null,
+      lastConditionMet: false,
       ...alert,
     })
     _pushByCode(code)
@@ -192,7 +193,9 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     if (!it) return
     const a = it.alerts.find((a) => a.id === alertId)
     if (a) {
+      const wasDisabled = a.enabled === false
       a.enabled = enabled
+      if (enabled && wasDisabled) a.lastConditionMet = false
       _pushByCode(code)
     }
   }
@@ -205,7 +208,9 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     for (const alert of it.alerts || []) {
       if (!ids.has(alert.id)) continue
       if ((alert.enabled !== false) !== enabled) {
+        const wasDisabled = alert.enabled === false
         alert.enabled = enabled
+        if (enabled && wasDisabled) alert.lastConditionMet = false
         changed += 1
       }
     }
@@ -236,11 +241,16 @@ export const useWatchlistStore = defineStore('watchlist', () => {
         }
       }
       if (hasEnabled && (alert.enabled !== false) !== patch.enabled) {
+        const wasDisabled = alert.enabled === false
         alert.enabled = patch.enabled
+        if (patch.enabled && wasDisabled) alert.lastConditionMet = false
         touched = true
       }
       if (touched) {
-        if (hasType || hasThreshold) alert.lastTriggered = null
+        if (hasType || hasThreshold) {
+          alert.lastTriggered = null
+          alert.lastConditionMet = false
+        }
         changed += 1
       }
     }
@@ -279,10 +289,10 @@ export const useWatchlistStore = defineStore('watchlist', () => {
     const fired = []
     const now = Math.floor(Date.now() / 1000)
     const COOLDOWN = 60 * 60 // 同一条预警 1h 内只触发一次
+    let stateChanged = false
 
     for (const a of it.alerts) {
       if (!a.enabled) continue
-      if (a.lastTriggered && now - a.lastTriggered < COOLDOWN) continue
 
       const { close, open, prevClose } = priceSnapshot
       let triggered = false
@@ -334,8 +344,22 @@ export const useWatchlistStore = defineStore('watchlist', () => {
         }
       }
 
-      if (triggered) fired.push({ alert: a, item: it, detail })
+      const wasMet = a.lastConditionMet === true
+      const hasKnownState = typeof a.lastConditionMet === 'boolean'
+      const hasTriggeredBefore = Boolean(a.lastTriggered)
+      const coolingDown = a.lastTriggered && now - a.lastTriggered < COOLDOWN
+      const existingTriggeredAlert = triggered && !hasKnownState && hasTriggeredBefore
+
+      if (triggered && !wasMet && !coolingDown && !existingTriggeredAlert) {
+        fired.push({ alert: a, item: it, detail })
+      }
+
+      if (a.lastConditionMet !== triggered) {
+        a.lastConditionMet = triggered
+        stateChanged = true
+      }
     }
+    if (stateChanged) _pushByCode(code)
     return fired
   }
 

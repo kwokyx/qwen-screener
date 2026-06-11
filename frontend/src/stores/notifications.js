@@ -8,6 +8,12 @@ import { useWatchlistStore } from './watchlist'
 
 const LS_KEY = 'qwen.notifications.v1'
 const MAX = 50
+const SHANGHAI_DATE = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
 
 function isLoggedIn() {
   return !!localStorage.getItem('token')
@@ -18,7 +24,7 @@ function loadFromLS() {
     const raw = localStorage.getItem(LS_KEY)
     if (!raw) return []
     const arr = JSON.parse(raw)
-    return Array.isArray(arr) ? arr : []
+    return Array.isArray(arr) ? normalizeItems(arr) : []
   } catch {
     return []
   }
@@ -37,6 +43,32 @@ function stockDisplayName(code, preferred = '') {
   } catch {
     return name || code
   }
+}
+
+function dayKey(ts) {
+  const seconds = Number(ts)
+  const date = Number.isFinite(seconds) ? new Date(seconds * 1000) : new Date()
+  return SHANGHAI_DATE.format(date)
+}
+
+function dedupeKey(n) {
+  if ((n.kind || 'alert') !== 'alert') return ''
+  if (!n.code || !n.tag) return ''
+  return `${n.code}|${n.tag}|${dayKey(n.ts)}`
+}
+
+function normalizeItems(list) {
+  const sorted = [...list].sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
+  const seen = new Set()
+  const out = []
+  for (const item of sorted) {
+    const key = dedupeKey(item)
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    out.push(item)
+    if (out.length >= MAX) break
+  }
+  return out
 }
 
 /** 服务端行 → 本地 item。 */
@@ -87,8 +119,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
       tone: 'qwen',
       ...n,
     }
-    items.value.unshift(it)
-    if (items.value.length > MAX) items.value.length = MAX
+    items.value = normalizeItems([it, ...items.value])
 
     // 桌面通知（如已授权）
     try {
@@ -144,7 +175,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
       return
     }
     if (!Array.isArray(remote)) return
-    items.value = remote.map(fromServer)
+    items.value = normalizeItems(remote.map(fromServer))
   }
 
   async function ensurePermission() {
