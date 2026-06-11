@@ -699,7 +699,9 @@ const stageColor = (s) => ({
 
                     <div class="msg assistant">
                       <div class="assistant-head">
-                        <span class="assistant-avatar">千</span>
+                        <span class="assistant-avatar">
+                          <Icon name="bot" :size="15" :stroke="1.8" />
+                        </span>
                       </div>
 
                       <div v-if="!turnToolCallRows(turn).length && turn.phase !== 'done' && turn.phase !== 'idle'" class="thinking-line">
@@ -3123,8 +3125,6 @@ const stageColor = (s) => ({
   border-radius: 8px;
   background: #111111;
   color: #FFFFFF;
-  font-size: 11px;
-  font-weight: 800;
 }
 
 .agent-answer-panel {

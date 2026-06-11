@@ -233,7 +233,9 @@ function handleUserMenu(key) {
     <n-layout-header class="top-nav" bordered>
       <div class="top-nav-inner">
         <div class="nav-brand" @click="router.push('/dashboard')">
-          <span class="brand-icon">QS</span>
+          <span class="brand-icon">
+            <img src="/logo.png" alt="Qwen Stock" />
+          </span>
           <span>
             <span class="brand-text">Qwen Stock</span>
             <span class="brand-sub">A 股筛选工作台</span>
@@ -364,12 +366,14 @@ function handleUserMenu(key) {
   height: 36px;
   display: grid;
   place-items: center;
-  border-radius: 4px;
-  color: #ffffff;
-  background: #111111;
-  font-weight: 800;
-  font-size: 11px;
-  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.brand-icon img {
+  width: 34px;
+  height: 34px;
+  display: block;
+  object-fit: contain;
 }
 
 .brand-text {
