@@ -42,7 +42,7 @@ const chatScroll = ref(null)
 const canSubmit = computed(() => Boolean(input.value.trim()) && !isStreaming.value)
 
 const presetPrompts = [
-  '帮我找近期强势突破的股票',
+  '查看招商银行详情',
   '低估值高分红的银行股',
   '帮我找RPS强势突破的股票',
   '半导体行业市值 500 亿以上的龙头',
