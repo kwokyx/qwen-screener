@@ -43,7 +43,7 @@ const canSubmit = computed(() => Boolean(input.value.trim()) && !isStreaming.val
 
 const presetPrompts = [
   '查看招商银行详情',
-  '低估值高分红的银行股',
+  '银行股，PE低于15，PB低于1.2，股息率高于3%',
   '帮我找RPS强势突破的股票',
   '半导体行业市值 500 亿以上的龙头',
 ]

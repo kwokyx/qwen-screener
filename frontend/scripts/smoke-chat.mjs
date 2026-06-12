@@ -845,7 +845,7 @@ async function run() {
     calls.push(await sendChat(cdp, '你好', '你好，我可以帮你筛选', null, false, { expectExecution: false }))
     calls.push(await sendChat(cdp, '这个 Agent 是什么', '有界选股 Agent', null, false, { expectExecution: false }))
     calls.push(await sendChat(cdp, '可以，做吧', '还没有可执行的筛选条件', null, false, { expectExecution: false }))
-    calls.push(await sendChat(cdp, '低估值高分红的银行股', '命中 3 只', 'stock_screen', true, { expectExecution: true }))
+    calls.push(await sendChat(cdp, '银行股，PE低于15，PB低于1.2，股息率高于3%', '命中 3 只', 'stock_screen', true, { expectExecution: true }))
     calls.push(await sendChat(cdp, '找最近强势突破的股票', '策略选股结果', 'strategy_select', true))
     calls.push(await sendChat(cdp, '为什么这些股票排在前面', '招商银行排在前面', 'explain_result', false))
     calls.push(await sendChat(cdp, '按股息率排序', '南京银行', 'result_sort', true))

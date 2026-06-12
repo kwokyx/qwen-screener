@@ -259,7 +259,7 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 
 **请求体**
 ```json
-{ "query": "低估值高分红的银行股，按股息率排序" }
+{ "query": "银行股，PE低于15，PB低于1.2，股息率高于3%，按股息率排序" }
 ```
 
 **响应** `200`：同 `POST /screener`，**但 `parsed_conditions` 字段会回显** 模型 action 生成并通过校验的结构化条件。
@@ -441,7 +441,7 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 [
   {
     "id": 18,
-    "query": "低估值高分红的银行股",
+    "query": "银行股，PE低于15，PB低于1.2，股息率高于3%",
     "parsed_conditions": [
       { "field": "industry", "op": "eq", "value": "银行" },
       { "field": "dividend_yield", "op": "gt", "value": 3 }
@@ -462,7 +462,7 @@ Dashboard 顶部 Ticker 条用的聚合数据。
 **请求体**（同 `ChatSessionOut`，但不含 `id / created_at`）
 ```json
 {
-  "query": "低估值高分红的银行股",
+  "query": "银行股，PE低于15，PB低于1.2，股息率高于3%",
   "parsed_conditions": [...],
   "items": [...],
   "total": 24,

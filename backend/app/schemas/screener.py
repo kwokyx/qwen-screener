@@ -36,7 +36,7 @@ class ScreenRequest(BaseModel):
 
 class NLScreenRequest(BaseModel):
     """自然语言筛选请求"""
-    query: str = Field(min_length=1, max_length=500, description="用户自然语言，如：低估值高分红的银行股")
+    query: str = Field(min_length=1, max_length=500, description="用户自然语言，如：银行股，PE低于15，PB低于1.2，股息率高于3%")
     context: dict[str, Any] | None = Field(default=None, description="当前对话上下文，如上一轮筛选结果")
 
 

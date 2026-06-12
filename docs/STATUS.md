@@ -217,7 +217,7 @@ docker 内强制覆盖为 `sqlite:////app/data/stock.db`（挂载卷），本地
 2. **改 `.env`**：见 4.1，至少能调通一种 AI 后端
 3. **拉数据**：`python -m scripts.sync_data full` → Baostock 全 A 基础信息、日线、财务与分红
 4. **启动**：`uvicorn app.main:app --reload` + `cd frontend && npm run dev`
-5. **打开** http://localhost:5173，注册账号，去 `/strategy` 试一句「低估值高分红的银行股」
+5. **打开** http://localhost:5173，注册账号，去 `/strategy` 试一句「银行股，PE低于15，PB低于1.2，股息率高于3%」
 6. **看本文档** §3 「UI 占位」，演示时避开
 7. **看本文档** §4 「已知陷阱」，避免重复踩坑
 8. **想加新功能** → 从 §5「未完成」P0/P1/P2 优先级里挑
