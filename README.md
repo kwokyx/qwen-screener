@@ -2,10 +2,11 @@
 
 FastAPI 后端 + Vue 3 前端的 A 股选股系统，支持行情概览、条件筛选、自然语言选股、策略选股、自选股、预警通知、个股详情和数据健康检查。后端以本地行情/财务数据库为核心，AI 只负责理解意图和选择白名单工具，实际筛选与策略计算都由服务端确定性执行。
 
-- 实现状态与交接清单：[docs/STATUS.md](docs/STATUS.md)
 - API 细节与 curl 示例：[docs/API.md](docs/API.md)
 - 内置策略说明：[docs/STRATEGIES.md](docs/STRATEGIES.md)
+- 字段能力边界：[docs/FIELD_CAPABILITIES.md](docs/FIELD_CAPABILITIES.md)
 - Railway 部署：[docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md)
+- 学年设计文档：[docs/基于千问的股票筛选系统设计与实现.docx](docs/基于千问的股票筛选系统设计与实现.docx)
 - 许可证：[MIT](LICENSE)
 
 ---
@@ -384,12 +385,11 @@ docker compose exec -T backend python scripts/release_smoke.py
 
 | 文档 | 用途 |
 |---|---|
-| [docs/STATUS.md](docs/STATUS.md) | 交接清单、完成度、已知问题 |
 | [docs/API.md](docs/API.md) | 端点、请求响应和 curl 示例 |
 | [docs/FIELD_CAPABILITIES.md](docs/FIELD_CAPABILITIES.md) | 筛选字段、缺失行为和不支持指标 |
 | [docs/STRATEGIES.md](docs/STRATEGIES.md) | 内置策略、信号、限制和新增策略方式 |
 | [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) | Railway 部署步骤 |
-| [docs/基于千问的股票筛选系统设计与实现.docx](docs/) | 学年设计文档 |
+| [docs/基于千问的股票筛选系统设计与实现.docx](docs/基于千问的股票筛选系统设计与实现.docx) | 学年设计文档 |
 
 ---
 

@@ -17,7 +17,7 @@ ReDoc：`http://localhost:8000/redoc`
 5. [行情聚合 `/market`](#5-行情聚合-market)
 6. [对话历史 `/chat`](#6-对话历史-chat)
 7. [通知中心 `/notifications`](#7-通知中心-notifications)
-8. [策略回测 `/strategy`](#8-策略回测-strategy)
+8. [策略工具 `/strategy`](#8-策略工具-strategy)
 9. [健康检查 `/health`](#9-健康检查-health)
 
 ---
@@ -150,17 +150,18 @@ curl 'http://localhost:8000/api/v1/stock/search?q=招商'
 
 ---
 
-### GET `/stock/{code}/kline?days=120`
-最近 N 个交易日 OHLCV。本地数据不足时会**自动从 AKShare 回填**一次。
+### GET `/stock/{code}/kline?days=120&frequency=d`
+最近 N 个交易周期 OHLCV。日 K 优先读取本地 `stock_daily`；本地数据不足时按当前数据源回填，默认 Baostock，北交所或 Baostock 失败时使用 AKShare/Sina 兜底。周 K/月 K 在 Baostock 模式下直接请求对应周期。
 
 **Query**
 - `days`: 默认 120，建议 5 / 30 / 80 / 120 / 240 / 480
+- `frequency`: 默认 `d`，可选 `d` / `w` / `m`
 
-**响应** `200`（时间倒序）
+**响应** `200`（按交易日升序）
 ```json
 [
-  { "code": "600519.SH", "trade_date": "2026-05-01", "open": 1400.0, "high": 1401.17, "low": 1380.0, "close": 1384.79, "volume": 5275270.0, "pe": 20.96, "pb": 6.40, "market_cap": 17341.3 },
-  { "code": "600519.SH", "trade_date": "2026-04-30", "open": 1395.0, ... }
+  { "code": "600519.SH", "trade_date": "2026-04-30", "open": 1395.0, "high": 1405.0, "low": 1388.0, "close": 1398.0, "volume": 5032100.0, "pe": 20.91, "pb": 6.38, "market_cap": 17510.2 },
+  { "code": "600519.SH", "trade_date": "2026-05-01", "open": 1400.0, "high": 1401.17, "low": 1380.0, "close": 1384.79, "volume": 5275270.0, "pe": 20.96, "pb": 6.40, "market_cap": 17341.3 }
 ]
 ```
 
@@ -565,74 +566,6 @@ Strategy 工作台自然语言入口。该端点复用 bounded ReAct：除 unsup
 ```
 
 **响应** `200`：`StrategyAgentResponse`，可能包含 `screen_result`、`strategy_result`，或仅包含 `answer`/`warnings` 的普通回复。普通回复不返回工具调用，`tool_calls=[]`。
-
-### POST `/strategy/backtest`
-
-运行策略回测：给定筛选条件 + 时间窗，模拟「按月调仓、等权持有 top N」。
-
-**请求体**
-```json
-{
-  "name": "低估值蓝筹",
-  "conditions": [
-    { "field": "pe", "op": "lt", "value": 12 },
-    { "field": "pb", "op": "lt", "value": 1.5 },
-    { "field": "roe", "op": "gt", "value": 10 }
-  ],
-  "sort_by": "roe",
-  "sort_desc": true,
-  "holdings_count": 10,
-  "weighting": "equal",
-  "start_date": "2024-05-01",
-  "end_date": "2026-05-01",
-  "initial_capital": 1000000,
-  "rebalance": "monthly",
-  "transaction_cost": 0.003,
-  "stop_loss": -0.15
-}
-```
-
-**响应** `200`
-```json
-{
-  "name": "低估值蓝筹",
-  "universe": ["600519.SH", "000858.SZ", ...],
-  "universe_names": ["贵州茅台", "五粮液", ...],
-  "equity": [
-    { "date": "2024-05-01", "value": 1000000, "pct": 0 },
-    { "date": "2024-05-02", "value": 1003200, "pct": 0.32 }
-  ],
-  "benchmark": [...],
-  "trades": [
-    { "date": "2024-05-01", "side": "BUY", "code": "600519.SH", "name": "贵州茅台", "price": 1320.5, "qty": 75, "pnl": null, "trigger": "init" },
-    { "date": "2024-06-01", "side": "SELL", "code": "600519.SH", "name": "贵州茅台", "price": 1389.0, "qty": 75, "pnl": 5137.5, "holding_days": 31, "trigger": "rebalance" }
-  ],
-  "metrics": {
-    "total_return": 0.184,        // 18.4%
-    "annual_return": 0.092,
-    "max_drawdown": -0.082,
-    "sharpe": 1.23,
-    "volatility": 0.165,
-    "win_rate": 0.68,
-    "profit_loss_ratio": 1.85,
-    "total_trades": 47,
-    "benchmark_return": 0.124
-  },
-  "monthly_returns": [
-    { "year": 2024, "month": 5, "pct": 0.018 },
-    { "year": 2024, "month": 6, "pct": -0.012 }
-  ],
-  "data_source": "mixed",
-  "notes": ["3 只标的历史 < 30 天，已用确定性合成数据填充"]
-}
-```
-
-**`data_source` 取值**
-- `real`：所有标的历史 K 线齐全
-- `synthesized`：全部标的都缺数据，用确定性高斯游走合成
-- `mixed`：部分真实 + 部分合成（绝大多数情况）
-
-**错误** `400` 参数无效（如 `start_date >= end_date`）。
 
 ---
 
