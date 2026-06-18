@@ -7,7 +7,6 @@
 - 策略说明：[docs/STRATEGIES.md](docs/STRATEGIES.md)
 - 字段能力：[docs/FIELD_CAPABILITIES.md](docs/FIELD_CAPABILITIES.md)
 - Railway 部署：[docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md)
-- 许可证：[MIT](LICENSE)
 
 ---
 
